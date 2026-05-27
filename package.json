@@ -1,0 +1,19 @@
+{
+  "name": "localforge",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/desktop",
+    "packages/agent-core",
+    "packages/shared"
+],
+  "scripts": {
+    "dev:agent": "npm run dev --workspace=packages/agent-core",
+    "dev:desktop": "npm run dev --workspace=apps/desktop",
+    "dev": "concurrently \"npm run dev:agent\" \"npm run dev:desktop\"",
+    "build": "npm run build --workspaces"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
