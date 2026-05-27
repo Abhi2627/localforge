@@ -1,0 +1,179 @@
+import { randomUUID } from 'crypto'
+import { getDb } from '../persistence/Database.js'
+import { createTask, markTaskRunning, markTaskDone, markTaskFailed } from '../persistence/TaskLog.js'
+import { saveFileSnapshot } from '../persistence/Checkpointer.js'
+import { chat, type ChatMessage } from '../ollama/OllamaClient.js'
+import { loadConfig } from '../ollama/ModelManager.js'
+import { writeFile, readFile, createDirectory, getProjectTree } from '../mcp/MCPClient.js'
+import path from 'path'
+
+export type AgentRole = 'frontend' | 'backend' | 'fullstack' | 'test' | 'review'
+
+export interface AgentConfig {
+  id?: string
+  projectId: string
+  name: string
+  role: AgentRole
+  projectPath: string
+  allowedPaths: string[]
+}
+
+export interface AgentEvent {
+  type: 'status' | 'file_created' | 'file_written' | 'task_done' | 'task_failed' | 'stream_chunk'
+  agentId: string
+  agentName: string
+  message: string
+  filePath?: string
+  taskId?: string
+}
+
+type EventListener = (event: AgentEvent) => void
+
+const ROLE_PROMPTS: Record<AgentRole, string> = {
+  frontend: `You are a frontend engineer agent. You write clean, modern React + TypeScript code.
+You only create and modify files inside the frontend or src directory.
+When writing a file, output the complete file content first, then on a new line write exactly:
+FILE_WRITTEN: <relative-filepath>
+Do not use markdown code fences. Output raw file content only.`,
+
+  backend: `You are a backend engineer agent. You write clean Node.js + TypeScript with Fastify or Express.
+You only create and modify files inside the backend or src directory.
+When writing a file, output the complete file content first, then on a new line write exactly:
+FILE_WRITTEN: <relative-filepath>
+Do not use markdown code fences. Output raw file content only.`,
+
+  fullstack: `You are a fullstack engineer agent. You write both frontend and backend code.
+When writing a file, output the complete file content first, then on a new line write exactly:
+FILE_WRITTEN: <relative-filepath>
+Do not use markdown code fences. Output raw file content only.`,
+
+  test: `You are a test engineer agent. You write comprehensive tests using Vitest or Jest.
+You only create files with .test.ts or .spec.ts extensions.
+When writing a file, output the complete file content first, then on a new line write exactly:
+FILE_WRITTEN: <relative-filepath>
+Do not use markdown code fences. Output raw file content only.`,
+
+  review: `You are a code review agent. You read existing code and provide structured feedback.
+You do NOT write or modify files. You only analyse and report issues.
+Format each issue as: ISSUE: <description> | FILE: <path> | SEVERITY: low|medium|high`
+}
+
+export class AgentSession {
+  readonly id: string
+  readonly config: AgentConfig
+  private listeners: EventListener[] = []
+  private conversationHistory: ChatMessage[] = []
+
+  constructor(config: AgentConfig) {
+    this.id = config.id ?? randomUUID()
+    this.config = { ...config, id: this.id }
+    this.persistToDb()
+  }
+
+  private persistToDb(): void {
+    const db = getDb()
+    db.prepare(`
+      INSERT OR IGNORE INTO agents (id, project_id, name, role, system_prompt, created_at)
+      VALUES (?, ?, ?, ?, ?, datetime('now'))
+    `).run(this.id, this.config.projectId, this.config.name, this.config.role, ROLE_PROMPTS[this.config.role])
+  }
+
+  onEvent(listener: EventListener): void {
+    this.listeners.push(listener)
+  }
+
+  private emit(event: Omit<AgentEvent, 'agentId' | 'agentName'>): void {
+    const full: AgentEvent = { ...event, agentId: this.id, agentName: this.config.name }
+    this.listeners.forEach(l => l(full))
+  }
+
+  async executeInstruction(instruction: string): Promise<void> {
+    const { selectedModel } = loadConfig()
+
+    const messages: ChatMessage[] = [
+      { role: 'system', content: ROLE_PROMPTS[this.config.role] },
+      ...this.conversationHistory.slice(-6),
+      { role: 'user', content: instruction }
+    ]
+
+    const task = createTask(this.config.projectId, this.id, 'write_code', instruction)
+    markTaskRunning(task.id, this.config.projectId, this.id)
+    this.emit({ type: 'status', message: `Working on: ${instruction.slice(0, 80)}…`, taskId: task.id })
+
+    try {
+      let fullResponse = ''
+
+      await chat(selectedModel, messages, (chunk) => {
+        fullResponse += chunk.content
+        this.emit({ type: 'stream_chunk', message: chunk.content, taskId: task.id })
+      })
+
+      await this.processResponse(fullResponse, task.id)
+
+      this.conversationHistory.push({ role: 'user', content: instruction })
+      this.conversationHistory.push({ role: 'assistant', content: fullResponse })
+
+      markTaskDone(task.id, this.config.projectId, this.id, fullResponse)
+      this.emit({ type: 'task_done', message: 'Task completed', taskId: task.id })
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      markTaskFailed(task.id, this.config.projectId, this.id, errMsg)
+      this.emit({ type: 'task_failed', message: errMsg, taskId: task.id })
+      throw err
+    }
+  }
+
+  private async processResponse(response: string, taskId: string): Promise<void> {
+    const fileMarkerRegex = /FILE_WRITTEN:\s*(.+)/g
+    const markers = [...response.matchAll(fileMarkerRegex)]
+    if (markers.length === 0) return
+
+    const blocks = response.split(/FILE_WRITTEN:\s*.+/g)
+
+    for (let i = 0; i < markers.length; i++) {
+      const rawPath = markers[i][1].trim()
+      const filePath = path.isAbsolute(rawPath)
+        ? rawPath
+        : path.join(this.config.projectPath, rawPath)
+
+      if (!this.isPathAllowed(filePath)) {
+        console.warn(`[Agent ${this.config.name}] Blocked write to ${filePath}`)
+        continue
+      }
+
+      const content = blocks[i]?.trim() ?? ''
+      if (!content) continue
+
+      const dir = path.dirname(filePath)
+      try { await createDirectory(this.config.projectPath, dir) } catch { }
+
+      await writeFile(this.config.projectPath, filePath, content)
+      saveFileSnapshot(this.config.projectId, filePath, this.id)
+
+      this.emit({
+        type: 'file_written',
+        message: `Written: ${path.relative(this.config.projectPath, filePath)}`,
+        filePath,
+        taskId
+      })
+    }
+  }
+
+  private isPathAllowed(filePath: string): boolean {
+    if (this.config.allowedPaths.length === 0) return true
+    return this.config.allowedPaths.some(allowed => filePath.startsWith(path.resolve(allowed)))
+  }
+
+  async getProjectContext(): Promise<string> {
+    try {
+      const tree = await getProjectTree(this.config.projectPath)
+      return `Current project structure:\n${tree}`
+    } catch {
+      return ''
+    }
+  }
+
+  clearHistory(): void {
+    this.conversationHistory = []
+  }
+}
