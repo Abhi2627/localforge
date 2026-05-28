@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { MessageCircle, FolderOpen, Puzzle, Settings, User, ChevronDown, ChevronRight, MoreHorizontal } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { nanoid } from '../hooks/nanoid'
+import NewProjectModal from './NewProjectModal'
 
 function SessionItem({ session }: { session: any }) {
   const { activeSessionId, setActiveSession, updateSessionTitle, closeSession } = useAppStore()
@@ -17,25 +18,22 @@ function SessionItem({ session }: { session: any }) {
 
   return (
     <div style={{ position: 'relative' }}>
-      <div
-        onClick={() => setActiveSession(session.id)}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 6,
-          padding: '5px 8px 5px 20px', borderRadius: 6,
-          background: isActive ? 'var(--accent-dim)' : 'transparent',
-          color: isActive ? 'var(--accent)' : 'var(--text-secondary)',
-          cursor: 'pointer', fontSize: 12,
-          borderLeft: isActive ? '2px solid var(--accent)' : '2px solid transparent',
-          transition: 'background 0.15s',
-        }}
+      <div onClick={() => setActiveSession(session.id)} style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        padding: '5px 8px 5px 20px', borderRadius: 6,
+        background: isActive ? 'var(--accent-dim)' : 'transparent',
+        color: isActive ? 'var(--accent)' : 'var(--text-secondary)',
+        cursor: 'pointer', fontSize: 12,
+        borderLeft: isActive ? '2px solid var(--accent)' : '2px solid transparent',
+        transition: 'background 0.15s',
+      }}
         onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)' }}
         onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
       >
         {renaming ? (
           <input autoFocus value={renameVal}
             onChange={e => setRenameVal(e.target.value)}
-            onKeyDown={handleRename}
-            onBlur={() => setRenaming(false)}
+            onKeyDown={handleRename} onBlur={() => setRenaming(false)}
             onClick={e => e.stopPropagation()}
             style={{ flex: 1, background: 'var(--bg-tertiary)', border: '1px solid var(--accent)', borderRadius: 4, padding: '1px 6px', color: 'var(--text-primary)', fontSize: 12, outline: 'none' }}
           />
@@ -75,78 +73,76 @@ function SessionItem({ session }: { session: any }) {
   )
 }
 
-function Section({ icon: Icon, label, type, sessions, expanded }: any) {
+function ChatSection({ sessions, expanded }: { sessions: any[]; expanded: boolean }) {
   const [open, setOpen] = useState(true)
   const { addSession, setActiveSession } = useAppStore()
-  const filtered = sessions.filter((s: any) => s.type === type)
+  const filtered = sessions.filter(s => s.type === 'chat')
 
-  function createNew() {
+  function createNewChat() {
     const id = nanoid()
     addSession({
-      id, type,
-      title: type === 'chat' ? 'New chat' : 'New project',
+      id, type: 'chat',
+      title: 'New chat',          // model will rename after first message
       agents: [], messages: [], writtenFiles: [],
       lastAccessedAt: Date.now(), isActive: true,
     })
     setActiveSession(id)
   }
 
-  if (!expanded) {
-    return (
-      <button title={label} style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        width: '100%', padding: '9px 0', border: 'none',
-        background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer',
-      }}>
-        <Icon size={17} />
-      </button>
-    )
-  }
+  if (!expanded) return (
+    <button title="Chats" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', padding: '9px 0', border: 'none', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer' }}>
+      <MessageCircle size={17} />
+    </button>
+  )
 
   return (
     <div style={{ marginBottom: 4 }}>
-      {/* Section header — chevron toggle, no + icon */}
-      <button
-        onClick={() => setOpen(!open)}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 6,
-          width: '100%', padding: '6px 10px',
-          background: 'none', border: 'none', cursor: 'pointer',
-          color: 'var(--text-secondary)', fontSize: 11,
-          fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em',
-        }}
-      >
-        <Icon size={13} />
-        <span style={{ flex: 1, textAlign: 'left' }}>{label}</span>
+      <button onClick={() => setOpen(!open)} style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', padding: '6px 10px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        <MessageCircle size={13} />
+        <span style={{ flex: 1, textAlign: 'left' }}>Chats</span>
         {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
       </button>
-
       {open && (
         <div>
-          {/* New button — purple, text only, no icon */}
-          <button onClick={createNew} style={{
-            display: 'block',
-            width: 'calc(100% - 20px)',
-            margin: '3px 10px 5px',
-            padding: '6px 0',
-            background: 'var(--accent)',
-            border: 'none',
-            borderRadius: 6,
-            color: 'white',
-            fontSize: 12,
-            fontWeight: 500,
-            cursor: 'pointer',
-            textAlign: 'center',
-          }}>
-            New {type === 'chat' ? 'chat' : 'project'}
+          <button onClick={createNewChat} style={{ display: 'block', width: 'calc(100% - 20px)', margin: '3px 10px 5px', padding: '6px 0', background: 'var(--accent)', border: 'none', borderRadius: 6, color: 'white', fontSize: 12, fontWeight: 500, cursor: 'pointer', textAlign: 'center' }}>
+            New chat
           </button>
-
-          {filtered.length === 0 && (
-            <div style={{ padding: '3px 20px', fontSize: 11, color: 'var(--text-muted)' }}>No history</div>
-          )}
-          {filtered.map((s: any) => <SessionItem key={s.id} session={s} />)}
+          {filtered.length === 0 && <div style={{ padding: '3px 20px', fontSize: 11, color: 'var(--text-muted)' }}>No history</div>}
+          {filtered.map(s => <SessionItem key={s.id} session={s} />)}
         </div>
       )}
+    </div>
+  )
+}
+
+function ProjectSection({ sessions, expanded }: { sessions: any[]; expanded: boolean }) {
+  const [open, setOpen] = useState(true)
+  const [showModal, setShowModal] = useState(false)
+  const filtered = sessions.filter(s => s.type === 'project')
+
+  if (!expanded) return (
+    <button title="Projects" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', padding: '9px 0', border: 'none', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer' }}>
+      <FolderOpen size={17} />
+    </button>
+  )
+
+  return (
+    <div style={{ marginBottom: 4 }}>
+      <button onClick={() => setOpen(!open)} style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', padding: '6px 10px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        <FolderOpen size={13} />
+        <span style={{ flex: 1, textAlign: 'left' }}>Projects</span>
+        {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+      </button>
+      {open && (
+        <div>
+          <button onClick={() => setShowModal(true)} style={{ display: 'block', width: 'calc(100% - 20px)', margin: '3px 10px 5px', padding: '6px 0', background: 'var(--accent)', border: 'none', borderRadius: 6, color: 'white', fontSize: 12, fontWeight: 500, cursor: 'pointer', textAlign: 'center' }}>
+            New project
+          </button>
+          {filtered.length === 0 && <div style={{ padding: '3px 20px', fontSize: 11, color: 'var(--text-muted)' }}>No history</div>}
+          {filtered.map(s => <SessionItem key={s.id} session={s} />)}
+        </div>
+      )}
+      {showModal && <NewProjectModal onClose={() => setShowModal(false)} />}
     </div>
   )
 }
@@ -155,28 +151,17 @@ export default function LeftBar() {
   const { sessions, leftExpanded: expanded } = useAppStore()
 
   return (
-    <div style={{
-      background: 'var(--bg-secondary)', borderRight: '1px solid var(--border)',
-      display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden',
-    }}>
+    <div style={{ background: 'var(--bg-secondary)', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: 6 }}>
-        <Section icon={MessageCircle} label="Chats"    type="chat"    sessions={sessions} expanded={expanded} />
-        <Section icon={FolderOpen}   label="Projects" type="project" sessions={sessions} expanded={expanded} />
+        <ChatSection    sessions={sessions} expanded={expanded} />
+        <ProjectSection sessions={sessions} expanded={expanded} />
 
         {expanded ? (
-          <button style={{
-            display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-            padding: '7px 10px', border: 'none', background: 'transparent',
-            color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12,
-          }}>
+          <button style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '7px 10px', border: 'none', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12 }}>
             <Puzzle size={14} /><span>Extensions</span>
           </button>
         ) : (
-          <button title="Extensions" style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            width: '100%', padding: '9px 0', border: 'none',
-            background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer',
-          }}>
+          <button title="Extensions" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', padding: '9px 0', border: 'none', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer' }}>
             <Puzzle size={17} />
           </button>
         )}
@@ -184,13 +169,7 @@ export default function LeftBar() {
 
       <div style={{ borderTop: '1px solid var(--border)', padding: '4px 0' }}>
         {[{ Icon: User, label: 'Account' }, { Icon: Settings, label: 'Settings' }].map(({ Icon, label }) => (
-          <button key={label} title={!expanded ? label : undefined} style={{
-            display: 'flex', alignItems: 'center',
-            gap: expanded ? 8 : 0, justifyContent: expanded ? 'flex-start' : 'center',
-            width: '100%', padding: expanded ? '7px 10px' : '9px 0',
-            border: 'none', background: 'transparent', color: 'var(--text-muted)',
-            cursor: 'pointer', fontSize: 12,
-          }}>
+          <button key={label} title={!expanded ? label : undefined} style={{ display: 'flex', alignItems: 'center', gap: expanded ? 8 : 0, justifyContent: expanded ? 'flex-start' : 'center', width: '100%', padding: expanded ? '7px 10px' : '9px 0', border: 'none', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12 }}>
             <Icon size={15} />
             {expanded && <span>{label}</span>}
           </button>

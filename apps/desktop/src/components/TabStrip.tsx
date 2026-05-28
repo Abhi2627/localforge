@@ -1,53 +1,76 @@
-import { X, MessageCircle, FolderOpen, Terminal } from 'lucide-react'
+import { X } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
-
-const TYPE_ICONS: Record<string, any> = { chat: MessageCircle, project: FolderOpen, terminal: Terminal }
-const TYPE_COLORS: Record<string, string> = { chat: 'var(--accent)', project: 'var(--green)', terminal: 'var(--amber)' }
 
 export default function TabStrip() {
   const { getRecentTabs, activeSessionId, setActiveSession, closeSession } = useAppStore()
   const tabs = getRecentTabs()
 
-  // Occupy zero space when nothing to show
   if (tabs.length < 2) return null
 
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 3,
-      padding: '0 10px', background: 'var(--bg-secondary)',
-      borderBottom: '1px solid var(--border)', overflowX: 'auto',
-      flexShrink: 0, height: 36,
+      display: 'flex',
+      alignItems: 'stretch',
+      background: 'var(--bg-secondary)',
+      borderBottom: '1px solid var(--border)',
+      flexShrink: 0,
+      height: 48,
+      overflowX: 'auto',
+      overflowY: 'hidden',
     }}>
       {tabs.map(tab => {
         const isActive = tab.id === activeSessionId
-        const Icon     = TYPE_ICONS[tab.type]
-        const color    = TYPE_COLORS[tab.type]
         return (
-          <div key={tab.id} onClick={() => setActiveSession(tab.id)} style={{
-            display: 'flex', alignItems: 'center', gap: 5,
-            padding: '4px 8px 4px 10px', borderRadius: 6,
-            background: isActive ? 'var(--bg-primary)' : 'transparent',
-            border: isActive ? '1px solid var(--border)' : '1px solid transparent',
-            cursor: 'pointer', flexShrink: 0, transition: 'background 0.15s',
-          }}>
-            <Icon size={11} style={{ color, flexShrink: 0 }} />
+          <div
+            key={tab.id}
+            onClick={() => setActiveSession(tab.id)}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'center',
+              minWidth: 120,
+              maxWidth: 180,
+              padding: '0 10px',
+              cursor: 'pointer',
+              flexShrink: 0,
+              position: 'relative',
+              background: isActive ? 'var(--bg-primary)' : 'transparent',
+              borderRight: '1px solid var(--border)',
+              borderBottom: isActive ? '2px solid var(--accent)' : '2px solid transparent',
+              transition: 'background 0.15s',
+            }}
+            onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)' }}
+            onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+          >
+            {/* Title */}
             <span style={{
-              fontSize: 12, color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
-              maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              fontSize: 12, fontWeight: isActive ? 500 : 400,
+              color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              paddingRight: 16,
             }}>
               {tab.title}
             </span>
+
+            {/* Type label below title */}
             <span style={{
-              fontSize: 9, color, background: `${color}18`,
-              borderRadius: 3, padding: '1px 4px',
-              textTransform: 'uppercase', fontWeight: 600, letterSpacing: '0.04em',
+              fontSize: 10,
+              color: isActive ? 'var(--accent)' : 'var(--text-muted)',
+              textTransform: 'capitalize',
+              marginTop: 1,
             }}>
               {tab.type}
             </span>
-            <button onClick={e => { e.stopPropagation(); closeSession(tab.id) }} style={{
-              background: 'none', border: 'none', cursor: 'pointer',
-              color: 'var(--text-muted)', display: 'flex', padding: 1, borderRadius: 3, marginLeft: 1,
-            }}>
+
+            {/* Close button — top right */}
+            <button
+              onClick={e => { e.stopPropagation(); closeSession(tab.id) }}
+              style={{
+                position: 'absolute', top: 6, right: 4,
+                background: 'none', border: 'none', cursor: 'pointer',
+                color: 'var(--text-muted)', display: 'flex', padding: 2, borderRadius: 3,
+              }}
+            >
               <X size={10} />
             </button>
           </div>

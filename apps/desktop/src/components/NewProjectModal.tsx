@@ -1,134 +1,108 @@
 import { useState } from 'react'
 import { X } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
-import { api } from '../hooks/useApi'
 import { nanoid } from '../hooks/nanoid'
 
 interface Props { onClose: () => void }
 
-const ROLES = ['fullstack', 'frontend', 'backend', 'test'] as const
-
 export default function NewProjectModal({ onClose }: Props) {
-  const [name, setName] = useState('')
+  const { models, addSession, setActiveSession } = useAppStore()
+  const [title, setTitle]       = useState('')
   const [rootPath, setRootPath] = useState('')
-  const [agentName, setAgentName] = useState('Dev')
-  const [agentRole, setAgentRole] = useState<string>('fullstack')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const { addProject, setActiveProject, addAgent } = useAppStore()
+  const [model, setModel]       = useState(models[0]?.name ?? '')
+  const [error, setError]       = useState('')
 
-  async function handleCreate() {
-    if (!name.trim() || !rootPath.trim()) {
-      setError('Project name and path are required')
-      return
-    }
-    setLoading(true)
-    setError('')
-    try {
-      const { project } = await api.createProject(name.trim(), rootPath.trim())
-      addProject({
-        id: project.id,
-        name: project.name,
-        rootPath: project.rootPath,
-        agents: [],
-        messages: [],
-        writtenFiles: [],
-        isActive: true
-      })
-      setActiveProject(project.id)
+  function handleCreate() {
+    if (!title.trim())    { setError('Project title is required'); return }
+    if (!rootPath.trim()) { setError('Project path is required');  return }
+    const id = nanoid()
+    addSession({
+      id, type: 'project',
+      title: title.trim(),
+      rootPath: rootPath.trim(),
+      agents: [], messages: [], writtenFiles: [],
+      lastAccessedAt: Date.now(), isActive: true,
+    })
+    setActiveSession(id)
+    onClose()
+  }
 
-      // Auto-create first agent
-      const { agent } = await api.createAgent(project.id, agentName, agentRole)
-      addAgent(project.id, {
-        id: agent.id,
-        name: agent.name,
-        role: agent.role,
-        status: 'idle'
-      })
+  function onKey(e: React.KeyboardEvent) {
+    if (e.key === 'Enter') handleCreate()
+    if (e.key === 'Escape') onClose()
+  }
 
-      onClose()
-    } catch (err: any) {
-      setError(err.message)
-    } finally {
-      setLoading(false)
-    }
+  const inputStyle: React.CSSProperties = {
+    width: '100%', background: 'var(--bg-primary)',
+    border: '1px solid var(--border)', borderRadius: 7,
+    padding: '8px 10px', color: 'var(--text-primary)',
+    fontSize: 13, outline: 'none', fontFamily: 'inherit',
+    boxSizing: 'border-box',
+  }
+  const labelStyle: React.CSSProperties = {
+    fontSize: 11, color: 'var(--text-secondary)',
+    marginBottom: 5, display: 'block',
   }
 
   return (
     <div style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200,
     }}>
       <div style={{
         background: 'var(--bg-secondary)', border: '1px solid var(--border)',
-        borderRadius: 10, padding: 24, width: 420, display: 'flex', flexDirection: 'column', gap: 14
+        borderRadius: 12, padding: 24, width: 400,
+        display: 'flex', flexDirection: 'column', gap: 16,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontWeight: 600, fontSize: 14 }}>New Project</span>
-          <button className="icon-btn" onClick={onClose}><X size={15} /></button>
+          <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-primary)' }}>New project</span>
+          <button onClick={onClose} className="icon-btn" style={{ width: 24, height: 24 }}><X size={14} /></button>
         </div>
 
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12 }}>
-          <span style={{ color: 'var(--text-secondary)' }}>Project name</span>
+        <div>
+          <label style={labelStyle}>Project title</label>
           <input
-            style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)',
-              borderRadius: 6, padding: '7px 10px', color: 'var(--text-primary)',
-              fontSize: 13, outline: 'none' }}
-            value={name}
-            onChange={e => setName(e.target.value)}
-            placeholder="my-app"
+            autoFocus style={inputStyle} placeholder="my-app"
+            value={title} onChange={e => setTitle(e.target.value)} onKeyDown={onKey}
+            onFocus={e => (e.target as HTMLInputElement).style.borderColor = 'var(--accent)'}
+            onBlur={e  => (e.target as HTMLInputElement).style.borderColor = 'var(--border)'}
           />
-        </label>
+        </div>
 
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12 }}>
-          <span style={{ color: 'var(--text-secondary)' }}>Project root path</span>
+        <div>
+          <label style={labelStyle}>Project root path</label>
           <input
-            style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)',
-              borderRadius: 6, padding: '7px 10px', color: 'var(--text-primary)',
-              fontSize: 13, outline: 'none', fontFamily: 'monospace' }}
-            value={rootPath}
-            onChange={e => setRootPath(e.target.value)}
+            style={{ ...inputStyle, fontFamily: 'monospace', fontSize: 12 }}
             placeholder="/Users/you/Projects/my-app"
+            value={rootPath} onChange={e => setRootPath(e.target.value)} onKeyDown={onKey}
+            onFocus={e => (e.target as HTMLInputElement).style.borderColor = 'var(--accent)'}
+            onBlur={e  => (e.target as HTMLInputElement).style.borderColor = 'var(--border)'}
           />
-        </label>
-
-        <div style={{ display: 'flex', gap: 10 }}>
-          <label style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12 }}>
-            <span style={{ color: 'var(--text-secondary)' }}>First agent name</span>
-            <input
-              style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)',
-                borderRadius: 6, padding: '7px 10px', color: 'var(--text-primary)',
-                fontSize: 13, outline: 'none' }}
-              value={agentName}
-              onChange={e => setAgentName(e.target.value)}
-              placeholder="Dev"
-            />
-          </label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12 }}>
-            <span style={{ color: 'var(--text-secondary)' }}>Role</span>
-            <select
-              className="model-select"
-              style={{ padding: '7px 10px', fontSize: 13 }}
-              value={agentRole}
-              onChange={e => setAgentRole(e.target.value)}
-            >
-              {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
-            </select>
-          </label>
         </div>
 
-        {error && <div style={{ color: 'var(--red)', fontSize: 12 }}>{error}</div>}
+        {/* Model selector — only shown when multiple models available */}
+        {models.length > 1 && (
+          <div>
+            <label style={labelStyle}>Model</label>
+            <select
+              value={model} onChange={e => setModel(e.target.value)}
+              style={{ ...inputStyle, cursor: 'pointer' }}
+            >
+              {models.map(m => (
+                <option key={m.name} value={m.name}>{m.name} ({m.sizeGb})</option>
+              ))}
+            </select>
+          </div>
+        )}
 
-        <button
-          onClick={handleCreate}
-          disabled={loading}
-          style={{
-            background: 'var(--accent)', color: 'white', border: 'none',
-            borderRadius: 7, padding: '9px 0', fontSize: 13, fontWeight: 600,
-            cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.6 : 1
-          }}
-        >
-          {loading ? 'Creating…' : 'Create Project'}
+        {error && <div style={{ fontSize: 12, color: 'var(--red)' }}>{error}</div>}
+
+        <button onClick={handleCreate} style={{
+          background: 'var(--accent)', border: 'none', borderRadius: 8,
+          padding: '9px 0', color: 'white', fontSize: 13,
+          fontWeight: 600, cursor: 'pointer', width: '100%',
+        }}>
+          Create project
         </button>
       </div>
     </div>
