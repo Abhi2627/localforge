@@ -1,12 +1,12 @@
-import { Wifi, WifiOff, PanelLeftOpen, PanelLeftClose, PanelRightOpen, PanelRightClose } from 'lucide-react'
+import { Wifi, WifiOff, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { api } from '../hooks/useApi'
 
 export default function TopBar() {
   const {
     isConnected, models, selectedModel, setSelectedModel,
-    sidebarVisible, setSidebarVisible,
-    iconBarVisible, setIconBarVisible,
+    rightExpanded, setRightExpanded,
+    leftExpanded,  setLeftExpanded,
   } = useAppStore()
 
   async function handleModelChange(e: React.ChangeEvent<HTMLSelectElement>) {
@@ -17,13 +17,10 @@ export default function TopBar() {
 
   return (
     <div className="topbar">
-      {/* Left panel toggle */}
-      <button
-        className="icon-btn"
-        title={iconBarVisible ? 'Collapse left bar' : 'Expand left bar'}
-        onClick={() => setIconBarVisible(!iconBarVisible)}
-      >
-        {iconBarVisible ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}
+      <button className="icon-btn"
+        title={leftExpanded ? 'Collapse left bar' : 'Expand left bar'}
+        onClick={() => setLeftExpanded(!leftExpanded)}>
+        {leftExpanded ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}
       </button>
 
       <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--accent)', letterSpacing: '-0.3px' }}>
@@ -32,33 +29,22 @@ export default function TopBar() {
 
       <span style={{ flex: 1 }} />
 
-      {/* Model selector — only here, nowhere else */}
       <select className="model-select" value={selectedModel} onChange={handleModelChange}>
-        {models.length === 0 && (
-          <option value="">No models — run: ollama pull qwen2.5-coder</option>
-        )}
+        {models.length === 0 && <option value="">No models — run: ollama pull qwen2.5-coder</option>}
         {models.map(m => (
-          <option key={m.name} value={m.name}>
-            {m.name} ({m.sizeGb})
-          </option>
+          <option key={m.name} value={m.name}>{m.name} ({m.sizeGb})</option>
         ))}
       </select>
 
-      {/* Connection indicator — icon only */}
-      <div
-        title={isConnected ? 'Agent server connected' : 'Agent server disconnected'}
-        style={{ display: 'flex', alignItems: 'center', color: isConnected ? 'var(--green)' : 'var(--red)' }}
-      >
+      <div title={isConnected ? 'Server connected' : 'Server disconnected'}
+        style={{ display: 'flex', alignItems: 'center', color: isConnected ? 'var(--green)' : 'var(--red)' }}>
         {isConnected ? <Wifi size={15} /> : <WifiOff size={15} />}
       </div>
 
-      {/* Right panel toggle */}
-      <button
-        className="icon-btn"
-        title={sidebarVisible ? 'Collapse workspace' : 'Expand workspace'}
-        onClick={() => setSidebarVisible(!sidebarVisible)}
-      >
-        {sidebarVisible ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}
+      <button className="icon-btn"
+        title={rightExpanded ? 'Collapse right bar' : 'Expand right bar'}
+        onClick={() => setRightExpanded(!rightExpanded)}>
+        {rightExpanded ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}
       </button>
     </div>
   )

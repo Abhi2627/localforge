@@ -2,6 +2,7 @@ import { create } from 'zustand'
 
 export type AgentRole = 'frontend' | 'backend' | 'fullstack' | 'test' | 'review'
 export type MessageType = 'user' | 'agent' | 'system' | 'stream'
+export type SessionType = 'chat' | 'project' | 'terminal'
 
 export interface Message {
   id: string
@@ -22,13 +23,16 @@ export interface Agent {
   currentTask?: string
 }
 
-export interface Project {
+// A Session is either a Chat, a Project, or a Terminal
+export interface Session {
   id: string
-  name: string
-  rootPath: string
+  type: SessionType
+  title: string
+  rootPath?: string         // only for projects
   agents: Agent[]
   messages: Message[]
   writtenFiles: string[]
+  lastAccessedAt: number    // unix ms — used for tab strip logic
   isActive: boolean
 }
 
@@ -39,115 +43,151 @@ export interface OllamaModel {
   isFallback: boolean
 }
 
-export type ActiveView = 'chat' | 'terminal' | 'files'
+export type ActiveView = 'chat' | 'project' | 'terminal' | 'extensions'
+export type AppScreen = 'welcome' | 'session'
 
 interface AppState {
-  projects:         Project[]
-  activeProjectId:  string | null
+  screen:           AppScreen
+  sessions:         Session[]
+  activeSessionId:  string | null
+  activeView:       ActiveView
   models:           OllamaModel[]
   selectedModel:    string
-  activeView:       ActiveView
-  sidebarVisible:   boolean
-  iconBarVisible:   boolean
-  terminalVisible:  boolean
+  leftExpanded:     boolean
+  rightExpanded:    boolean
   isConnected:      boolean
 
-  setProjects:         (projects: Project[]) => void
-  addProject:          (project: Project) => void
-  setActiveProject:    (id: string) => void
-  addMessage:          (projectId: string, msg: Message) => void
-  appendStream:        (projectId: string, taskId: string, chunk: string) => void
-  finalizeStream:      (projectId: string, taskId: string) => void
-  addAgent:            (projectId: string, agent: Agent) => void
-  updateAgent:         (projectId: string, agentId: string, update: Partial<Agent>) => void
-  addWrittenFile:      (projectId: string, filePath: string) => void
+  // Derived: recent sessions within 24h for tab strip
+  getRecentTabs:    () => Session[]
+
+  // Actions
+  setScreen:           (s: AppScreen) => void
+  addSession:          (session: Session) => void
+  setActiveSession:    (id: string) => void
+  updateSessionTitle:  (id: string, title: string) => void
+  closeSession:        (id: string) => void
+  addMessage:          (sessionId: string, msg: Message) => void
+  appendStream:        (sessionId: string, taskId: string, chunk: string) => void
+  finalizeStream:      (sessionId: string, taskId: string) => void
+  addAgent:            (sessionId: string, agent: Agent) => void
+  updateAgent:         (sessionId: string, agentId: string, update: Partial<Agent>) => void
+  addWrittenFile:      (sessionId: string, filePath: string) => void
   setModels:           (models: OllamaModel[]) => void
   setSelectedModel:    (model: string) => void
   setActiveView:       (view: ActiveView) => void
-  setSidebarVisible:   (v: boolean) => void
-  setIconBarVisible:   (v: boolean) => void
-  setTerminalVisible:  (v: boolean) => void
+  setLeftExpanded:     (v: boolean) => void
+  setRightExpanded:    (v: boolean) => void
   setConnected:        (v: boolean) => void
 }
 
-export const useAppStore = create<AppState>((set) => ({
-  projects:        [],
-  activeProjectId: null,
+export const useAppStore = create<AppState>((set, get) => ({
+  screen:          'welcome',
+  sessions:        [],
+  activeSessionId: null,
+  activeView:      'chat',
   models:          [],
   selectedModel:   '',
-  activeView:      'chat',
-  sidebarVisible:  true,
-  iconBarVisible:  true,
-  terminalVisible: false,
+  leftExpanded:    true,
+  rightExpanded:   true,
   isConnected:     false,
 
-  setProjects:      (projects) => set({ projects }),
-  addProject:       (project)  => set(s => ({ projects: [...s.projects, project] })),
-  setActiveProject: (id)       => set(s => ({
-    activeProjectId: id,
-    projects: s.projects.map(p => ({ ...p, isActive: p.id === id }))
+  getRecentTabs: () => {
+    const { sessions } = get()
+    const now = Date.now()
+    const within24h = sessions.filter(s => now - s.lastAccessedAt < 24 * 60 * 60 * 1000)
+    return within24h
+      .sort((a, b) => b.lastAccessedAt - a.lastAccessedAt)
+      .slice(0, 5)
+  },
+
+  setScreen: (screen) => set({ screen }),
+
+  addSession: (session) => set(s => ({
+    sessions: [...s.sessions, session],
+    screen: 'session',
   })),
 
-  addMessage: (projectId, msg) => set(s => ({
-    projects: s.projects.map(p =>
-      p.id === projectId ? { ...p, messages: [...p.messages, msg] } : p
+  setActiveSession: (id) => set(s => ({
+    activeSessionId: id,
+    screen: 'session',
+    sessions: s.sessions.map(sess => ({
+      ...sess,
+      isActive: sess.id === id,
+      lastAccessedAt: sess.id === id ? Date.now() : sess.lastAccessedAt,
+    })),
+  })),
+
+  updateSessionTitle: (id, title) => set(s => ({
+    sessions: s.sessions.map(sess => sess.id === id ? { ...sess, title } : sess)
+  })),
+
+  closeSession: (id) => set(s => {
+    const remaining = s.sessions.filter(sess => sess.id !== id)
+    const newActive = remaining.length > 0 ? remaining[remaining.length - 1].id : null
+    return {
+      sessions: remaining,
+      activeSessionId: newActive,
+      screen: newActive ? 'session' : 'welcome',
+    }
+  }),
+
+  addMessage: (sessionId, msg) => set(s => ({
+    sessions: s.sessions.map(sess =>
+      sess.id === sessionId ? { ...sess, messages: [...sess.messages, msg] } : sess
     )
   })),
 
-  appendStream: (projectId, taskId, chunk) => set(s => ({
-    projects: s.projects.map(p => {
-      if (p.id !== projectId) return p
-      const exists = p.messages.find(m => m.taskId === taskId && m.type === 'stream')
+  appendStream: (sessionId, taskId, chunk) => set(s => ({
+    sessions: s.sessions.map(sess => {
+      if (sess.id !== sessionId) return sess
+      const exists = sess.messages.find(m => m.taskId === taskId && m.type === 'stream')
       if (exists) {
-        return { ...p, messages: p.messages.map(m =>
+        return { ...sess, messages: sess.messages.map(m =>
           m.taskId === taskId && m.type === 'stream' ? { ...m, content: m.content + chunk } : m
         )}
       }
-      return { ...p, messages: [...p.messages, {
+      return { ...sess, messages: [...sess.messages, {
         id: `stream-${taskId}-${Date.now()}`,
         type: 'stream' as MessageType,
-        content: chunk,
-        taskId,
-        timestamp: Date.now()
+        content: chunk, taskId, timestamp: Date.now()
       }]}
     })
   })),
 
-  finalizeStream: (projectId, taskId) => set(s => ({
-    projects: s.projects.map(p =>
-      p.id === projectId ? { ...p, messages: p.messages.map(m =>
+  finalizeStream: (sessionId, taskId) => set(s => ({
+    sessions: s.sessions.map(sess =>
+      sess.id === sessionId ? { ...sess, messages: sess.messages.map(m =>
         m.taskId === taskId && m.type === 'stream' ? { ...m, type: 'agent' as MessageType } : m
-      )} : p
+      )} : sess
     )
   })),
 
-  addAgent: (projectId, agent) => set(s => ({
-    projects: s.projects.map(p =>
-      p.id === projectId ? { ...p, agents: [...p.agents, agent] } : p
+  addAgent: (sessionId, agent) => set(s => ({
+    sessions: s.sessions.map(sess =>
+      sess.id === sessionId ? { ...sess, agents: [...sess.agents, agent] } : sess
     )
   })),
 
-  updateAgent: (projectId, agentId, update) => set(s => ({
-    projects: s.projects.map(p =>
-      p.id === projectId ? { ...p, agents: p.agents.map(a =>
+  updateAgent: (sessionId, agentId, update) => set(s => ({
+    sessions: s.sessions.map(sess =>
+      sess.id === sessionId ? { ...sess, agents: sess.agents.map(a =>
         a.id === agentId ? { ...a, ...update } : a
-      )} : p
+      )} : sess
     )
   })),
 
-  addWrittenFile: (projectId, filePath) => set(s => ({
-    projects: s.projects.map(p =>
-      p.id === projectId && !p.writtenFiles.includes(filePath)
-        ? { ...p, writtenFiles: [...p.writtenFiles, filePath] }
-        : p
+  addWrittenFile: (sessionId, filePath) => set(s => ({
+    sessions: s.sessions.map(sess =>
+      sess.id === sessionId && !sess.writtenFiles.includes(filePath)
+        ? { ...sess, writtenFiles: [...sess.writtenFiles, filePath] }
+        : sess
     )
   })),
 
-  setModels:          (models)        => set({ models }),
-  setSelectedModel:   (selectedModel) => set({ selectedModel }),
-  setActiveView:      (activeView)    => set({ activeView }),
-  setSidebarVisible:  (v) => set({ sidebarVisible: v }),
-  setIconBarVisible:  (v) => set({ iconBarVisible: v }),
-  setTerminalVisible: (v) => set({ terminalVisible: v }),
-  setConnected:       (v) => set({ isConnected: v }),
+  setModels:         (models)        => set({ models }),
+  setSelectedModel:  (selectedModel) => set({ selectedModel }),
+  setActiveView:     (activeView)    => set({ activeView }),
+  setLeftExpanded:   (v) => set({ leftExpanded: v }),
+  setRightExpanded:  (v) => set({ rightExpanded: v }),
+  setConnected:      (v) => set({ isConnected: v }),
 }))

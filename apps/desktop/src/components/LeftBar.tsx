@@ -1,0 +1,201 @@
+import { useState } from 'react'
+import { MessageCircle, FolderOpen, Puzzle, Settings, User, ChevronDown, ChevronRight, MoreHorizontal } from 'lucide-react'
+import { useAppStore } from '../store/appStore'
+import { nanoid } from '../hooks/nanoid'
+
+function SessionItem({ session }: { session: any }) {
+  const { activeSessionId, setActiveSession, updateSessionTitle, closeSession } = useAppStore()
+  const isActive = session.id === activeSessionId
+  const [showMenu, setShowMenu] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+  const [renameVal, setRenameVal] = useState(session.title)
+
+  function handleRename(e: React.KeyboardEvent) {
+    if (e.key === 'Enter') { updateSessionTitle(session.id, renameVal); setRenaming(false) }
+    if (e.key === 'Escape') setRenaming(false)
+  }
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <div
+        onClick={() => setActiveSession(session.id)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '5px 8px 5px 20px', borderRadius: 6,
+          background: isActive ? 'var(--accent-dim)' : 'transparent',
+          color: isActive ? 'var(--accent)' : 'var(--text-secondary)',
+          cursor: 'pointer', fontSize: 12,
+          borderLeft: isActive ? '2px solid var(--accent)' : '2px solid transparent',
+          transition: 'background 0.15s',
+        }}
+        onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)' }}
+        onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+      >
+        {renaming ? (
+          <input autoFocus value={renameVal}
+            onChange={e => setRenameVal(e.target.value)}
+            onKeyDown={handleRename}
+            onBlur={() => setRenaming(false)}
+            onClick={e => e.stopPropagation()}
+            style={{ flex: 1, background: 'var(--bg-tertiary)', border: '1px solid var(--accent)', borderRadius: 4, padding: '1px 6px', color: 'var(--text-primary)', fontSize: 12, outline: 'none' }}
+          />
+        ) : (
+          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {session.title}
+          </span>
+        )}
+        <button onClick={e => { e.stopPropagation(); setShowMenu(!showMenu) }}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: 0, display: 'flex', opacity: 0.6 }}>
+          <MoreHorizontal size={12} />
+        </button>
+      </div>
+
+      {showMenu && (
+        <div style={{
+          position: 'absolute', right: 8, top: '100%', zIndex: 50,
+          background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+          borderRadius: 6, padding: 4, minWidth: 100,
+        }}>
+          {[
+            { label: 'Rename', action: () => { setRenaming(true); setShowMenu(false) } },
+            { label: 'Close',  action: () => { closeSession(session.id); setShowMenu(false) } },
+          ].map(item => (
+            <button key={item.label} onClick={item.action} style={{
+              display: 'block', width: '100%', textAlign: 'left',
+              padding: '5px 10px', background: 'none', border: 'none',
+              color: 'var(--text-secondary)', fontSize: 12, cursor: 'pointer', borderRadius: 4,
+            }}
+              onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)'}
+              onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'none'}
+            >{item.label}</button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Section({ icon: Icon, label, type, sessions, expanded }: any) {
+  const [open, setOpen] = useState(true)
+  const { addSession, setActiveSession } = useAppStore()
+  const filtered = sessions.filter((s: any) => s.type === type)
+
+  function createNew() {
+    const id = nanoid()
+    addSession({
+      id, type,
+      title: type === 'chat' ? 'New chat' : 'New project',
+      agents: [], messages: [], writtenFiles: [],
+      lastAccessedAt: Date.now(), isActive: true,
+    })
+    setActiveSession(id)
+  }
+
+  if (!expanded) {
+    return (
+      <button title={label} style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        width: '100%', padding: '9px 0', border: 'none',
+        background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer',
+      }}>
+        <Icon size={17} />
+      </button>
+    )
+  }
+
+  return (
+    <div style={{ marginBottom: 4 }}>
+      {/* Section header — chevron toggle, no + icon */}
+      <button
+        onClick={() => setOpen(!open)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          width: '100%', padding: '6px 10px',
+          background: 'none', border: 'none', cursor: 'pointer',
+          color: 'var(--text-secondary)', fontSize: 11,
+          fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em',
+        }}
+      >
+        <Icon size={13} />
+        <span style={{ flex: 1, textAlign: 'left' }}>{label}</span>
+        {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+      </button>
+
+      {open && (
+        <div>
+          {/* New button — purple, text only, no icon */}
+          <button onClick={createNew} style={{
+            display: 'block',
+            width: 'calc(100% - 20px)',
+            margin: '3px 10px 5px',
+            padding: '6px 0',
+            background: 'var(--accent)',
+            border: 'none',
+            borderRadius: 6,
+            color: 'white',
+            fontSize: 12,
+            fontWeight: 500,
+            cursor: 'pointer',
+            textAlign: 'center',
+          }}>
+            New {type === 'chat' ? 'chat' : 'project'}
+          </button>
+
+          {filtered.length === 0 && (
+            <div style={{ padding: '3px 20px', fontSize: 11, color: 'var(--text-muted)' }}>No history</div>
+          )}
+          {filtered.map((s: any) => <SessionItem key={s.id} session={s} />)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default function LeftBar() {
+  const { sessions, leftExpanded: expanded } = useAppStore()
+
+  return (
+    <div style={{
+      background: 'var(--bg-secondary)', borderRight: '1px solid var(--border)',
+      display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden',
+    }}>
+      <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: 6 }}>
+        <Section icon={MessageCircle} label="Chats"    type="chat"    sessions={sessions} expanded={expanded} />
+        <Section icon={FolderOpen}   label="Projects" type="project" sessions={sessions} expanded={expanded} />
+
+        {expanded ? (
+          <button style={{
+            display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+            padding: '7px 10px', border: 'none', background: 'transparent',
+            color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12,
+          }}>
+            <Puzzle size={14} /><span>Extensions</span>
+          </button>
+        ) : (
+          <button title="Extensions" style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            width: '100%', padding: '9px 0', border: 'none',
+            background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer',
+          }}>
+            <Puzzle size={17} />
+          </button>
+        )}
+      </div>
+
+      <div style={{ borderTop: '1px solid var(--border)', padding: '4px 0' }}>
+        {[{ Icon: User, label: 'Account' }, { Icon: Settings, label: 'Settings' }].map(({ Icon, label }) => (
+          <button key={label} title={!expanded ? label : undefined} style={{
+            display: 'flex', alignItems: 'center',
+            gap: expanded ? 8 : 0, justifyContent: expanded ? 'flex-start' : 'center',
+            width: '100%', padding: expanded ? '7px 10px' : '9px 0',
+            border: 'none', background: 'transparent', color: 'var(--text-muted)',
+            cursor: 'pointer', fontSize: 12,
+          }}>
+            <Icon size={15} />
+            {expanded && <span>{label}</span>}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}

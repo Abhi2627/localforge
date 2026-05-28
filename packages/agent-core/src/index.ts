@@ -5,147 +5,122 @@ import { getDb, closeDb } from './persistence/Database.js'
 import { profileSystem } from './orchestrator/SystemProfiler.js'
 import { TaskQueue } from './orchestrator/TaskQueue.js'
 import { orchestrator } from './orchestrator/Orchestrator.js'
-import {
-  getInstalledModels,
-  selectModel,
-  setFallbackModels,
-  loadConfig,
-  saveConfig
-} from './ollama/ModelManager.js'
+import { chat } from './ollama/OllamaClient.js'
+import { getInstalledModels, selectModel, setFallbackModels, loadConfig, saveConfig } from './ollama/ModelManager.js'
 
 const server = Fastify({ logger: false })
-
 let taskQueue: TaskQueue
 const wsClients = new Set<any>()
 
 function broadcast(data: object) {
   const msg = JSON.stringify(data)
-  wsClients.forEach(ws => {
-    try { ws.send(msg) } catch { wsClients.delete(ws) }
-  })
+  wsClients.forEach(ws => { try { ws.send(msg) } catch { wsClients.delete(ws) } })
 }
 
 async function bootstrap() {
   await server.register(cors, { origin: true })
   await server.register(websocket)
 
-  const profile = await profileSystem()
-  const config = loadConfig()
-  const mode = config.executionMode ?? profile.recommendedMode
-  const maxParallel = config.maxParallel ?? profile.recommendedMaxParallel
+  const profile     = await profileSystem()
+  const config      = loadConfig()
+  const mode        = config.executionMode ?? profile.recommendedMode
+  const maxParallel = config.maxParallel   ?? profile.recommendedMaxParallel
   taskQueue = new TaskQueue(mode, maxParallel)
-
   getDb()
 
-  // Forward all orchestrator events to connected WebSocket clients
-  orchestrator.onEvent((projectId, event) => {
-    broadcast({ type: 'agent_event', projectId, event })
-  })
+  orchestrator.onEvent((projectId, event) => broadcast({ type: 'agent_event', projectId, event }))
 
-  // ── WebSocket ─────────────────────────────────────────────────────────────
   server.get('/ws', { websocket: true }, (socket) => {
     wsClients.add(socket)
     socket.send(JSON.stringify({ type: 'connected', message: 'LocalForge agent server connected' }))
     socket.on('close', () => wsClients.delete(socket))
   })
 
-  // ── Health ────────────────────────────────────────────────────────────────
-  server.get('/health', async () => ({
-    status: 'ok',
-    mode: taskQueue.currentMode,
-    pending: taskQueue.pendingCount,
-    running: taskQueue.runningCount
-  }))
-
-  // ── System ────────────────────────────────────────────────────────────────
+  server.get('/health', async () => ({ status: 'ok', mode: taskQueue.currentMode, pending: taskQueue.pendingCount, running: taskQueue.runningCount }))
   server.get('/system', async () => profileSystem())
 
-  server.post<{ Body: { mode: 'sequential' | 'parallel'; maxParallel?: number } }>(
-    '/system/mode', async (req) => {
-      const { mode, maxParallel } = req.body
-      taskQueue.setMode(mode, maxParallel)
-      saveConfig({ executionMode: mode, maxParallel: maxParallel ?? 1 })
-      return { success: true, mode, maxParallel }
-    }
-  )
+  server.post<{ Body: { mode: 'sequential' | 'parallel'; maxParallel?: number } }>('/system/mode', async (req) => {
+    const { mode, maxParallel } = req.body
+    taskQueue.setMode(mode, maxParallel)
+    saveConfig({ executionMode: mode, maxParallel: maxParallel ?? 1 })
+    return { success: true, mode, maxParallel }
+  })
 
-  // ── Models ────────────────────────────────────────────────────────────────
   server.get('/models', async () => {
-    try {
-      return { models: await getInstalledModels() }
-    } catch {
-      return { error: 'Ollama not reachable. Run: ollama serve' }
-    }
+    try { return { models: await getInstalledModels() } }
+    catch { return { error: 'Ollama not reachable. Run: ollama serve' } }
   })
-
   server.get('/models/config', async () => loadConfig())
-
   server.post<{ Body: { model: string } }>('/models/select', async (req) => {
-    const { model } = req.body
-    if (!model) return { success: false, message: 'model field is required' }
-    return await selectModel(model)
+    if (!req.body.model) return { success: false, message: 'model field is required' }
+    return await selectModel(req.body.model)
+  })
+  server.post<{ Body: { models: string[] } }>('/models/fallback', async (req) => {
+    if (!Array.isArray(req.body.models)) return { success: false, message: 'models must be an array' }
+    return { success: true, config: await setFallbackModels(req.body.models) }
   })
 
-  server.post<{ Body: { models: string[] } }>('/models/fallback', async (req) => {
-    const { models } = req.body
-    if (!Array.isArray(models)) return { success: false, message: 'models must be an array' }
-    return { success: true, config: await setFallbackModels(models) }
+  // ── Chat (conversational, no MCP) ─────────────────────────────────────────
+  server.post<{ Body: { message: string; sessionId?: string } }>('/chat', async (req) => {
+    const { message } = req.body
+    if (!message) return { success: false, reply: 'No message provided' }
+    const { selectedModel } = loadConfig()
+    const reply = await chat(selectedModel, [
+      {
+        role: 'system',
+        content: `You are a helpful AI assistant running locally inside LocalForge, a local-first AI coding tool.
+You are powered by the model: ${selectedModel}, running via Ollama on the user's own machine.
+You are NOT ChatGPT, Claude, or any cloud-based model. Do not claim to be any of those.
+If asked what model you are, say you are ${selectedModel} running locally via Ollama inside LocalForge.
+Keep responses clear, concise, and helpful. Do not add unnecessary preamble or thinking steps.`
+      },
+      { role: 'user', content: message }
+    ])
+    return { success: true, reply }
   })
 
   // ── Projects ──────────────────────────────────────────────────────────────
-  server.get('/projects', async () => ({
-    projects: orchestrator.listProjects()
-  }))
+  server.get('/projects', async () => ({ projects: orchestrator.listProjects() }))
 
-  server.post<{ Body: { name: string; rootPath: string } }>(
-    '/projects', async (req) => {
-      const { name, rootPath } = req.body
-      if (!name || !rootPath) return { success: false, message: 'name and rootPath are required' }
-      const project = await orchestrator.createProject({ name, rootPath })
-      return { success: true, project: { id: project.id, name: project.name, rootPath: project.rootPath } }
-    }
-  )
-
-  // ── Agents ────────────────────────────────────────────────────────────────
-  server.get<{ Params: { projectId: string } }>(
-    '/projects/:projectId/agents', async (req) => {
-      return { agents: orchestrator.listAgents(req.params.projectId) }
-    }
-  )
-
-  server.post<{
-    Params: { projectId: string }
-    Body: { name: string; role: string; allowedPaths?: string[] }
-  }>('/projects/:projectId/agents', async (req) => {
-    const { projectId } = req.params
-    const { name, role, allowedPaths } = req.body
-    if (!name || !role) return { success: false, message: 'name and role are required' }
-    const agent = orchestrator.addAgent(projectId, {
-      name,
-      role: role as any,
-      allowedPaths: allowedPaths ?? [],
-      projectPath: orchestrator.getProject(projectId).rootPath
-    })
-    return { success: true, agent: { id: agent.id, name: agent.config.name, role: agent.config.role } }
+  server.post<{ Body: { name: string; rootPath: string } }>('/projects', async (req) => {
+    const { name, rootPath } = req.body
+    if (!name || !rootPath) return { success: false, message: 'name and rootPath are required' }
+    const project = await orchestrator.createProject({ name, rootPath })
+    return { success: true, project: { id: project.id, name: project.name, rootPath: project.rootPath } }
   })
 
-  // ── Instructions ──────────────────────────────────────────────────────────
-  server.post<{
-    Params: { projectId: string; agentId: string }
-    Body: { instruction: string; queue?: boolean }
-  }>('/projects/:projectId/agents/:agentId/instruct', async (req) => {
-    const { projectId, agentId } = req.params
-    const { instruction, queue = true } = req.body
-    if (!instruction) return { success: false, message: 'instruction is required' }
+  // ── Agents ────────────────────────────────────────────────────────────────
+  server.get<{ Params: { projectId: string } }>('/projects/:projectId/agents', async (req) => {
+    return { agents: orchestrator.listAgents(req.params.projectId) }
+  })
 
-    if (queue) {
-      await orchestrator.runInstruction(projectId, agentId, instruction)
-      return { success: true, message: 'Instruction queued' }
-    } else {
+  server.post<{ Params: { projectId: string }; Body: { name: string; role: string; allowedPaths?: string[] } }>(
+    '/projects/:projectId/agents', async (req) => {
+      const { projectId } = req.params
+      const { name, role, allowedPaths } = req.body
+      if (!name || !role) return { success: false, message: 'name and role are required' }
+      const agent = orchestrator.addAgent(projectId, {
+        name, role: role as any, allowedPaths: allowedPaths ?? [],
+        projectPath: orchestrator.getProject(projectId).rootPath
+      })
+      return { success: true, agent: { id: agent.id, name: agent.config.name, role: agent.config.role } }
+    }
+  )
+
+  // ── Instructions ──────────────────────────────────────────────────────────
+  server.post<{ Params: { projectId: string; agentId: string }; Body: { instruction: string; queue?: boolean } }>(
+    '/projects/:projectId/agents/:agentId/instruct', async (req) => {
+      const { projectId, agentId } = req.params
+      const { instruction, queue = true } = req.body
+      if (!instruction) return { success: false, message: 'instruction is required' }
+      if (queue) {
+        await orchestrator.runInstruction(projectId, agentId, instruction)
+        return { success: true, message: 'Instruction queued' }
+      }
       await orchestrator.runInstructionDirect(projectId, agentId, instruction)
       return { success: true, message: 'Instruction completed' }
     }
-  })
+  )
 
   const PORT = Number(process.env.PORT ?? 3001)
   await server.listen({ port: PORT, host: '0.0.0.0' })
