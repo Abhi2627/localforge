@@ -48,7 +48,7 @@ function MessageBubble({ msg }: { msg: Message }) {
 }
 
 export default function ChatPanel() {
-  const { projects, activeProjectId, addMessage, terminalVisible, selectedModel } = useAppStore()
+  const { projects, activeProjectId, addMessage, selectedModel } = useAppStore()
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [showNewProject, setShowNewProject] = useState(false)
@@ -57,15 +57,12 @@ export default function ChatPanel() {
 
   const activeProject = projects.find(p => p.id === activeProjectId)
   const messages = activeProject?.messages ?? []
-  const agents = activeProject?.agents ?? []
-  const firstAgent = agents[0]
+  const firstAgent = activeProject?.agents[0]
 
-  // Auto-scroll on new messages
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages.length, messages[messages.length - 1]?.content])
 
-  // Auto-resize textarea
   useEffect(() => {
     const ta = textareaRef.current
     if (!ta) return
@@ -78,22 +75,14 @@ export default function ChatPanel() {
     const text = input.trim()
     setInput('')
     setSending(true)
-
     addMessage(activeProject.id, {
-      id: nanoid(),
-      type: 'user',
-      content: text,
-      timestamp: Date.now()
+      id: nanoid(), type: 'user', content: text, timestamp: Date.now()
     })
-
     try {
       await api.instruct(activeProject.id, firstAgent.id, text)
     } catch (err: any) {
       addMessage(activeProject.id, {
-        id: nanoid(),
-        type: 'system',
-        content: `Error: ${err.message}`,
-        timestamp: Date.now()
+        id: nanoid(), type: 'system', content: `Error: ${err.message}`, timestamp: Date.now()
       })
     } finally {
       setSending(false)
@@ -101,18 +90,11 @@ export default function ChatPanel() {
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      send()
-    }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }
 
   const canSend = !!input.trim() && !!activeProject && !!firstAgent && !sending
-  const placeholder = !activeProject
-    ? 'Create a project first…'
-    : !firstAgent
-      ? 'Add an agent to start…'
-      : `Message ${firstAgent.name}…`
+  const modelShortName = selectedModel ? selectedModel.split(':')[0] : 'the AI'
 
   return (
     <div className="main-area">
@@ -148,106 +130,94 @@ export default function ChatPanel() {
             </div>
           </div>
         )}
-        {messages.map(msg => (
-          <MessageBubble key={msg.id} msg={msg} />
-        ))}
+        {messages.map(msg => <MessageBubble key={msg.id} msg={msg} />)}
         <div ref={bottomRef} />
       </div>
 
-      {/* Claude-style input bar */}
-      <div style={{
-        padding: '10px 16px 14px',
-        borderTop: '1px solid var(--border)',
-      }}>
-        <div style={{
-          display: 'flex',
-          alignItems: 'flex-end',
-          gap: 6,
-          background: 'var(--bg-tertiary)',
-          border: '1px solid var(--border)',
-          borderRadius: 12,
-          padding: '6px 8px 6px 12px',
-          transition: 'border-color 0.15s',
-        }}
-          onFocus={() => {}}
-        >
-          {/* Left action — attach */}
-          <button className="icon-btn" title="Attach file"
-            style={{ width: 28, height: 28, flexShrink: 0, marginBottom: 1 }}>
-            <Paperclip size={14} />
-          </button>
-
-          {/* Textarea — grows with content */}
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder={placeholder}
-            disabled={!activeProject || !firstAgent || sending}
-            rows={1}
-            style={{
-              flex: 1,
-              background: 'transparent',
-              border: 'none',
-              outline: 'none',
-              resize: 'none',
-              color: 'var(--text-primary)',
-              fontSize: 13,
-              lineHeight: 1.6,
-              fontFamily: 'inherit',
-              padding: '2px 0',
-              maxHeight: 140,
-              overflowY: 'auto',
-            }}
-          />
-
-          {/* Right actions */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0, marginBottom: 1 }}>
-            {/* Model indicator — tiny pill */}
-            {selectedModel && (
-              <span style={{
-                fontSize: 10, color: 'var(--text-muted)',
-                background: 'var(--bg-hover)', borderRadius: 4,
-                padding: '2px 6px', marginRight: 4,
-                maxWidth: 90, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
-              }}>
-                {selectedModel.split(':')[0]}
-              </span>
-            )}
-            <button className="icon-btn" title="Voice input"
-              style={{ width: 28, height: 28 }}>
-              <Mic size={14} />
+      {/* Input area — centred, narrower */}
+      <div style={{ padding: '10px 16px 14px', borderTop: '1px solid var(--border)' }}>
+        <div style={{ maxWidth: 680, margin: '0 auto' }}>
+          {/* Input box */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'flex-end',
+            gap: 6,
+            background: 'var(--bg-tertiary)',
+            border: '1px solid var(--border)',
+            borderRadius: 12,
+            padding: '6px 8px 6px 12px',
+          }}>
+            <button className="icon-btn" title="Attach file"
+              style={{ width: 28, height: 28, flexShrink: 0, marginBottom: 1 }}>
+              <Paperclip size={14} />
             </button>
-            <button
-              onClick={send}
-              disabled={!canSend}
-              title="Send (Enter)"
+
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder={
+                !activeProject ? 'Create a project first…'
+                : !firstAgent ? 'Add an agent to start…'
+                : `Message ${firstAgent.name}…`
+              }
+              disabled={!activeProject || !firstAgent || sending}
+              rows={1}
               style={{
-                width: 30, height: 30,
-                borderRadius: 8,
+                flex: 1,
+                background: 'transparent',
                 border: 'none',
-                background: canSend ? 'var(--accent)' : 'var(--bg-hover)',
-                color: canSend ? 'white' : 'var(--text-muted)',
-                cursor: canSend ? 'pointer' : 'not-allowed',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                transition: 'background 0.15s, color 0.15s',
-                flexShrink: 0,
+                outline: 'none',
+                resize: 'none',
+                color: 'var(--text-primary)',
+                fontSize: 13,
+                lineHeight: 1.6,
+                fontFamily: 'inherit',
+                padding: '2px 0',
+                maxHeight: 140,
+                overflowY: 'auto',
               }}
-            >
-              <Send size={13} />
-            </button>
-          </div>
-        </div>
+            />
 
-        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 5, paddingLeft: 4 }}>
-          Enter to send · Shift+Enter for newline
+            <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0, marginBottom: 1 }}>
+              <button className="icon-btn" title="Voice input" style={{ width: 28, height: 28 }}>
+                <Mic size={14} />
+              </button>
+              <button
+                onClick={send}
+                disabled={!canSend}
+                title="Send"
+                style={{
+                  width: 30, height: 30,
+                  borderRadius: 8,
+                  border: 'none',
+                  background: canSend ? 'var(--accent)' : 'var(--bg-hover)',
+                  color: canSend ? 'white' : 'var(--text-muted)',
+                  cursor: canSend ? 'pointer' : 'not-allowed',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  transition: 'background 0.15s, color 0.15s',
+                  flexShrink: 0,
+                }}
+              >
+                <Send size={13} />
+              </button>
+            </div>
+          </div>
+
+          {/* Disclaimer */}
+          <div style={{
+            fontSize: 11,
+            color: 'var(--text-muted)',
+            textAlign: 'center',
+            marginTop: 6,
+          }}>
+            {modelShortName} is AI and can make mistakes. Please double-check responses.
+          </div>
         </div>
       </div>
 
-      {showNewProject && (
-        <NewProjectModal onClose={() => setShowNewProject(false)} />
-      )}
+      {showNewProject && <NewProjectModal onClose={() => setShowNewProject(false)} />}
     </div>
   )
 }

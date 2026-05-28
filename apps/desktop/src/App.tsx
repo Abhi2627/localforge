@@ -10,7 +10,7 @@ import './index.css'
 
 export default function App() {
   useWebSocket()
-  const { setModels, setSelectedModel, addProject, setActiveProject, sidebarVisible } = useAppStore()
+  const { setModels, setSelectedModel, addProject, setActiveProject, sidebarVisible, iconBarVisible } = useAppStore()
 
   useEffect(() => {
     api.getModels().then(({ models }) => {
@@ -30,21 +30,26 @@ export default function App() {
     }).catch(console.error)
   }, [])
 
+  const cols = [
+    iconBarVisible ? '48px' : '0px',
+    '1fr',
+    sidebarVisible ? '260px' : '0px',
+  ].join(' ')
+
   return (
     <div style={{
       display: 'grid',
-      gridTemplateColumns: sidebarVisible ? '48px 1fr 260px' : '48px 1fr',
+      gridTemplateColumns: cols,
       gridTemplateRows: '40px 1fr',
       height: '100vh',
       width: '100vw',
       overflow: 'hidden',
       transition: 'grid-template-columns 0.2s ease',
     }}>
-      {/* Full-width topbar */}
       <div style={{ gridColumn: '1 / -1' }}>
         <TopBar />
       </div>
-      <IconBar />
+      {iconBarVisible && <IconBar />}
       <ChatPanel />
       {sidebarVisible && <RightSidebar />}
     </div>

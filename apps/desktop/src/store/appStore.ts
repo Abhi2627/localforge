@@ -42,30 +42,32 @@ export interface OllamaModel {
 export type ActiveView = 'chat' | 'terminal' | 'files'
 
 interface AppState {
-  projects:        Project[]
-  activeProjectId: string | null
-  models:          OllamaModel[]
-  selectedModel:   string
-  activeView:      ActiveView
-  sidebarVisible:  boolean
-  terminalVisible: boolean
-  isConnected:     boolean
+  projects:         Project[]
+  activeProjectId:  string | null
+  models:           OllamaModel[]
+  selectedModel:    string
+  activeView:       ActiveView
+  sidebarVisible:   boolean
+  iconBarVisible:   boolean
+  terminalVisible:  boolean
+  isConnected:      boolean
 
-  setProjects:        (projects: Project[]) => void
-  addProject:         (project: Project) => void
-  setActiveProject:   (id: string) => void
-  addMessage:         (projectId: string, msg: Message) => void
-  appendStream:       (projectId: string, taskId: string, chunk: string) => void
-  finalizeStream:     (projectId: string, taskId: string) => void
-  addAgent:           (projectId: string, agent: Agent) => void
-  updateAgent:        (projectId: string, agentId: string, update: Partial<Agent>) => void
-  addWrittenFile:     (projectId: string, filePath: string) => void
-  setModels:          (models: OllamaModel[]) => void
-  setSelectedModel:   (model: string) => void
-  setActiveView:      (view: ActiveView) => void
-  setSidebarVisible:  (v: boolean) => void
-  setTerminalVisible: (v: boolean) => void
-  setConnected:       (v: boolean) => void
+  setProjects:         (projects: Project[]) => void
+  addProject:          (project: Project) => void
+  setActiveProject:    (id: string) => void
+  addMessage:          (projectId: string, msg: Message) => void
+  appendStream:        (projectId: string, taskId: string, chunk: string) => void
+  finalizeStream:      (projectId: string, taskId: string) => void
+  addAgent:            (projectId: string, agent: Agent) => void
+  updateAgent:         (projectId: string, agentId: string, update: Partial<Agent>) => void
+  addWrittenFile:      (projectId: string, filePath: string) => void
+  setModels:           (models: OllamaModel[]) => void
+  setSelectedModel:    (model: string) => void
+  setActiveView:       (view: ActiveView) => void
+  setSidebarVisible:   (v: boolean) => void
+  setIconBarVisible:   (v: boolean) => void
+  setTerminalVisible:  (v: boolean) => void
+  setConnected:        (v: boolean) => void
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -75,6 +77,7 @@ export const useAppStore = create<AppState>((set) => ({
   selectedModel:   '',
   activeView:      'chat',
   sidebarVisible:  true,
+  iconBarVisible:  true,
   terminalVisible: false,
   isConnected:     false,
 
@@ -144,6 +147,7 @@ export const useAppStore = create<AppState>((set) => ({
   setSelectedModel:   (selectedModel) => set({ selectedModel }),
   setActiveView:      (activeView)    => set({ activeView }),
   setSidebarVisible:  (v) => set({ sidebarVisible: v }),
+  setIconBarVisible:  (v) => set({ iconBarVisible: v }),
   setTerminalVisible: (v) => set({ terminalVisible: v }),
   setConnected:       (v) => set({ isConnected: v }),
 }))
