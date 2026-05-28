@@ -1,66 +1,64 @@
 import { create } from 'zustand'
 
-export type AgentRole = 'frontend' | 'backend' | 'fullstack' | 'test' | 'review'
-export type MessageType = 'user' | 'agent' | 'system' | 'stream'
-export type SessionType = 'chat' | 'project' | 'terminal'
+export type AgentRole    = 'frontend' | 'backend' | 'fullstack' | 'test' | 'review'
+export type MessageType  = 'user' | 'agent' | 'system' | 'stream'
+export type SessionType  = 'chat' | 'project' | 'terminal'
 
 export interface Message {
-  id: string
-  type: MessageType
-  content: string
+  id:         string
+  type:       MessageType
+  content:    string
   agentName?: string
   agentRole?: AgentRole
-  taskId?: string
-  filePath?: string
-  timestamp: number
+  taskId?:    string
+  filePath?:  string
+  timestamp:  number
 }
 
 export interface Agent {
-  id: string
-  name: string
-  role: AgentRole
-  status: 'idle' | 'running' | 'done' | 'failed'
+  id:           string
+  name:         string
+  role:         AgentRole
+  status:       'idle' | 'running' | 'done' | 'failed'
   currentTask?: string
 }
 
-// A Session is either a Chat, a Project, or a Terminal
 export interface Session {
-  id: string
-  type: SessionType
-  title: string
-  rootPath?: string         // only for projects
-  agents: Agent[]
-  messages: Message[]
-  writtenFiles: string[]
-  lastAccessedAt: number    // unix ms — used for tab strip logic
-  isActive: boolean
+  id:              string
+  type:            SessionType
+  title:           string
+  rootPath?:       string
+  agents:          Agent[]
+  messages:        Message[]
+  allFiles:        string[]   // all files in project (from scan)
+  writtenFiles:    string[]   // files written in this session by agents
+  summary?:        string     // auto-generated project summary
+  lastAccessedAt:  number
+  isActive:        boolean
 }
 
 export interface OllamaModel {
-  name: string
-  sizeGb: string
+  name:       string
+  sizeGb:     string
   isSelected: boolean
   isFallback: boolean
 }
 
 export type ActiveView = 'chat' | 'project' | 'terminal' | 'extensions'
-export type AppScreen = 'welcome' | 'session'
+export type AppScreen  = 'welcome' | 'session'
 
 interface AppState {
-  screen:           AppScreen
-  sessions:         Session[]
-  activeSessionId:  string | null
-  activeView:       ActiveView
-  models:           OllamaModel[]
-  selectedModel:    string
-  leftExpanded:     boolean
-  rightExpanded:    boolean
-  isConnected:      boolean
+  screen:          AppScreen
+  sessions:        Session[]
+  activeSessionId: string | null
+  models:          OllamaModel[]
+  selectedModel:   string
+  leftExpanded:    boolean
+  rightExpanded:   boolean
+  isConnected:     boolean
 
-  // Derived: recent sessions within 24h for tab strip
-  getRecentTabs:    () => Session[]
+  getRecentTabs: () => Session[]
 
-  // Actions
   setScreen:           (s: AppScreen) => void
   addSession:          (session: Session) => void
   setActiveSession:    (id: string) => void
@@ -72,9 +70,10 @@ interface AppState {
   addAgent:            (sessionId: string, agent: Agent) => void
   updateAgent:         (sessionId: string, agentId: string, update: Partial<Agent>) => void
   addWrittenFile:      (sessionId: string, filePath: string) => void
+  setAllFiles:         (sessionId: string, files: string[]) => void
+  setSessionSummary:   (sessionId: string, summary: string) => void
   setModels:           (models: OllamaModel[]) => void
   setSelectedModel:    (model: string) => void
-  setActiveView:       (view: ActiveView) => void
   setLeftExpanded:     (v: boolean) => void
   setRightExpanded:    (v: boolean) => void
   setConnected:        (v: boolean) => void
@@ -84,7 +83,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   screen:          'welcome',
   sessions:        [],
   activeSessionId: null,
-  activeView:      'chat',
   models:          [],
   selectedModel:   '',
   leftExpanded:    true,
@@ -94,8 +92,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   getRecentTabs: () => {
     const { sessions } = get()
     const now = Date.now()
-    const within24h = sessions.filter(s => now - s.lastAccessedAt < 24 * 60 * 60 * 1000)
-    return within24h
+    return sessions
+      .filter(s => now - s.lastAccessedAt < 24 * 60 * 60 * 1000)
       .sort((a, b) => b.lastAccessedAt - a.lastAccessedAt)
       .slice(0, 5)
   },
@@ -103,7 +101,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setScreen: (screen) => set({ screen }),
 
   addSession: (session) => set(s => ({
-    sessions: [...s.sessions, session],
+    sessions: [...s.sessions.filter(x => x.id !== session.id), session],
     screen: 'session',
   })),
 
@@ -124,11 +122,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   closeSession: (id) => set(s => {
     const remaining = s.sessions.filter(sess => sess.id !== id)
     const newActive = remaining.length > 0 ? remaining[remaining.length - 1].id : null
-    return {
-      sessions: remaining,
-      activeSessionId: newActive,
-      screen: newActive ? 'session' : 'welcome',
-    }
+    return { sessions: remaining, activeSessionId: newActive, screen: newActive ? 'session' : 'welcome' }
   }),
 
   addMessage: (sessionId, msg) => set(s => ({
@@ -148,8 +142,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       return { ...sess, messages: [...sess.messages, {
         id: `stream-${taskId}-${Date.now()}`,
-        type: 'stream' as MessageType,
-        content: chunk, taskId, timestamp: Date.now()
+        type: 'stream' as MessageType, content: chunk, taskId, timestamp: Date.now()
       }]}
     })
   })),
@@ -184,10 +177,21 @@ export const useAppStore = create<AppState>((set, get) => ({
     )
   })),
 
-  setModels:         (models)        => set({ models }),
-  setSelectedModel:  (selectedModel) => set({ selectedModel }),
-  setActiveView:     (activeView)    => set({ activeView }),
-  setLeftExpanded:   (v) => set({ leftExpanded: v }),
-  setRightExpanded:  (v) => set({ rightExpanded: v }),
-  setConnected:      (v) => set({ isConnected: v }),
+  setAllFiles: (sessionId, files) => set(s => ({
+    sessions: s.sessions.map(sess =>
+      sess.id === sessionId ? { ...sess, allFiles: files } : sess
+    )
+  })),
+
+  setSessionSummary: (sessionId, summary) => set(s => ({
+    sessions: s.sessions.map(sess =>
+      sess.id === sessionId ? { ...sess, summary } : sess
+    )
+  })),
+
+  setModels:        (models)        => set({ models }),
+  setSelectedModel: (selectedModel) => set({ selectedModel }),
+  setLeftExpanded:  (v) => set({ leftExpanded: v }),
+  setRightExpanded: (v) => set({ rightExpanded: v }),
+  setConnected:     (v) => set({ isConnected: v }),
 }))

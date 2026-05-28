@@ -1,41 +1,73 @@
 import { useState } from 'react'
-import { X, FolderOpen } from 'lucide-react'
-import { open } from '@tauri-apps/plugin-dialog'
+import { X, FolderOpen, Loader } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
+import { api } from '../hooks/useApi'
 import { nanoid } from '../hooks/nanoid'
 
 interface Props { onClose: () => void }
 
+// Tauri dialog — gracefully falls back if not in Tauri runtime
+async function pickFolder(): Promise<string | null> {
+  try {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const result = await open({ directory: true, multiple: false, title: 'Select project root folder' })
+    return typeof result === 'string' ? result : null
+  } catch {
+    // Running in browser dev mode — prompt for path manually
+    const path = window.prompt('Enter project root path (Tauri not available in browser):')
+    return path || null
+  }
+}
+
 export default function NewProjectModal({ onClose }: Props) {
-  const { models, addSession, setActiveSession } = useAppStore()
+  const { models, selectedModel, addSession, setActiveSession, setAllFiles } = useAppStore()
   const [rootPath, setRootPath] = useState('')
-  const [model, setModel]       = useState(models[0]?.name ?? '')
+  const [model, setModel]       = useState(selectedModel || models[0]?.name || '')
+  const [loading, setLoading]   = useState(false)
   const [error, setError]       = useState('')
 
-  // Derive title from the last folder name in the path
-  const title = rootPath ? rootPath.split('/').filter(Boolean).pop() ?? 'project' : ''
+  const title = rootPath
+    ? rootPath.replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? 'project'
+    : ''
 
-  async function pickFolder() {
-    try {
-      const selected = await open({ directory: true, multiple: false, title: 'Select project root folder' })
-      if (typeof selected === 'string') setRootPath(selected)
-    } catch {
-      // Tauri not available in browser dev mode — fall back to manual input
-    }
+  async function handlePickFolder() {
+    const selected = await pickFolder()
+    if (selected) { setRootPath(selected); setError('') }
   }
 
-  function handleCreate() {
+  async function handleOpen() {
     if (!rootPath.trim()) { setError('Please select a project folder'); return }
-    const id = nanoid()
-    addSession({
-      id, type: 'project',
-      title,
-      rootPath: rootPath.trim(),
-      agents: [], messages: [], writtenFiles: [],
-      lastAccessedAt: Date.now(), isActive: true,
-    })
-    setActiveSession(id)
-    onClose()
+    setLoading(true)
+    setError('')
+
+    try {
+      const id = nanoid()
+
+      // Persist session to DB
+      await api.createSession(id, 'project', title, rootPath.trim(), model)
+
+      // Add to UI store immediately
+      addSession({
+        id, type: 'project', title,
+        rootPath: rootPath.trim(),
+        agents: [], messages: [], allFiles: [], writtenFiles: [],
+        lastAccessedAt: Date.now(), isActive: true,
+      })
+      setActiveSession(id)
+
+      // Scan project files in background (result comes via WebSocket project_summary event)
+      api.openProject(id, rootPath.trim()).then(result => {
+        if (result.fileList?.length) {
+          setAllFiles(id, result.fileList)
+        }
+      }).catch(console.error)
+
+      onClose()
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -46,11 +78,11 @@ export default function NewProjectModal({ onClose }: Props) {
       <div style={{
         background: 'var(--bg-secondary)', border: '1px solid var(--border)',
         borderRadius: 12, padding: 24, width: 380,
-        display: 'flex', flexDirection: 'column', gap: 16,
+        display: 'flex', flexDirection: 'column', gap: 18,
       }}>
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-primary)' }}>New project</span>
+          <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-primary)' }}>Open project</span>
           <button onClick={onClose} className="icon-btn" style={{ width: 24, height: 24 }}>
             <X size={14} />
           </button>
@@ -58,27 +90,29 @@ export default function NewProjectModal({ onClose }: Props) {
 
         {/* Folder picker */}
         <div>
-          <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 8 }}>
-            Create a folder on your machine first, then select it here — just like opening a folder in VS Code.
+          <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 8, lineHeight: 1.5 }}>
+            Create a folder on your machine first, then select it here.
           </div>
-          <button onClick={pickFolder} style={{
+          <button onClick={handlePickFolder} style={{
             display: 'flex', alignItems: 'center', gap: 10,
             width: '100%', padding: '10px 14px',
-            background: 'var(--bg-primary)', border: '1px solid var(--border)',
+            background: 'var(--bg-primary)', border: `1px solid ${rootPath ? 'var(--accent)' : 'var(--border)'}`,
             borderRadius: 8, cursor: 'pointer', transition: 'border-color 0.15s',
             color: rootPath ? 'var(--text-primary)' : 'var(--text-muted)',
-          }}
-            onMouseEnter={e => (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent)'}
-            onMouseLeave={e => (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'}
-          >
+          }}>
             <FolderOpen size={16} style={{ color: 'var(--accent)', flexShrink: 0 }} />
-            <span style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left', flex: 1, fontFamily: rootPath ? 'monospace' : 'inherit' }}>
+            <span style={{
+              fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap', flex: 1, textAlign: 'left',
+              fontFamily: rootPath ? 'monospace' : 'inherit',
+            }}>
               {rootPath || 'Select project folder…'}
             </span>
           </button>
+
           {rootPath && (
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 5, paddingLeft: 2 }}>
-              Project title: <span style={{ color: 'var(--accent)', fontWeight: 500 }}>{title}</span>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6, paddingLeft: 2 }}>
+              Project name: <span style={{ color: 'var(--accent)', fontWeight: 500 }}>{title}</span>
             </div>
           )}
         </div>
@@ -100,17 +134,29 @@ export default function NewProjectModal({ onClose }: Props) {
           </div>
         )}
 
-        {error && <div style={{ fontSize: 12, color: 'var(--red)' }}>{error}</div>}
+        {error && (
+          <div style={{ fontSize: 12, color: 'var(--red)', padding: '6px 10px', background: 'var(--red-dim)', borderRadius: 6 }}>
+            {error}
+          </div>
+        )}
 
-        <button onClick={handleCreate} style={{
-          background: 'var(--accent)', border: 'none', borderRadius: 8,
-          padding: '10px 0', color: 'white', fontSize: 13,
-          fontWeight: 600, cursor: 'pointer', width: '100%',
-          opacity: rootPath ? 1 : 0.5,
-        }}>
-          Create project
+        <button
+          onClick={handleOpen}
+          disabled={!rootPath || loading}
+          style={{
+            background: 'var(--accent)', border: 'none', borderRadius: 8,
+            padding: '10px 0', color: 'white', fontSize: 13,
+            fontWeight: 600, cursor: rootPath && !loading ? 'pointer' : 'not-allowed',
+            width: '100%', opacity: rootPath && !loading ? 1 : 0.5,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+          }}
+        >
+          {loading && <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />}
+          {loading ? 'Opening…' : 'Open project'}
         </button>
       </div>
+
+      <style>{`@keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }`}</style>
     </div>
   )
 }

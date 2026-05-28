@@ -12,21 +12,43 @@ import './index.css'
 
 export default function App() {
   useWebSocket()
-  const { setModels, setSelectedModel, screen, leftExpanded, rightExpanded } = useAppStore()
+  const {
+    setModels, setSelectedModel,
+    screen, leftExpanded, rightExpanded,
+    addSession, setActiveSession,
+  } = useAppStore()
 
   useEffect(() => {
+    // Load models
     api.getModels().then(({ models }) => {
       setModels(models)
       const selected = models.find((m: any) => m.isSelected)
       if (selected) setSelectedModel(selected.name)
     }).catch(console.error)
+
+    // Load persisted sessions from SQLite
+    api.getSessions().then(({ sessions }) => {
+      sessions.forEach((s: any) => {
+        addSession({
+          id:             s.id,
+          type:           s.type,
+          title:          s.title,
+          rootPath:       s.rootPath,
+          summary:        s.summary,
+          agents:         [],
+          messages:       [],
+          allFiles:       [],
+          writtenFiles:   [],
+          lastAccessedAt: new Date(s.updatedAt).getTime(),
+          isActive:       false,
+        })
+      })
+    }).catch(console.error)
   }, [])
 
   const leftW  = leftExpanded  ? '220px' : '48px'
-  // Right bar only shown when in a session
   const rightW = screen === 'session' ? (rightExpanded ? '260px' : '40px') : '0px'
-
-  const cols = screen === 'session'
+  const cols   = screen === 'session'
     ? `${leftW} 1fr ${rightW}`
     : `${leftW} 1fr`
 
@@ -41,14 +63,11 @@ export default function App() {
       <div style={{ gridColumn: '1 / -1' }}>
         <TopBar />
       </div>
-
       <LeftBar />
-
       <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
         <TabStrip />
         {screen === 'welcome' ? <WelcomeScreen /> : <ChatPanel />}
       </div>
-
       {screen === 'session' && <RightSidebar />}
     </div>
   )
