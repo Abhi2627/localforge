@@ -7,7 +7,11 @@ export default function TopBar() {
     isConnected, models, selectedModel, setSelectedModel,
     rightExpanded, setRightExpanded,
     leftExpanded,  setLeftExpanded,
+    sessions, activeSessionId, screen,
   } = useAppStore()
+
+  const activeSession    = sessions.find(s => s.id === activeSessionId)
+  const isProjectSession = screen === 'session' && activeSession?.type === 'project'
 
   async function handleModelChange(e: React.ChangeEvent<HTMLSelectElement>) {
     const model = e.target.value
@@ -41,11 +45,14 @@ export default function TopBar() {
         {isConnected ? <Wifi size={15} /> : <WifiOff size={15} />}
       </div>
 
-      <button className="icon-btn"
-        title={rightExpanded ? 'Collapse right bar' : 'Expand right bar'}
-        onClick={() => setRightExpanded(!rightExpanded)}>
-        {rightExpanded ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}
-      </button>
+      {/* Right panel toggle only shown for project sessions */}
+      {isProjectSession && (
+        <button className="icon-btn"
+          title={rightExpanded ? 'Collapse right bar' : 'Expand right bar'}
+          onClick={() => setRightExpanded(!rightExpanded)}>
+          {rightExpanded ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}
+        </button>
+      )}
     </div>
   )
 }

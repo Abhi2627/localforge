@@ -15,40 +15,39 @@ export default function App() {
   const {
     setModels, setSelectedModel,
     screen, leftExpanded, rightExpanded,
-    addSession, setActiveSession,
+    sessions, activeSessionId,
+    addSession,
   } = useAppStore()
 
+  const activeSession   = sessions.find(s => s.id === activeSessionId)
+  const isProjectSession = activeSession?.type === 'project'
+
+  // Right sidebar only visible for project sessions
+  const showRight = screen === 'session' && isProjectSession
+
   useEffect(() => {
-    // Load models
     api.getModels().then(({ models }) => {
       setModels(models)
       const selected = models.find((m: any) => m.isSelected)
       if (selected) setSelectedModel(selected.name)
     }).catch(console.error)
 
-    // Load persisted sessions from SQLite
-    api.getSessions().then(({ sessions }) => {
-      sessions.forEach((s: any) => {
+    api.getSessions().then(({ sessions: saved }) => {
+      saved.forEach((s: any) => {
         addSession({
-          id:             s.id,
-          type:           s.type,
-          title:          s.title,
-          rootPath:       s.rootPath,
-          summary:        s.summary,
-          agents:         [],
-          messages:       [],
-          allFiles:       [],
-          writtenFiles:   [],
+          id: s.id, type: s.type, title: s.title,
+          rootPath: s.rootPath, summary: s.summary,
+          agents: [], messages: [], allFiles: [], writtenFiles: [],
           lastAccessedAt: new Date(s.updatedAt).getTime(),
-          isActive:       false,
+          isActive: false,
         })
       })
     }).catch(console.error)
   }, [])
 
-  const leftW  = leftExpanded  ? '220px' : '48px'
-  const rightW = screen === 'session' ? (rightExpanded ? '260px' : '40px') : '0px'
-  const cols   = screen === 'session'
+  const leftW  = leftExpanded ? '220px' : '48px'
+  const rightW = showRight ? (rightExpanded ? '260px' : '40px') : '0px'
+  const cols   = showRight
     ? `${leftW} 1fr ${rightW}`
     : `${leftW} 1fr`
 
@@ -68,7 +67,7 @@ export default function App() {
         <TabStrip />
         {screen === 'welcome' ? <WelcomeScreen /> : <ChatPanel />}
       </div>
-      {screen === 'session' && <RightSidebar />}
+      {showRight && <RightSidebar />}
     </div>
   )
 }

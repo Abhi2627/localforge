@@ -41,6 +41,8 @@ LocalForge turns locally installed LLMs — Qwen, Llama, Gemma, and others via O
 - **Preview on device** — generates a QR code for mobile/tablet browser preview of built apps
 - **Knowledge graph** — tracks every function and interface written to prevent cross-agent drift
 - **API contract enforcer** — detects frontend/backend interface mismatches before they compound
+- **Session persistence** — all chats and projects saved to local SQLite, history survives restarts
+- **Auto project onboarding** — opening an existing project auto-scans all files and generates a technical summary for agents
 
 ---
 
@@ -62,7 +64,7 @@ LocalForge turns locally installed LLMs — Qwen, Llama, Gemma, and others via O
 ## Prerequisites
 
 - [Ollama](https://ollama.ai) installed and running
-- At least one model pulled: `ollama pull qwen3.5:8b` (recommended) or `ollama pull llama4`
+- At least one model pulled: `ollama pull qwen2.5-coder` (recommended)
 - Node.js 20+
 - Rust (for Tauri): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 
@@ -78,7 +80,13 @@ cd localforge
 # Install dependencies
 npm install
 
-# Start the agent server + desktop app together
+# Start agent server
+npm run dev:agent
+
+# Start desktop UI (browser)
+npm run dev:desktop
+
+# Or start both together
 npm run dev
 ```
 
@@ -95,12 +103,12 @@ localforge/
 ├── packages/
 │   ├── agent-core/           # Fastify agent server
 │   │   └── src/
-│   │       ├── orchestrator/ # TaskQueue, AgentSession, Orchestrator
-│   │       ├── persistence/  # Database, TaskLog, Checkpointer
-│   │       ├── mcp/          # MCP filesystem + git client
-│   │       ├── ollama/       # Ollama API wrapper
-│   │       ├── rag/          # Internet RAG pipeline
-│   │       └── advisor/      # Model update checker
+│   │       ├── orchestrator/ # TaskQueue, AgentSession, Orchestrator, SystemProfiler
+│   │       ├── persistence/  # Database, TaskLog, Checkpointer, Journal, SessionStore
+│   │       ├── mcp/          # MCP filesystem client, ProjectScanner
+│   │       ├── ollama/       # OllamaClient, ModelManager
+│   │       ├── rag/          # Internet RAG pipeline (coming soon)
+│   │       └── advisor/      # Model update checker (coming soon)
 │   └── shared/               # Shared types and utilities
 └── docs/                     # Architecture and research notes
 ```
@@ -110,19 +118,26 @@ localforge/
 ## Roadmap
 
 - [x] Project scaffold and monorepo setup
-- [ ] Agent core: TaskQueue + write-ahead log
-- [ ] Ollama client with model fallback
-- [ ] MCP filesystem integration
-- [ ] Crash recovery: checksum verifier
-- [ ] React UI: chat + file tree + agent status
-- [ ] Active project switcher sidebar
+- [x] Agent core: TaskQueue + write-ahead log
+- [x] Ollama client with model fallback
+- [x] MCP filesystem integration
+- [x] Crash recovery: checksum verifier
+- [x] React UI: chat + file tree + agent status
+- [x] Active project switcher sidebar
+- [x] Hardware-aware scheduler (auto parallel/sequential)
+- [x] Session persistence (SQLite — chats + projects survive restart)
+- [x] Auto project onboarding (file scan + model-generated summary)
+- [x] Native folder picker (Tauri dialog plugin)
+- [x] Chat mode (conversational, no MCP, local model only)
+- [x] Tab strip (recent sessions, 24h window)
+- [x] Right sidebar project-only (hidden for chat sessions)
 - [ ] Integrated terminal (xterm.js)
-- [ ] Hardware-aware scheduler
 - [ ] Internet RAG pipeline
-- [ ] Model advisor
-- [ ] Knowledge graph
-- [ ] API contract enforcer
-- [ ] Preview on device (QR code)
+- [ ] Model advisor (failure tracker + Ollama registry checker)
+- [ ] Knowledge graph (cross-agent symbol tracker)
+- [ ] API contract enforcer (FE/BE interface mismatch detection)
+- [ ] Preview on device (QR code dev server)
+- [ ] Agent creation UI inside project session
 
 ---
 

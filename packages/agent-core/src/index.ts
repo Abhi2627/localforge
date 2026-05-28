@@ -65,14 +65,13 @@ async function bootstrap() {
     return { success: true, config: await setFallbackModels(req.body.models) }
   })
 
-  // ── Sessions (persist chat + project history) ──────────────────────────────
+  // ── Sessions ───────────────────────────────────────────────────────────────
   server.get('/sessions', async () => ({ sessions: getAllSessions() }))
 
   server.get<{ Params: { id: string } }>('/sessions/:id', async (req) => {
     const session = getSession(req.params.id)
     if (!session) return { error: 'Not found' }
-    const messages = getSessionMessages(req.params.id)
-    return { session, messages }
+    return { session, messages: getSessionMessages(req.params.id) }
   })
 
   server.post<{ Body: { id: string; type: string; title: string; rootPath?: string; modelName?: string } }>(
@@ -88,69 +87,76 @@ async function bootstrap() {
     return { success: true }
   })
 
-  // Save a message to a session
   server.post<{ Body: { id: string; sessionId: string; role: string; content: string; agentName?: string } }>(
     '/sessions/message', async (req) => {
       const { id, sessionId, role, content, agentName } = req.body
+      // Ensure session exists before saving message — upsert a minimal record if missing
+      const existing = getSession(sessionId)
+      if (!existing) {
+        upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: loadConfig().selectedModel })
+      }
       saveMessage({ id, sessionId, role: role as any, content, agentName })
       return { success: true }
     }
   )
 
-  // ── Open project — scan existing files + generate summary ─────────────────
+  // ── Project open ───────────────────────────────────────────────────────────
   server.post<{ Body: { sessionId: string; rootPath: string } }>(
     '/project/open', async (req) => {
       const { sessionId, rootPath } = req.body
       if (!rootPath) return { success: false, message: 'rootPath required' }
 
-      // Connect MCP
       await connectMCP(rootPath)
-
-      // Scan existing files
       const scan = scanProjectFiles(rootPath)
 
-      // Fire-and-forget: generate summary in background, broadcast when ready
+      // Fire-and-forget summary generation
       generateProjectSummary(sessionId, rootPath, scan).then(summary => {
         broadcast({ type: 'project_summary', sessionId, summary })
       })
 
       return {
-        success:   true,
-        isEmpty:   scan.isEmpty,
-        fileList:  scan.fileList,
-        fileTree:  scan.fileTree,
-        fileCount: scan.fileList.length,
+        success: true, isEmpty: scan.isEmpty,
+        fileList: scan.fileList, fileTree: scan.fileTree, fileCount: scan.fileList.length,
       }
     }
   )
 
-  // Get project summary (may not be ready yet if still generating)
   server.get<{ Params: { sessionId: string } }>('/project/:sessionId/summary', async (req) => {
     const session = getSession(req.params.sessionId)
     return { summary: session?.summary ?? null }
   })
 
-  // ── Chat (conversational, no MCP) ─────────────────────────────────────────
-  server.post<{ Body: { message: string; sessionId: string; history?: Array<{role: string; content: string}> } }>(
+  // ── Chat (local Ollama only, no internet) ──────────────────────────────────
+  server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>(
     '/chat', async (req) => {
       const { message, sessionId, history = [] } = req.body
       if (!message) return { success: false, reply: 'No message' }
 
       const { selectedModel } = loadConfig()
+
+      // Ensure session row exists before saving messages
+      const existing = getSession(sessionId)
+      if (!existing) {
+        upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: selectedModel })
+      }
+
       const session = getSession(sessionId)
 
-      // Build context: system prompt + project summary if available + history + message
-      const systemContent = `You are a helpful AI assistant running locally inside LocalForge, powered by ${selectedModel} via Ollama on this machine.
-You are NOT ChatGPT, Claude, or any cloud model. You are ${selectedModel} running locally.
-If asked what you are, say you are ${selectedModel} running locally via Ollama inside LocalForge.
-Keep responses clear and concise. Do not add thinking steps or preamble.${session?.summary ? `\n\nProject context:\n${session.summary}` : ''}`
+      const systemContent =
+        `You are a helpful AI assistant running locally inside LocalForge. ` +
+        `You are powered by ${selectedModel} running via Ollama on this machine — fully offline, no internet. ` +
+        `You are NOT ChatGPT, Claude, GPT-4, or any cloud model. ` +
+        `If asked what you are, say you are ${selectedModel} running locally via Ollama inside LocalForge. ` +
+        `Keep responses clear and concise. Do not add thinking steps or preamble.` +
+        (session?.summary ? `\n\nProject context:\n${session.summary}` : '')
 
       const messages = [
         { role: 'system' as const, content: systemContent },
-        ...history.slice(-10).map((h: any) => ({ role: h.role as any, content: h.content })),
-        { role: 'user' as const, content: message }
+        ...history.slice(-10).map((h: any) => ({ role: h.role as const, content: h.content })),
+        { role: 'user' as const, content: message },
       ]
 
+      // Call local Ollama — no external API
       const reply = await chat(selectedModel, messages)
 
       // Persist both turns
@@ -162,7 +168,7 @@ Keep responses clear and concise. Do not add thinking steps or preamble.${sessio
     }
   )
 
-  // ── Projects / Agents / Instructions (existing) ────────────────────────────
+  // ── Projects / Agents / Instructions ──────────────────────────────────────
   server.get('/projects', async () => ({ projects: orchestrator.listProjects() }))
 
   server.post<{ Body: { name: string; rootPath: string } }>('/projects', async (req) => {
