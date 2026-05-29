@@ -30,9 +30,9 @@ export interface Session {
   rootPath?:       string
   agents:          Agent[]
   messages:        Message[]
-  allFiles:        string[]   // all files in project (from scan)
-  writtenFiles:    string[]   // files written in this session by agents
-  summary?:        string     // auto-generated project summary
+  allFiles:        string[]
+  writtenFiles:    string[]
+  summary?:        string
   lastAccessedAt:  number
   isActive:        boolean
 }
@@ -44,8 +44,7 @@ export interface OllamaModel {
   isFallback: boolean
 }
 
-export type ActiveView = 'chat' | 'project' | 'terminal' | 'extensions'
-export type AppScreen  = 'welcome' | 'session'
+export type AppScreen = 'welcome' | 'session'
 
 interface AppState {
   screen:          AppScreen
@@ -57,8 +56,7 @@ interface AppState {
   rightExpanded:   boolean
   isConnected:     boolean
 
-  getRecentTabs: () => Session[]
-
+  getRecentTabs:       () => Session[]
   setScreen:           (s: AppScreen) => void
   addSession:          (session: Session) => void
   setActiveSession:    (id: string) => void
@@ -100,10 +98,12 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setScreen: (screen) => set({ screen }),
 
-  addSession: (session) => set(s => ({
-    sessions: [...s.sessions.filter(x => x.id !== session.id), session],
-    screen: 'session',
-  })),
+  // Idempotent — if session already exists, do NOT replace it.
+  // This prevents double-loading from DB on re-renders.
+  addSession: (session) => set(s => {
+    if (s.sessions.find(x => x.id === session.id)) return s
+    return { sessions: [...s.sessions, session], screen: 'session' }
+  }),
 
   setActiveSession: (id) => set(s => ({
     activeSessionId: id,
@@ -126,9 +126,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   }),
 
   addMessage: (sessionId, msg) => set(s => ({
-    sessions: s.sessions.map(sess =>
-      sess.id === sessionId ? { ...sess, messages: [...sess.messages, msg] } : sess
-    )
+    sessions: s.sessions.map(sess => {
+      if (sess.id !== sessionId) return sess
+      // Deduplicate by message id
+      if (sess.messages.find(m => m.id === msg.id)) return sess
+      return { ...sess, messages: [...sess.messages, msg] }
+    })
   })),
 
   appendStream: (sessionId, taskId, chunk) => set(s => ({
