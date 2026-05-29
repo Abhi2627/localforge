@@ -10,39 +10,9 @@
 
 ## What is LocalForge?
 
-LocalForge turns locally installed LLMs — Qwen, Llama, Gemma, and others via Ollama — into a full agentic coding assistant. It provides a purpose-built desktop UI, MCP-powered filesystem and git access, hardware-aware multi-agent orchestration, write-ahead crash recovery, and optional internet-augmented RAG.
+LocalForge turns locally installed LLMs into a full agentic coding assistant. Purpose-built desktop UI, MCP-powered filesystem access, hardware-aware multi-agent orchestration, write-ahead crash recovery, and optional internet-augmented RAG.
 
 **No subscription. No cloud. No data leaves your machine.**
-
----
-
-## Why LocalForge?
-
-| Problem | How LocalForge solves it |
-|---|---|
-| Local LLMs are trapped in terminals | Purpose-built chat UI with live file tree and agent status |
-| No multi-agent coding tool for local models | Hardware-aware orchestrator runs FE/BE/Test agents in parallel or sequentially |
-| Crash mid-task = lost work and hallucinated restarts | Write-ahead log + filesystem checksum recovery, resumes from exact last task |
-| Local models go stale on recent knowledge | Auto-triggered RAG from live web search, no retraining needed |
-| No model health visibility | Tracks failures, checks Ollama registry, recommends upgrades |
-
----
-
-## Features
-
-- **Multi-agent orchestration** — assign Frontend, Backend, and Test agents to a project, each with scoped file access and a tailored system prompt
-- **Hardware-aware scheduling** — auto-detects RAM and GPU, runs agents in parallel on powerful systems and sequentially on constrained ones. User-overridable.
-- **Crash recovery** — every task is logged before execution. On restart, the app verifies disk state via checksum and resumes from the exact pending task — no re-prompting, no hallucination
-- **Active project switcher** — right sidebar shows all live project threads as one-tap pills. Switch instantly between concurrent projects
-- **Integrated terminal** — collapsible terminal panel inside the app powered by xterm.js
-- **MCP filesystem + git** — agents read, write, and commit files via the Model Context Protocol
-- **Internet RAG** — when the model hits its knowledge boundary, the app fetches live web context and injects it automatically
-- **Model advisor** — monitors failure patterns and checks the Ollama registry for better models
-- **Preview on device** — generates a QR code for mobile/tablet browser preview of built apps
-- **Knowledge graph** — tracks every function and interface written to prevent cross-agent drift
-- **API contract enforcer** — detects frontend/backend interface mismatches before they compound
-- **Session persistence** — all chats and projects saved to local SQLite, history survives restarts
-- **Auto project onboarding** — opening an existing project auto-scans all files and generates a technical summary for agents
 
 ---
 
@@ -55,95 +25,69 @@ LocalForge turns locally installed LLMs — Qwen, Llama, Gemma, and others via O
 | Persistence | SQLite via better-sqlite3 |
 | MCP | @modelcontextprotocol/sdk |
 | Local inference | Ollama (OpenAI-compatible API) |
-| Terminal | xterm.js |
+| Terminal | xterm.js + node-pty |
 | Hardware detection | systeminformation |
-| Internet RAG | DuckDuckGo + @mozilla/readability |
-
----
-
-## Prerequisites
-
-- [Ollama](https://ollama.ai) installed and running
-- At least one model pulled: `ollama pull qwen2.5-coder` (recommended)
-- Node.js 20+
-- Rust (for Tauri): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 
 ---
 
 ## Getting Started
 
 ```bash
-# Clone the repo
 git clone https://github.com/Abhi2627/localforge.git
 cd localforge
-
-# Install dependencies
 npm install
 
-# Start agent server
-npm run dev:agent
+# Terminal 1 — agent server
+cd packages/agent-core && npm run dev
 
-# Start desktop UI (browser)
-npm run dev:desktop
-
-# Or start both together
-npm run dev
+# Terminal 2 — desktop UI
+cd apps/desktop && npm run dev
+# Open http://localhost:1420
 ```
 
----
-
-## Project Structure
-
-```
-localforge/
-├── apps/
-│   └── desktop/              # Tauri desktop app (React + TypeScript)
-│       ├── src/              # React UI
-│       └── src-tauri/        # Rust backend
-├── packages/
-│   ├── agent-core/           # Fastify agent server
-│   │   └── src/
-│   │       ├── orchestrator/ # TaskQueue, AgentSession, Orchestrator, SystemProfiler
-│   │       ├── persistence/  # Database, TaskLog, Checkpointer, Journal, SessionStore
-│   │       ├── mcp/          # MCP filesystem client, ProjectScanner
-│   │       ├── ollama/       # OllamaClient, ModelManager
-│   │       ├── rag/          # Internet RAG pipeline (coming soon)
-│   │       └── advisor/      # Model update checker (coming soon)
-│   └── shared/               # Shared types and utilities
-└── docs/                     # Architecture and research notes
-```
+**Prerequisites:** Ollama running with at least one model pulled (`ollama pull qwen2.5-coder`), Node.js 20+.
 
 ---
 
 ## Roadmap
 
+### Core infrastructure
 - [x] Project scaffold and monorepo setup
 - [x] Agent core: TaskQueue + write-ahead log
-- [x] Ollama client with model fallback
+- [x] Ollama client with model fallback chain
 - [x] MCP filesystem integration
-- [x] Crash recovery: checksum verifier
-- [x] React UI: chat + file tree + agent status
-- [x] Active project switcher sidebar
+- [x] Crash recovery: 3-layer checksum verifier
 - [x] Hardware-aware scheduler (auto parallel/sequential)
 - [x] Session persistence (SQLite — chats + projects survive restart)
-- [x] Auto project onboarding (file scan + model-generated summary)
+
+### Desktop UI
+- [x] Welcome screen with animated feature showcase
+- [x] Personalised greeting with username (Account modal)
+- [x] Chat mode with SSE streaming responses
+- [x] Markdown rendering (headers, code blocks, tables, lists)
+- [x] Message timestamps, copy, edit, reload
+- [x] Auto-generated chat titles (markdown-stripped)
+- [x] Tab strip (recent sessions, fixed order, dismiss without delete)
+- [x] Left sidebar: Chats + Projects history, rename, delete
+- [x] Responsive layout (auto-collapse sidebars on resize)
+- [x] Right sidebar (project sessions only)
+- [x] Auto project onboarding (file scan + AI summary)
 - [x] Native folder picker (Tauri dialog plugin)
-- [x] Chat mode (conversational, no MCP, local model only)
-- [x] Tab strip (recent sessions, 24h window)
-- [x] Right sidebar project-only (hidden for chat sessions)
-- [ ] Integrated terminal (xterm.js)
-- [ ] Internet RAG pipeline
+
+### Phase 1 — Core coding workflow ✅
+- [x] Agent creation UI (5 roles: Fullstack, Frontend, Backend, Test, Review)
+- [x] Integrated terminal (xterm.js + node-pty PTY — project sessions only)
+- [x] Project flow graph (SVG auto-generated, colour-coded by file type)
+
+### Phase 2 — Intelligence layer
+- [ ] Internet RAG pipeline (live web context injection)
 - [ ] Model advisor (failure tracker + Ollama registry checker)
 - [ ] Knowledge graph (cross-agent symbol tracker)
 - [ ] API contract enforcer (FE/BE interface mismatch detection)
+
+### Phase 3 — Polish
 - [ ] Preview on device (QR code dev server)
-- [ ] Agent creation UI inside project session
-
----
-
-## Contributing
-
-LocalForge is in active early development. Contributions, issues, and feature requests are welcome.
+- [ ] Git structure panel (commit history, branch view)
 
 ---
 

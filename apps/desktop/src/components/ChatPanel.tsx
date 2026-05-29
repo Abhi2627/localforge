@@ -1,11 +1,10 @@
 import { useRef, useEffect, KeyboardEvent, useState } from 'react'
-import { Send, Bot, Paperclip, Mic, Loader, Copy, Pencil, RefreshCw, Check, Terminal } from 'lucide-react'
+import { Send, Bot, Paperclip, Mic, Loader, Copy, Pencil, RefreshCw, Check } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useAppStore, type Message, type AgentRole } from '../store/appStore'
 import { api } from '../hooks/useApi'
 import { nanoid } from '../hooks/nanoid'
-import TerminalPanel from './TerminalPanel'
 
 function roleBadgeClass(role?: AgentRole) { return `badge-${role ?? 'fullstack'}` }
 
@@ -52,7 +51,9 @@ function MarkdownContent({ content }: { content: string }) {
   )
 }
 
-function MsgActions({ content, onEdit, onReload, isUser }: { content: string; onEdit?: () => void; onReload?: () => void; isUser: boolean }) {
+function MsgActions({ content, onEdit, onReload, isUser }: {
+  content: string; onEdit?: () => void; onReload?: () => void; isUser: boolean
+}) {
   const [copied, setCopied] = useState(false)
   function copy() {
     navigator.clipboard.writeText(content).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
@@ -76,7 +77,9 @@ function MsgActions({ content, onEdit, onReload, isUser }: { content: string; on
   )
 }
 
-function MessageBubble({ msg, onEdit, onReload }: { msg: Message; onEdit?: (c: string) => void; onReload?: () => void }) {
+function MessageBubble({ msg, onEdit, onReload }: {
+  msg: Message; onEdit?: (c: string) => void; onReload?: () => void
+}) {
   if (msg.type === 'system') return <div className="msg-system"><span>●</span><span>{msg.content}</span></div>
   if (msg.type === 'stream') return (
     <div>
@@ -87,10 +90,8 @@ function MessageBubble({ msg, onEdit, onReload }: { msg: Message; onEdit?: (c: s
       </div>
     </div>
   )
-
   const isUser = msg.type === 'user'
   const time   = formatTime(msg.timestamp)
-
   if (isUser) return (
     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, alignItems: 'flex-end' }}
       onMouseEnter={e => { const el = e.currentTarget.querySelector('.msg-actions') as HTMLElement; if (el) el.style.opacity = '1' }}
@@ -103,7 +104,6 @@ function MessageBubble({ msg, onEdit, onReload }: { msg: Message; onEdit?: (c: s
       </div>
     </div>
   )
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}
       onMouseEnter={e => { const el = e.currentTarget.querySelector('.msg-actions') as HTMLElement; if (el) el.style.opacity = '1' }}
@@ -134,7 +134,6 @@ export default function ChatPanel() {
   const { sessions, activeSessionId, addMessage, appendStream, finalizeStream, selectedModel, updateSessionTitle } = useAppStore()
   const [input, setInput]     = useState('')
   const [sending, setSending] = useState(false)
-  const [showTerminal, setShowTerminal] = useState(false)
   const bottomRef   = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -172,30 +171,23 @@ export default function ChatPanel() {
     if (!text || !session || sending) return
     if (!overrideText) setInput('')
     setSending(true)
-
     const msgId      = nanoid()
     const isFirstMsg = messages.filter(m => m.type === 'user').length === 0
-
     addMessage(session.id, { id: msgId, type: 'user', content: text, timestamp: Date.now() })
     api.saveMessage(msgId, session.id, 'user', text).catch(() => {})
-
     try {
       if (isProject && firstAgent) {
         await api.instruct(session.id, firstAgent.id, text)
       } else if (isChat) {
         const history = messages
-          .filter(m => m.type === 'user' || m.type === 'agent')
-          .slice(-20)
+          .filter(m => m.type === 'user' || m.type === 'agent').slice(-20)
           .map(m => ({ role: m.type === 'user' ? 'user' : 'assistant', content: m.content }))
-
         const streamTaskId = nanoid()
         setSending(false)
-
         await api.streamChat(text, session.id, history, streamTaskId, (chunk) => {
           appendStream(session.id, streamTaskId, chunk)
         })
         finalizeStream(session.id, streamTaskId)
-
         if (isFirstMsg && session.title === 'New chat') generateTitle(session.id, text)
       }
     } catch (err: any) {
@@ -205,10 +197,7 @@ export default function ChatPanel() {
     }
   }
 
-  function handleEdit(content: string) {
-    setInput(content)
-    textareaRef.current?.focus()
-  }
+  function handleEdit(content: string) { setInput(content); textareaRef.current?.focus() }
 
   async function handleReload() {
     if (!session || sending) return
@@ -228,13 +217,10 @@ export default function ChatPanel() {
     : !firstAgent ? 'Add an agent from the right sidebar…'
     : `Instruct ${firstAgent.name}…`
 
-  // Terminal height: 40% of panel when open
-  const terminalH = showTerminal ? '38%' : '0px'
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', background: 'var(--bg-primary)' }}>
 
-      {/* Session title bar with terminal toggle */}
+      {/* Session title bar */}
       {session && (
         <div style={{ flexShrink: 0, padding: '5px 12px', borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -243,25 +229,10 @@ export default function ChatPanel() {
           <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, fontWeight: 600, background: 'var(--accent-dim)', color: 'var(--accent)', flexShrink: 0 }}>
             {session.type}
           </span>
-          {/* Terminal toggle button */}
-          <button
-            onClick={() => setShowTerminal(!showTerminal)}
-            title={showTerminal ? 'Hide terminal' : 'Show terminal'}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 5,
-              padding: '3px 8px', borderRadius: 6, border: 'none', cursor: 'pointer',
-              background: showTerminal ? 'var(--accent-dim)' : 'var(--bg-tertiary)',
-              color: showTerminal ? 'var(--accent)' : 'var(--text-muted)',
-              fontSize: 11, flexShrink: 0,
-            }}
-          >
-            <Terminal size={12} />
-            <span>Terminal</span>
-          </button>
         </div>
       )}
 
-      {/* Messages area */}
+      {/* Messages */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
         {session?.summary && messages.length === 0 && (
           <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
@@ -292,7 +263,7 @@ export default function ChatPanel() {
         <div ref={bottomRef} />
       </div>
 
-      {/* Input bar */}
+      {/* Input */}
       {session?.type !== 'terminal' && (
         <div style={{ flexShrink: 0, padding: '10px 16px 14px', background: 'var(--bg-primary)' }}>
           <div style={{ maxWidth: 680, margin: '0 auto' }}>
@@ -314,13 +285,6 @@ export default function ChatPanel() {
               {modelShortName} is AI and can make mistakes. Please double-check responses.
             </div>
           </div>
-        </div>
-      )}
-
-      {/* Terminal panel — slides up from bottom */}
-      {showTerminal && (
-        <div style={{ flexShrink: 0, height: '38%', minHeight: 180, borderTop: '2px solid var(--accent)' }}>
-          <TerminalPanel onClose={() => setShowTerminal(false)} />
         </div>
       )}
 

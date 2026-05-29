@@ -1,6 +1,8 @@
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
 import websocket from '@fastify/websocket'
+import pty from 'node-pty'
+import os from 'os'
 import { getDb, closeDb } from './persistence/Database.js'
 import { initSessionTables, upsertSession, saveMessage, getAllSessions, getSession, getSessionMessages, deleteSession } from './persistence/SessionStore.js'
 import { profileSystem } from './orchestrator/SystemProfiler.js'
@@ -37,10 +39,7 @@ function buildSystemPrompt(selectedModel: string, summary?: string | null): stri
 }
 
 function mapHistory(history: Array<{ role: string; content: string }>) {
-  return history.slice(-10).map(h => ({
-    role:    h.role as ChatRole,
-    content: h.content,
-  }))
+  return history.slice(-10).map(h => ({ role: h.role as ChatRole, content: h.content }))
 }
 
 async function bootstrap() {
@@ -58,21 +57,80 @@ async function bootstrap() {
 
   orchestrator.onEvent((projectId, event) => broadcast({ type: 'agent_event', projectId, event }))
 
+  // ── Agent events WebSocket ─────────────────────────────────────────────────
   server.get('/ws', { websocket: true }, (socket) => {
     wsClients.add(socket)
     socket.send(JSON.stringify({ type: 'connected' }))
     socket.on('close', () => wsClients.delete(socket))
   })
 
+  // ── PTY Terminal WebSocket ─────────────────────────────────────────────────
+  server.get<{ Querystring: { cwd?: string } }>('/terminal', { websocket: true }, (socket, req) => {
+    const cwd   = req.query.cwd ?? os.homedir()
+    const shell = os.platform() === 'win32'
+      ? 'powershell.exe'
+      : (process.env.SHELL ?? '/bin/zsh')
+
+    let ptyProc: ReturnType<typeof pty.spawn> | null = null
+
+    try {
+      ptyProc = pty.spawn(shell, [], {
+        name: 'xterm-256color',
+        cols: 120,
+        rows: 30,
+        cwd,
+        env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' } as Record<string, string>,
+      })
+
+      // PTY output → WebSocket
+      ptyProc.onData((data: string) => {
+        try { socket.send(data) } catch { /* client disconnected */ }
+      })
+
+      ptyProc.onExit(() => {
+        try { socket.send('\r\n\x1b[90m[shell exited]\x1b[0m\r\n') } catch { }
+        try { socket.close() } catch { }
+      })
+
+      // WebSocket input → PTY
+      socket.on('message', (raw: Buffer | string) => {
+        if (!ptyProc) return
+        try {
+          const msg = JSON.parse(raw.toString())
+          if (msg.type === 'input') {
+            ptyProc.write(msg.data as string)
+          } else if (msg.type === 'resize') {
+            ptyProc.resize(
+              Math.max(1, Math.floor(Number(msg.cols))),
+              Math.max(1, Math.floor(Number(msg.rows)))
+            )
+          }
+        } catch {
+          // Not JSON — write raw (fallback)
+          ptyProc.write(raw.toString())
+        }
+      })
+
+      socket.on('close', () => {
+        if (ptyProc) { ptyProc.kill(); ptyProc = null }
+      })
+
+    } catch (err: any) {
+      try { socket.send(`\r\n\x1b[31mFailed to spawn shell: ${err.message}\x1b[0m\r\n`) } catch { }
+      socket.close()
+    }
+  })
+
+  // ── Health / System ────────────────────────────────────────────────────────
   server.get('/health', async () => ({ status: 'ok', mode: taskQueue.currentMode }))
   server.get('/system', async () => profileSystem())
-
   server.post<{ Body: { mode: 'sequential' | 'parallel'; maxParallel?: number } }>('/system/mode', async (req) => {
     taskQueue.setMode(req.body.mode, req.body.maxParallel)
     saveConfig({ executionMode: req.body.mode, maxParallel: req.body.maxParallel ?? 1 })
     return { success: true }
   })
 
+  // ── Models ─────────────────────────────────────────────────────────────────
   server.get('/models', async () => {
     try { return { models: await getInstalledModels() } }
     catch { return { error: 'Ollama not reachable' } }
@@ -100,8 +158,7 @@ async function bootstrap() {
     }
   )
   server.delete<{ Params: { id: string } }>('/sessions/:id', async (req) => {
-    deleteSession(req.params.id)
-    return { success: true }
+    deleteSession(req.params.id); return { success: true }
   })
   server.post<{ Body: { id: string; sessionId: string; role: string; content: string; agentName?: string } }>(
     '/sessions/message', async (req) => {
@@ -123,39 +180,29 @@ async function bootstrap() {
     generateProjectSummary(sessionId, rootPath, scan).then(summary => {
       broadcast({ type: 'project_summary', sessionId, summary })
     })
-    return {
-      success: true, isEmpty: scan.isEmpty,
-      fileList: scan.fileList, fileTree: scan.fileTree, fileCount: scan.fileList.length,
-    }
+    return { success: true, isEmpty: scan.isEmpty, fileList: scan.fileList, fileTree: scan.fileTree, fileCount: scan.fileList.length }
   })
-
   server.get<{ Params: { sessionId: string } }>('/project/:sessionId/summary', async (req) => {
     return { summary: getSession(req.params.sessionId)?.summary ?? null }
   })
 
-  // ── Chat streaming — SSE token by token ───────────────────────────────────
+  // ── Chat streaming — SSE ───────────────────────────────────────────────────
   server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>(
     '/chat/stream', async (req, reply) => {
       const { message, sessionId, history = [] } = req.body
       if (!message) { reply.status(400).send('No message'); return }
-
       const { selectedModel } = loadConfig()
-      if (!getSession(sessionId)) {
-        upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: selectedModel })
-      }
-      const session = getSession(sessionId)
-
+      if (!getSession(sessionId)) upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: selectedModel })
+      const session  = getSession(sessionId)
       const messages = [
         { role: 'system' as ChatRole, content: buildSystemPrompt(selectedModel, session?.summary) },
         ...mapHistory(history),
-        { role: 'user'   as ChatRole, content: message },
+        { role: 'user' as ChatRole, content: message },
       ]
-
-      reply.raw.setHeader('Content-Type',  'text/event-stream')
+      reply.raw.setHeader('Content-Type', 'text/event-stream')
       reply.raw.setHeader('Cache-Control', 'no-cache')
-      reply.raw.setHeader('Connection',    'keep-alive')
+      reply.raw.setHeader('Connection', 'keep-alive')
       reply.raw.flushHeaders()
-
       let fullReply = ''
       try {
         await chat(selectedModel, messages, (chunk) => {
@@ -165,31 +212,25 @@ async function bootstrap() {
       } catch (err: any) {
         reply.raw.write(`data: ${JSON.stringify({ chunk: `\n\nError: ${err.message}` })}\n\n`)
       }
-
       reply.raw.write('data: [DONE]\n\n')
       reply.raw.end()
-
-      // Save ONLY the assistant reply — client already saved the user message
       const { randomUUID } = await import('crypto')
       saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: fullReply })
     }
   )
 
-  // ── Chat non-streaming (title generation only, no persistence) ─────────────
+  // ── Chat non-streaming (title gen only, no persistence) ───────────────────
   server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>(
     '/chat', async (req) => {
       const { message, sessionId, history = [] } = req.body
       if (!message) return { success: false, reply: 'No message' }
-
       const { selectedModel } = loadConfig()
-      const session = getSession(sessionId)
-
+      const session  = getSession(sessionId)
       const messages = [
         { role: 'system' as ChatRole, content: buildSystemPrompt(selectedModel, session?.summary) },
         ...mapHistory(history),
-        { role: 'user'   as ChatRole, content: message },
+        { role: 'user' as ChatRole, content: message },
       ]
-
       const replyText = await chat(selectedModel, messages)
       return { success: true, reply: replyText }
     }
@@ -197,32 +238,27 @@ async function bootstrap() {
 
   // ── Projects / Agents / Instructions ──────────────────────────────────────
   server.get('/projects', async () => ({ projects: orchestrator.listProjects() }))
-
   server.post<{ Body: { name: string; rootPath: string } }>('/projects', async (req) => {
     const { name, rootPath } = req.body
     if (!name || !rootPath) return { success: false, message: 'name and rootPath required' }
     const project = await orchestrator.createProject({ name, rootPath })
     return { success: true, project: { id: project.id, name: project.name, rootPath: project.rootPath } }
   })
-
   server.get<{ Params: { projectId: string } }>('/projects/:projectId/agents', async (req) => {
     return { agents: orchestrator.listAgents(req.params.projectId) }
   })
-
   server.post<{ Params: { projectId: string }; Body: { name: string; role: string; allowedPaths?: string[] } }>(
     '/projects/:projectId/agents', async (req) => {
       const { projectId } = req.params
       const { name, role, allowedPaths } = req.body
       if (!name || !role) return { success: false, message: 'name and role required' }
       const agent = orchestrator.addAgent(projectId, {
-        name, role: role as any,
-        allowedPaths: allowedPaths ?? [],
+        name, role: role as any, allowedPaths: allowedPaths ?? [],
         projectPath: orchestrator.getProject(projectId).rootPath,
       })
       return { success: true, agent: { id: agent.id, name: agent.config.name, role: agent.config.role } }
     }
   )
-
   server.post<{ Params: { projectId: string; agentId: string }; Body: { instruction: string; queue?: boolean } }>(
     '/projects/:projectId/agents/:agentId/instruct', async (req) => {
       const { projectId, agentId } = req.params
@@ -240,16 +276,10 @@ async function bootstrap() {
   const PORT = Number(process.env.PORT ?? 3001)
   await server.listen({ port: PORT, host: '0.0.0.0' })
   console.log(`\n🔨 LocalForge agent server running on port ${PORT}`)
-  console.log(`   Mode: ${mode} | Model: ${loadConfig().selectedModel}\n`)
+  console.log(`   Mode: ${mode} | Model: ${loadConfig().selectedModel}`)
+  console.log(`   Terminal: ws://localhost:${PORT}/terminal\n`)
 }
 
-process.on('SIGINT', async () => {
-  await server.close()
-  closeDb()
-  process.exit(0)
-})
+process.on('SIGINT', async () => { await server.close(); closeDb(); process.exit(0) })
 
-bootstrap().catch(err => {
-  console.error('[Server] Fatal startup error:', err)
-  process.exit(1)
-})
+bootstrap().catch(err => { console.error('[Server] Fatal startup error:', err); process.exit(1) })
