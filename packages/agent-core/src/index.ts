@@ -11,6 +11,8 @@ import { getInstalledModels, selectModel, setFallbackModels, loadConfig, saveCon
 import { scanProjectFiles, generateProjectSummary } from './mcp/ProjectScanner.js'
 import { connectMCP } from './mcp/MCPClient.js'
 
+type ChatRole = 'system' | 'user' | 'assistant'
+
 const server    = Fastify({ logger: false })
 let taskQueue: TaskQueue
 const wsClients = new Set<any>()
@@ -32,6 +34,13 @@ function buildSystemPrompt(selectedModel: string, summary?: string | null): stri
     `Do not add thinking steps, preamble, or filler phrases.` +
     (summary ? `\n\nProject context:\n${summary}` : '')
   )
+}
+
+function mapHistory(history: Array<{ role: string; content: string }>) {
+  return history.slice(-10).map(h => ({
+    role:    h.role as ChatRole,
+    content: h.content,
+  }))
 }
 
 async function bootstrap() {
@@ -57,6 +66,7 @@ async function bootstrap() {
 
   server.get('/health', async () => ({ status: 'ok', mode: taskQueue.currentMode }))
   server.get('/system', async () => profileSystem())
+
   server.post<{ Body: { mode: 'sequential' | 'parallel'; maxParallel?: number } }>('/system/mode', async (req) => {
     taskQueue.setMode(req.body.mode, req.body.maxParallel)
     saveConfig({ executionMode: req.body.mode, maxParallel: req.body.maxParallel ?? 1 })
@@ -90,10 +100,9 @@ async function bootstrap() {
     }
   )
   server.delete<{ Params: { id: string } }>('/sessions/:id', async (req) => {
-    deleteSession(req.params.id); return { success: true }
+    deleteSession(req.params.id)
+    return { success: true }
   })
-
-  // Client saves user messages with its own stable ID
   server.post<{ Body: { id: string; sessionId: string; role: string; content: string; agentName?: string } }>(
     '/sessions/message', async (req) => {
       const { id, sessionId, role, content, agentName } = req.body
@@ -114,13 +123,17 @@ async function bootstrap() {
     generateProjectSummary(sessionId, rootPath, scan).then(summary => {
       broadcast({ type: 'project_summary', sessionId, summary })
     })
-    return { success: true, isEmpty: scan.isEmpty, fileList: scan.fileList, fileTree: scan.fileTree, fileCount: scan.fileList.length }
+    return {
+      success: true, isEmpty: scan.isEmpty,
+      fileList: scan.fileList, fileTree: scan.fileTree, fileCount: scan.fileList.length,
+    }
   })
+
   server.get<{ Params: { sessionId: string } }>('/project/:sessionId/summary', async (req) => {
     return { summary: getSession(req.params.sessionId)?.summary ?? null }
   })
 
-  // ── Chat streaming — server saves ONLY assistant reply, client saves user msg
+  // ── Chat streaming — SSE token by token ───────────────────────────────────
   server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>(
     '/chat/stream', async (req, reply) => {
       const { message, sessionId, history = [] } = req.body
@@ -133,9 +146,9 @@ async function bootstrap() {
       const session = getSession(sessionId)
 
       const messages = [
-        { role: 'system' as const, content: buildSystemPrompt(selectedModel, session?.summary) },
-        ...history.slice(-10).map((h: any) => ({ role: h.role as const, content: h.content })),
-        { role: 'user' as const, content: message },
+        { role: 'system' as ChatRole, content: buildSystemPrompt(selectedModel, session?.summary) },
+        ...mapHistory(history),
+        { role: 'user'   as ChatRole, content: message },
       ]
 
       reply.raw.setHeader('Content-Type',  'text/event-stream')
@@ -162,52 +175,54 @@ async function bootstrap() {
     }
   )
 
-  // ── Chat non-streaming (title generation only) — saves neither side
-  // Title gen uses a throw-away sessionId so nothing gets persisted to real sessions
+  // ── Chat non-streaming (title generation only, no persistence) ─────────────
   server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>(
     '/chat', async (req) => {
       const { message, sessionId, history = [] } = req.body
       if (!message) return { success: false, reply: 'No message' }
 
       const { selectedModel } = loadConfig()
-      // Don't create a session record for title-gen calls
       const session = getSession(sessionId)
 
       const messages = [
-        { role: 'system' as const, content: buildSystemPrompt(selectedModel, session?.summary) },
-        ...history.slice(-10).map((h: any) => ({ role: h.role as const, content: h.content })),
-        { role: 'user' as const, content: message },
+        { role: 'system' as ChatRole, content: buildSystemPrompt(selectedModel, session?.summary) },
+        ...mapHistory(history),
+        { role: 'user'   as ChatRole, content: message },
       ]
 
-      const reply = await chat(selectedModel, messages)
-      // Do NOT persist — this endpoint is only used for title generation
-      return { success: true, reply }
+      const replyText = await chat(selectedModel, messages)
+      return { success: true, reply: replyText }
     }
   )
 
   // ── Projects / Agents / Instructions ──────────────────────────────────────
   server.get('/projects', async () => ({ projects: orchestrator.listProjects() }))
+
   server.post<{ Body: { name: string; rootPath: string } }>('/projects', async (req) => {
     const { name, rootPath } = req.body
     if (!name || !rootPath) return { success: false, message: 'name and rootPath required' }
     const project = await orchestrator.createProject({ name, rootPath })
     return { success: true, project: { id: project.id, name: project.name, rootPath: project.rootPath } }
   })
+
   server.get<{ Params: { projectId: string } }>('/projects/:projectId/agents', async (req) => {
     return { agents: orchestrator.listAgents(req.params.projectId) }
   })
+
   server.post<{ Params: { projectId: string }; Body: { name: string; role: string; allowedPaths?: string[] } }>(
     '/projects/:projectId/agents', async (req) => {
       const { projectId } = req.params
       const { name, role, allowedPaths } = req.body
       if (!name || !role) return { success: false, message: 'name and role required' }
       const agent = orchestrator.addAgent(projectId, {
-        name, role: role as any, allowedPaths: allowedPaths ?? [],
-        projectPath: orchestrator.getProject(projectId).rootPath
+        name, role: role as any,
+        allowedPaths: allowedPaths ?? [],
+        projectPath: orchestrator.getProject(projectId).rootPath,
       })
       return { success: true, agent: { id: agent.id, name: agent.config.name, role: agent.config.role } }
     }
   )
+
   server.post<{ Params: { projectId: string; agentId: string }; Body: { instruction: string; queue?: boolean } }>(
     '/projects/:projectId/agents/:agentId/instruct', async (req) => {
       const { projectId, agentId } = req.params

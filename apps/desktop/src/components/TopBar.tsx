@@ -21,35 +21,53 @@ export default function TopBar() {
 
   return (
     <div className="topbar">
-      <button className="icon-btn"
+      <button
+        className="icon-btn"
         title={leftExpanded ? 'Collapse left bar' : 'Expand left bar'}
-        onClick={() => setLeftExpanded(!leftExpanded)}>
+        onClick={() => setLeftExpanded(!leftExpanded)}
+      >
         {leftExpanded ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}
       </button>
 
-      <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--accent)', letterSpacing: '-0.3px' }}>
+      <span style={{
+        fontSize: 15, fontWeight: 700, color: 'var(--accent)',
+        letterSpacing: '-0.3px', flexShrink: 0,
+      }}>
         LocalForge
       </span>
 
-      <span style={{ flex: 1 }} />
+      <span style={{ flex: 1, minWidth: 0 }} />
 
-      <select className="model-select" value={selectedModel} onChange={handleModelChange}>
-        {models.length === 0 && <option value="">No models — run: ollama pull qwen2.5-coder</option>}
+      <select
+        className="model-select"
+        value={selectedModel}
+        onChange={handleModelChange}
+        title={selectedModel}
+      >
+        {models.length === 0 && (
+          <option value="">No models — ollama pull qwen2.5-coder</option>
+        )}
         {models.map(m => (
           <option key={m.name} value={m.name}>{m.name} ({m.sizeGb})</option>
         ))}
       </select>
 
-      <div title={isConnected ? 'Server connected' : 'Server disconnected'}
-        style={{ display: 'flex', alignItems: 'center', color: isConnected ? 'var(--green)' : 'var(--red)' }}>
+      <div
+        title={isConnected ? 'Agent server connected' : 'Agent server disconnected'}
+        style={{
+          display: 'flex', alignItems: 'center', flexShrink: 0,
+          color: isConnected ? 'var(--green)' : 'var(--red)',
+        }}
+      >
         {isConnected ? <Wifi size={15} /> : <WifiOff size={15} />}
       </div>
 
-      {/* Right panel toggle only shown for project sessions */}
       {isProjectSession && (
-        <button className="icon-btn"
+        <button
+          className="icon-btn"
           title={rightExpanded ? 'Collapse right bar' : 'Expand right bar'}
-          onClick={() => setRightExpanded(!rightExpanded)}>
+          onClick={() => setRightExpanded(!rightExpanded)}
+        >
           {rightExpanded ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}
         </button>
       )}
