@@ -19,11 +19,9 @@ export default function App() {
     addSession,
   } = useAppStore()
 
-  const activeSession   = sessions.find(s => s.id === activeSessionId)
-  const isProjectSession = activeSession?.type === 'project'
-
-  // Right sidebar only visible for project sessions
-  const showRight = screen === 'session' && isProjectSession
+  const activeSession    = sessions.find(s => s.id === activeSessionId)
+  const isProjectSession = screen === 'session' && activeSession?.type === 'project'
+  const showRight        = isProjectSession
 
   useEffect(() => {
     api.getModels().then(({ models }) => {
@@ -33,7 +31,14 @@ export default function App() {
     }).catch(console.error)
 
     api.getSessions().then(({ sessions: saved }) => {
-      saved.forEach((s: any) => {
+      // Filter out empty/placeholder sessions created by internal calls
+      const clean = saved.filter((s: any) =>
+        s.title &&
+        s.title.trim() !== '' &&
+        s.title !== 'Chat' &&
+        !s.id.endsWith('-titlegentmp')
+      )
+      clean.forEach((s: any) => {
         addSession({
           id: s.id, type: s.type, title: s.title,
           rootPath: s.rootPath, summary: s.summary,
@@ -47,9 +52,7 @@ export default function App() {
 
   const leftW  = leftExpanded ? '220px' : '48px'
   const rightW = showRight ? (rightExpanded ? '260px' : '40px') : '0px'
-  const cols   = showRight
-    ? `${leftW} 1fr ${rightW}`
-    : `${leftW} 1fr`
+  const cols   = showRight ? `${leftW} 1fr ${rightW}` : `${leftW} 1fr`
 
   return (
     <div style={{
@@ -59,9 +62,7 @@ export default function App() {
       height: '100vh', width: '100vw', overflow: 'hidden',
       transition: 'grid-template-columns 0.2s ease',
     }}>
-      <div style={{ gridColumn: '1 / -1' }}>
-        <TopBar />
-      </div>
+      <div style={{ gridColumn: '1 / -1' }}><TopBar /></div>
       <LeftBar />
       <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
         <TabStrip />

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { MessageCircle, FolderOpen, Puzzle, Settings, User, ChevronDown, ChevronRight, MoreHorizontal } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
+import { api } from '../hooks/useApi'
 import { nanoid } from '../hooks/nanoid'
 import NewProjectModal from './NewProjectModal'
 
@@ -11,9 +12,22 @@ function SessionItem({ session }: { session: any }) {
   const [renaming, setRenaming] = useState(false)
   const [renameVal, setRenameVal] = useState(session.title)
 
+  // Skip sessions with no meaningful title or content
+  if (!session.title || session.title.trim() === '') return null
+
   function handleRename(e: React.KeyboardEvent) {
-    if (e.key === 'Enter') { updateSessionTitle(session.id, renameVal); setRenaming(false) }
+    if (e.key === 'Enter') {
+      updateSessionTitle(session.id, renameVal)
+      api.createSession(session.id, session.type, renameVal, session.rootPath).catch(() => {})
+      setRenaming(false)
+    }
     if (e.key === 'Escape') setRenaming(false)
+  }
+
+  function handleDelete() {
+    api.deleteSession(session.id).catch(() => {})
+    closeSession(session.id)
+    setShowMenu(false)
   }
 
   return (
@@ -33,7 +47,8 @@ function SessionItem({ session }: { session: any }) {
         {renaming ? (
           <input autoFocus value={renameVal}
             onChange={e => setRenameVal(e.target.value)}
-            onKeyDown={handleRename} onBlur={() => setRenaming(false)}
+            onKeyDown={handleRename}
+            onBlur={() => setRenaming(false)}
             onClick={e => e.stopPropagation()}
             style={{ flex: 1, background: 'var(--bg-tertiary)', border: '1px solid var(--accent)', borderRadius: 4, padding: '1px 6px', color: 'var(--text-primary)', fontSize: 12, outline: 'none' }}
           />
@@ -55,13 +70,13 @@ function SessionItem({ session }: { session: any }) {
           borderRadius: 6, padding: 4, minWidth: 100,
         }}>
           {[
-            { label: 'Rename', action: () => { setRenaming(true); setShowMenu(false) } },
-            { label: 'Close',  action: () => { closeSession(session.id); setShowMenu(false) } },
+            { label: 'Rename', action: () => { setRenaming(true); setShowMenu(false) }, color: 'var(--text-secondary)' },
+            { label: 'Delete', action: handleDelete, color: 'var(--red)' },
           ].map(item => (
             <button key={item.label} onClick={item.action} style={{
               display: 'block', width: '100%', textAlign: 'left',
               padding: '5px 10px', background: 'none', border: 'none',
-              color: 'var(--text-secondary)', fontSize: 12, cursor: 'pointer', borderRadius: 4,
+              color: item.color, fontSize: 12, cursor: 'pointer', borderRadius: 4,
             }}
               onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)'}
               onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'none'}
@@ -76,17 +91,14 @@ function SessionItem({ session }: { session: any }) {
 function ChatSection({ sessions, expanded }: { sessions: any[]; expanded: boolean }) {
   const [open, setOpen] = useState(true)
   const { addSession, setActiveSession } = useAppStore()
-  const filtered = sessions.filter(s => s.type === 'chat')
+  // Filter out empty/untitled sessions
+  const filtered = sessions.filter(s => s.type === 'chat' && s.title && s.title.trim() !== '')
 
   function createNewChat() {
     const id = nanoid()
-    addSession({
-      id, type: 'chat',
-      title: 'New chat',          // model will rename after first message
-      agents: [], messages: [], writtenFiles: [],
-      lastAccessedAt: Date.now(), isActive: true,
-    })
+    addSession({ id, type: 'chat', title: 'New chat', agents: [], messages: [], allFiles: [], writtenFiles: [], lastAccessedAt: Date.now(), isActive: true })
     setActiveSession(id)
+    api.createSession(id, 'chat', 'New chat').catch(() => {})
   }
 
   if (!expanded) return (
@@ -118,7 +130,7 @@ function ChatSection({ sessions, expanded }: { sessions: any[]; expanded: boolea
 function ProjectSection({ sessions, expanded }: { sessions: any[]; expanded: boolean }) {
   const [open, setOpen] = useState(true)
   const [showModal, setShowModal] = useState(false)
-  const filtered = sessions.filter(s => s.type === 'project')
+  const filtered = sessions.filter(s => s.type === 'project' && s.title && s.title.trim() !== '')
 
   if (!expanded) return (
     <button title="Projects" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', padding: '9px 0', border: 'none', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer' }}>
@@ -136,7 +148,7 @@ function ProjectSection({ sessions, expanded }: { sessions: any[]; expanded: boo
       {open && (
         <div>
           <button onClick={() => setShowModal(true)} style={{ display: 'block', width: 'calc(100% - 20px)', margin: '3px 10px 5px', padding: '6px 0', background: 'var(--accent)', border: 'none', borderRadius: 6, color: 'white', fontSize: 12, fontWeight: 500, cursor: 'pointer', textAlign: 'center' }}>
-            New project
+            Open project
           </button>
           {filtered.length === 0 && <div style={{ padding: '3px 20px', fontSize: 11, color: 'var(--text-muted)' }}>No history</div>}
           {filtered.map(s => <SessionItem key={s.id} session={s} />)}
@@ -155,7 +167,6 @@ export default function LeftBar() {
       <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: 6 }}>
         <ChatSection    sessions={sessions} expanded={expanded} />
         <ProjectSection sessions={sessions} expanded={expanded} />
-
         {expanded ? (
           <button style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '7px 10px', border: 'none', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12 }}>
             <Puzzle size={14} /><span>Extensions</span>

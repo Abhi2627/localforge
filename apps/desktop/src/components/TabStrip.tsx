@@ -1,11 +1,21 @@
+import { useState } from 'react'
 import { X } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 
 export default function TabStrip() {
-  const { getRecentTabs, activeSessionId, setActiveSession, closeSession } = useAppStore()
-  const tabs = getRecentTabs()
+  const { getRecentTabs, activeSessionId, setActiveSession } = useAppStore()
+  // Local dismissed set — tabs removed from strip but NOT deleted from history
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set())
+
+  const allTabs = getRecentTabs()
+  const tabs    = allTabs.filter(t => !dismissed.has(t.id))
 
   if (tabs.length < 2) return null
+
+  function dismiss(id: string, e: React.MouseEvent) {
+    e.stopPropagation()
+    setDismissed(prev => new Set([...prev, id]))
+  }
 
   return (
     <div style={{
@@ -38,12 +48,10 @@ export default function TabStrip() {
               flexShrink: 0,
               position: 'relative',
               transition: 'border-color 0.15s, background 0.15s',
-              boxShadow: isActive ? '0 0 0 1px var(--accent)20' : 'none',
             }}
             onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.borderColor = 'var(--border-light)' }}
             onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)' }}
           >
-            {/* Title */}
             <span style={{
               fontSize: 12, fontWeight: isActive ? 500 : 400,
               color: isActive ? 'var(--accent)' : 'var(--text-primary)',
@@ -52,23 +60,18 @@ export default function TabStrip() {
             }}>
               {tab.title}
             </span>
-            {/* Type */}
-            <span style={{
-              fontSize: 10, marginTop: 2,
-              color: isActive ? 'var(--accent)' : 'var(--text-muted)',
-              textTransform: 'capitalize',
-            }}>
+            <span style={{ fontSize: 10, marginTop: 2, color: isActive ? 'var(--accent)' : 'var(--text-muted)', textTransform: 'capitalize' }}>
               {tab.type}
             </span>
-            {/* Close */}
+            {/* X removes from tab strip only — does NOT delete from history */}
             <button
-              onClick={e => { e.stopPropagation(); closeSession(tab.id) }}
+              onClick={e => dismiss(tab.id, e)}
+              title="Remove from tab strip"
               style={{
                 position: 'absolute', top: 6, right: 5,
                 background: 'none', border: 'none', cursor: 'pointer',
                 color: isActive ? 'var(--accent)' : 'var(--text-muted)',
-                display: 'flex', padding: 2, borderRadius: 3,
-                opacity: 0.7,
+                display: 'flex', padding: 2, borderRadius: 3, opacity: 0.7,
               }}
             >
               <X size={10} />
