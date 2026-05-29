@@ -49,14 +49,12 @@ async function bootstrap() {
 
   orchestrator.onEvent((projectId, event) => broadcast({ type: 'agent_event', projectId, event }))
 
-  // ── WebSocket ──────────────────────────────────────────────────────────────
   server.get('/ws', { websocket: true }, (socket) => {
     wsClients.add(socket)
     socket.send(JSON.stringify({ type: 'connected' }))
     socket.on('close', () => wsClients.delete(socket))
   })
 
-  // ── Health / System ────────────────────────────────────────────────────────
   server.get('/health', async () => ({ status: 'ok', mode: taskQueue.currentMode }))
   server.get('/system', async () => profileSystem())
   server.post<{ Body: { mode: 'sequential' | 'parallel'; maxParallel?: number } }>('/system/mode', async (req) => {
@@ -65,7 +63,6 @@ async function bootstrap() {
     return { success: true }
   })
 
-  // ── Models ─────────────────────────────────────────────────────────────────
   server.get('/models', async () => {
     try { return { models: await getInstalledModels() } }
     catch { return { error: 'Ollama not reachable' } }
@@ -95,6 +92,8 @@ async function bootstrap() {
   server.delete<{ Params: { id: string } }>('/sessions/:id', async (req) => {
     deleteSession(req.params.id); return { success: true }
   })
+
+  // Client saves user messages with its own stable ID
   server.post<{ Body: { id: string; sessionId: string; role: string; content: string; agentName?: string } }>(
     '/sessions/message', async (req) => {
       const { id, sessionId, role, content, agentName } = req.body
@@ -121,7 +120,7 @@ async function bootstrap() {
     return { summary: getSession(req.params.sessionId)?.summary ?? null }
   })
 
-  // ── Chat streaming — SSE, token by token ──────────────────────────────────
+  // ── Chat streaming — server saves ONLY assistant reply, client saves user msg
   server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>(
     '/chat/stream', async (req, reply) => {
       const { message, sessionId, history = [] } = req.body
@@ -157,23 +156,21 @@ async function bootstrap() {
       reply.raw.write('data: [DONE]\n\n')
       reply.raw.end()
 
-      // Persist after stream
+      // Save ONLY the assistant reply — client already saved the user message
       const { randomUUID } = await import('crypto')
-      saveMessage({ id: randomUUID(), sessionId, role: 'user',      content: message })
       saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: fullReply })
     }
   )
 
-  // ── Chat non-streaming (title generation only) ────────────────────────────
+  // ── Chat non-streaming (title generation only) — saves neither side
+  // Title gen uses a throw-away sessionId so nothing gets persisted to real sessions
   server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>(
     '/chat', async (req) => {
       const { message, sessionId, history = [] } = req.body
       if (!message) return { success: false, reply: 'No message' }
 
       const { selectedModel } = loadConfig()
-      if (!getSession(sessionId)) {
-        upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: selectedModel })
-      }
+      // Don't create a session record for title-gen calls
       const session = getSession(sessionId)
 
       const messages = [
@@ -183,9 +180,7 @@ async function bootstrap() {
       ]
 
       const reply = await chat(selectedModel, messages)
-      const { randomUUID } = await import('crypto')
-      saveMessage({ id: randomUUID(), sessionId, role: 'user',      content: message })
-      saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: reply })
+      // Do NOT persist — this endpoint is only used for title generation
       return { success: true, reply }
     }
   )
