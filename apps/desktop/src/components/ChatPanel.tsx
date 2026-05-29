@@ -1,5 +1,4 @@
-import { useRef, useEffect, KeyboardEvent } from 'react'
-import { useState } from 'react'
+import { useRef, useEffect, KeyboardEvent, useState } from 'react'
 import { Send, Bot, Paperclip, Mic, Loader } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -24,46 +23,20 @@ function MarkdownContent({ content }: { content: string }) {
         strong: ({ children }) => <strong style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{children}</strong>,
         em:     ({ children }) => <em style={{ color: 'var(--text-secondary)' }}>{children}</em>,
         code:   ({ children, className }) => {
-          const isBlock = className?.includes('language-')
+          const isBlock = !!className?.includes('language-')
           return isBlock ? (
-            <code style={{
-              display: 'block', background: 'var(--bg-primary)',
-              border: '1px solid var(--border)', borderRadius: 6,
-              padding: '10px 14px', fontSize: 12, fontFamily: 'monospace',
-              overflowX: 'auto', margin: '6px 0', lineHeight: 1.6,
-              color: 'var(--text-primary)',
-            }}>{children}</code>
+            <code style={{ display: 'block', background: 'var(--bg-primary)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 14px', fontSize: 12, fontFamily: 'monospace', overflowX: 'auto', margin: '6px 0', lineHeight: 1.6, color: 'var(--text-primary)' }}>{children}</code>
           ) : (
-            <code style={{
-              background: 'var(--bg-primary)', border: '1px solid var(--border)',
-              borderRadius: 4, padding: '1px 5px', fontSize: 12,
-              fontFamily: 'monospace', color: 'var(--accent)',
-            }}>{children}</code>
+            <code style={{ background: 'var(--bg-primary)', border: '1px solid var(--border)', borderRadius: 4, padding: '1px 5px', fontSize: 12, fontFamily: 'monospace', color: 'var(--accent)' }}>{children}</code>
           )
         },
         pre:        ({ children }) => <>{children}</>,
-        blockquote: ({ children }) => (
-          <blockquote style={{
-            borderLeft: '3px solid var(--accent)', paddingLeft: 12,
-            margin: '6px 0', color: 'var(--text-secondary)', fontStyle: 'italic',
-          }}>{children}</blockquote>
-        ),
-        hr: () => <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '10px 0' }} />,
-        a:  ({ children, href }) => (
-          <a href={href} target="_blank" rel="noreferrer"
-            style={{ color: 'var(--accent)', textDecoration: 'underline' }}>{children}</a>
-        ),
-        table: ({ children }) => (
-          <div style={{ overflowX: 'auto', margin: '8px 0' }}>
-            <table style={{ borderCollapse: 'collapse', fontSize: 12, width: '100%' }}>{children}</table>
-          </div>
-        ),
-        th: ({ children }) => (
-          <th style={{ border: '1px solid var(--border)', padding: '5px 10px', background: 'var(--bg-tertiary)', fontWeight: 600, textAlign: 'left' }}>{children}</th>
-        ),
-        td: ({ children }) => (
-          <td style={{ border: '1px solid var(--border)', padding: '5px 10px' }}>{children}</td>
-        ),
+        blockquote: ({ children }) => <blockquote style={{ borderLeft: '3px solid var(--accent)', paddingLeft: 12, margin: '6px 0', color: 'var(--text-secondary)', fontStyle: 'italic' }}>{children}</blockquote>,
+        hr:    () => <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '10px 0' }} />,
+        a:     ({ children, href }) => <a href={href} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)', textDecoration: 'underline' }}>{children}</a>,
+        table: ({ children }) => <div style={{ overflowX: 'auto', margin: '8px 0' }}><table style={{ borderCollapse: 'collapse', fontSize: 12, width: '100%' }}>{children}</table></div>,
+        th:    ({ children }) => <th style={{ border: '1px solid var(--border)', padding: '5px 10px', background: 'var(--bg-tertiary)', fontWeight: 600, textAlign: 'left' }}>{children}</th>,
+        td:    ({ children }) => <td style={{ border: '1px solid var(--border)', padding: '5px 10px' }}>{children}</td>,
       }}
     >
       {content}
@@ -74,11 +47,7 @@ function MarkdownContent({ content }: { content: string }) {
 function ThinkingBubble() {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      <div style={{
-        background: 'var(--bg-tertiary)', border: '1px solid var(--border)',
-        borderRadius: '3px 12px 12px 12px', padding: '10px 14px',
-        display: 'flex', alignItems: 'center', gap: 8,
-      }}>
+      <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: '3px 12px 12px 12px', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
         <Loader size={13} style={{ color: 'var(--accent)', animation: 'spin 1s linear infinite', flexShrink: 0 }} />
         <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Thinking…</span>
       </div>
@@ -88,11 +57,7 @@ function ThinkingBubble() {
 
 function MessageBubble({ msg }: { msg: Message }) {
   if (msg.type === 'user') {
-    return (
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <div className="msg-user">{msg.content}</div>
-      </div>
-    )
+    return <div style={{ display: 'flex', justifyContent: 'flex-end' }}><div className="msg-user">{msg.content}</div></div>
   }
   if (msg.type === 'system') {
     return <div className="msg-system"><span>●</span><span>{msg.content}</span></div>
@@ -100,11 +65,7 @@ function MessageBubble({ msg }: { msg: Message }) {
   if (msg.type === 'stream') {
     return (
       <div>
-        {msg.agentName && (
-          <div className="agent-label" style={{ color: 'var(--accent)', marginBottom: 3, fontSize: 10 }}>
-            {msg.agentName}
-          </div>
-        )}
+        {msg.agentName && <div className="agent-label" style={{ color: 'var(--accent)', marginBottom: 3, fontSize: 10 }}>{msg.agentName}</div>}
         <div className="msg-agent">
           <MarkdownContent content={msg.content} />
           <span style={{ display: 'inline-block', width: 7, height: 13, background: 'var(--accent)', marginLeft: 2, animation: 'blink 1s step-end infinite', verticalAlign: 'text-bottom', borderRadius: 1 }} />
@@ -114,21 +75,14 @@ function MessageBubble({ msg }: { msg: Message }) {
   }
   return (
     <div>
-      {msg.agentName && (
-        <div className={`agent-badge ${roleBadgeClass(msg.agentRole)}`}
-          style={{ display: 'inline-block', marginBottom: 5, fontSize: 10 }}>
-          {msg.agentName}
-        </div>
-      )}
-      <div className="msg-agent">
-        <MarkdownContent content={msg.content} />
-      </div>
+      {msg.agentName && <div className={`agent-badge ${roleBadgeClass(msg.agentRole)}`} style={{ display: 'inline-block', marginBottom: 5, fontSize: 10 }}>{msg.agentName}</div>}
+      <div className="msg-agent"><MarkdownContent content={msg.content} /></div>
     </div>
   )
 }
 
 export default function ChatPanel() {
-  const { sessions, activeSessionId, addMessage, selectedModel, updateSessionTitle } = useAppStore()
+  const { sessions, activeSessionId, addMessage, appendStream, finalizeStream, selectedModel, updateSessionTitle } = useAppStore()
   const [input, setInput]     = useState('')
   const [sending, setSending] = useState(false)
   const bottomRef   = useRef<HTMLDivElement>(null)
@@ -151,15 +105,19 @@ export default function ChatPanel() {
     ta.style.height = Math.min(ta.scrollHeight, 140) + 'px'
   }, [input])
 
-  // Auto-generate title after first user message
   async function generateTitle(sessionId: string, firstMessage: string) {
     try {
       const data = await api.sendChat(
-        `In 4 words or fewer, write a concise title for a conversation that starts with: "${firstMessage.slice(0, 120)}". Reply with only the title, no punctuation, no quotes.`,
-        sessionId + '-title-gen',
+        `Write a short chat title of 3 to 5 words WITH SPACES between each word for a conversation starting with: "${firstMessage.slice(0, 100)}". Reply with ONLY the title. Use spaces between words. Example: Java Interview Preparation`,
+        sessionId + '-titlegentmp',
         []
       )
-      const title = data.reply?.trim().slice(0, 50) ?? firstMessage.slice(0, 40)
+      let title = data.reply?.trim() ?? firstMessage.slice(0, 40)
+      // If model ignores spaces, insert before capitals
+      if (!title.includes(' ')) {
+        title = title.replace(/([A-Z][a-z])/g, ' $1').trim()
+      }
+      title = title.replace(/^["']|["']$/g, '').trim().slice(0, 50)
       updateSessionTitle(sessionId, title)
       await api.createSession(sessionId, session?.type ?? 'chat', title, session?.rootPath, selectedModel)
     } catch { }
@@ -171,8 +129,8 @@ export default function ChatPanel() {
     setInput('')
     setSending(true)
 
-    const msgId       = nanoid()
-    const isFirstMsg  = messages.filter(m => m.type === 'user').length === 0
+    const msgId      = nanoid()
+    const isFirstMsg = messages.filter(m => m.type === 'user').length === 0
 
     addMessage(session.id, { id: msgId, type: 'user', content: text, timestamp: Date.now() })
     api.saveMessage(msgId, session.id, 'user', text).catch(() => {})
@@ -186,25 +144,21 @@ export default function ChatPanel() {
           .slice(-20)
           .map(m => ({ role: m.type === 'user' ? 'user' : 'assistant', content: m.content }))
 
-        const data = await api.sendChat(text, session.id, history)
-        const replyId = nanoid()
-        addMessage(session.id, {
-          id: replyId, type: 'agent',
-          content: data.reply ?? 'No response',
-          agentName: selectedModel?.split(':')[0] ?? 'LocalForge',
-          timestamp: Date.now(),
-        })
+        // Use streaming endpoint
+        const streamTaskId = nanoid()
+        setSending(false) // hide thinking bubble — stream starts immediately
 
-        // Generate title from first message
+        await api.streamChat(text, session.id, history, streamTaskId, (chunk) => {
+          appendStream(session.id, streamTaskId, chunk)
+        })
+        finalizeStream(session.id, streamTaskId)
+
         if (isFirstMsg && session.title === 'New chat') {
           generateTitle(session.id, text)
         }
       }
     } catch (err: any) {
-      addMessage(session.id, {
-        id: nanoid(), type: 'system',
-        content: `Error: ${err.message}`, timestamp: Date.now(),
-      })
+      addMessage(session.id, { id: nanoid(), type: 'system', content: `Error: ${err.message}`, timestamp: Date.now() })
     } finally {
       setSending(false)
     }
@@ -216,7 +170,7 @@ export default function ChatPanel() {
 
   const canSend        = !!input.trim() && !!session && !sending
   const modelShortName = selectedModel ? selectedModel.split(':')[0] : 'the AI'
-  const placeholder    = !session        ? 'Open a chat or project…'
+  const placeholder    = !session      ? 'Open a chat or project…'
     : isChat           ? 'Ask anything…'
     : !firstAgent      ? 'Add an agent from the sidebar…'
     : `Instruct ${firstAgent.name}…`
@@ -226,37 +180,17 @@ export default function ChatPanel() {
 
       {/* Session title bar */}
       {session && (
-        <div style={{
-          flexShrink: 0, padding: '6px 16px',
-          borderBottom: '1px solid var(--border)',
-          background: 'var(--bg-secondary)',
-          display: 'flex', alignItems: 'center', gap: 8,
-        }}>
-          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>
-            {session.title}
-          </span>
-          <span style={{
-            fontSize: 10, padding: '2px 7px', borderRadius: 10, fontWeight: 600,
-            background: 'var(--accent-dim)', color: 'var(--accent)',
-          }}>
-            {session.type}
-          </span>
+        <div style={{ flexShrink: 0, padding: '6px 16px', borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{session.title}</span>
+          <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, fontWeight: 600, background: 'var(--accent-dim)', color: 'var(--accent)' }}>{session.type}</span>
         </div>
       )}
 
       {/* Messages */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-
-        {/* Project summary pinned card */}
         {session?.summary && messages.length === 0 && (
-          <div style={{
-            background: 'var(--bg-secondary)', border: '1px solid var(--border)',
-            borderRadius: 8, padding: '10px 14px', fontSize: 12,
-            color: 'var(--text-secondary)', lineHeight: 1.6,
-          }}>
-            <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--accent)', marginBottom: 5 }}>
-              Project summary
-            </div>
+          <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+            <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--accent)', marginBottom: 5 }}>Project summary</div>
             {session.summary}
           </div>
         )}
@@ -268,52 +202,30 @@ export default function ChatPanel() {
               {isChat ? 'Ask me anything' : isProject && !firstAgent ? 'No agent yet' : 'Ready to build'}
             </div>
             <div style={{ fontSize: 12 }}>
-              {isChat      ? 'I can explain concepts, review code, or answer questions'
-               : isProject && !firstAgent ? 'Create agents from the workspace panel'
-               : firstAgent ? `${firstAgent.name} (${firstAgent.role}) is ready` : ''}
+              {isChat ? 'I can explain concepts, review code, or answer questions'
+                : isProject && !firstAgent ? 'Create agents from the workspace panel'
+                : firstAgent ? `${firstAgent.name} (${firstAgent.role}) is ready` : ''}
             </div>
           </div>
         )}
 
         {messages.map(msg => <MessageBubble key={msg.id} msg={msg} />)}
-
-        {/* Thinking indicator */}
         {sending && <ThinkingBubble />}
-
         <div ref={bottomRef} />
       </div>
 
-      {/* Input pinned at bottom */}
+      {/* Input */}
       {session?.type !== 'terminal' && (
         <div style={{ flexShrink: 0, padding: '10px 16px 14px', background: 'var(--bg-primary)' }}>
           <div style={{ maxWidth: 680, margin: '0 auto' }}>
-            <div style={{
-              display: 'flex', alignItems: 'flex-end', gap: 6,
-              background: 'var(--bg-tertiary)', border: '1px solid var(--border)',
-              borderRadius: 12, padding: '6px 8px 6px 12px',
-            }}>
-              <button className="icon-btn" title="Upload file" style={{ width: 28, height: 28, flexShrink: 0, marginBottom: 1 }}>
-                <Paperclip size={14} />
-              </button>
-              <textarea
-                ref={textareaRef} value={input}
-                onChange={e => setInput(e.target.value)}
-                onKeyDown={onKeyDown} placeholder={placeholder}
-                disabled={!session || sending} rows={1}
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, background: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: 12, padding: '6px 8px 6px 12px' }}>
+              <button className="icon-btn" title="Upload file" style={{ width: 28, height: 28, flexShrink: 0, marginBottom: 1 }}><Paperclip size={14} /></button>
+              <textarea ref={textareaRef} value={input} onChange={e => setInput(e.target.value)} onKeyDown={onKeyDown} placeholder={placeholder} disabled={!session || sending} rows={1}
                 style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', resize: 'none', color: 'var(--text-primary)', fontSize: 13, lineHeight: 1.6, fontFamily: 'inherit', padding: '2px 0', maxHeight: 140, overflowY: 'auto' }}
               />
               <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0, marginBottom: 1 }}>
-                <button className="icon-btn" title="Voice" style={{ width: 28, height: 28 }}>
-                  <Mic size={14} />
-                </button>
-                <button onClick={send} disabled={!canSend} style={{
-                  width: 30, height: 30, borderRadius: 8, border: 'none',
-                  background: canSend ? 'var(--accent)' : 'var(--bg-hover)',
-                  color: canSend ? 'white' : 'var(--text-muted)',
-                  cursor: canSend ? 'pointer' : 'not-allowed',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  transition: 'background 0.15s, color 0.15s', flexShrink: 0,
-                }}>
+                <button className="icon-btn" title="Voice" style={{ width: 28, height: 28 }}><Mic size={14} /></button>
+                <button onClick={send} disabled={!canSend} style={{ width: 30, height: 30, borderRadius: 8, border: 'none', background: canSend ? 'var(--accent)' : 'var(--bg-hover)', color: canSend ? 'white' : 'var(--text-muted)', cursor: canSend ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.15s, color 0.15s', flexShrink: 0 }}>
                   <Send size={13} />
                 </button>
               </div>
@@ -326,7 +238,7 @@ export default function ChatPanel() {
       )}
 
       <style>{`
-        @keyframes spin  { from { transform: rotate(0deg)   } to { transform: rotate(360deg) } }
+        @keyframes spin  { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }
         @keyframes blink { 0%, 100% { opacity: 1 } 50% { opacity: 0 } }
       `}</style>
     </div>

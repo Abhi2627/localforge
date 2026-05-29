@@ -10,13 +10,13 @@ export default function TabStrip() {
   return (
     <div style={{
       display: 'flex',
-      alignItems: 'stretch',
-      background: 'var(--bg-secondary)',
+      alignItems: 'center',
+      gap: 6,
+      padding: '6px 12px',
+      background: 'var(--bg-primary)',
       borderBottom: '1px solid var(--border)',
       flexShrink: 0,
-      height: 48,
       overflowX: 'auto',
-      overflowY: 'hidden',
     }}>
       {tabs.map(tab => {
         const isActive = tab.id === activeSessionId
@@ -28,47 +28,47 @@ export default function TabStrip() {
               display: 'flex',
               flexDirection: 'column',
               justifyContent: 'center',
-              minWidth: 120,
-              maxWidth: 180,
-              padding: '0 10px',
+              minWidth: 110,
+              maxWidth: 160,
+              padding: '6px 10px 6px 12px',
+              borderRadius: 8,
+              border: `1px solid ${isActive ? 'var(--accent)' : 'var(--border)'}`,
+              background: isActive ? 'var(--accent-dim)' : 'var(--bg-secondary)',
               cursor: 'pointer',
               flexShrink: 0,
               position: 'relative',
-              background: isActive ? 'var(--bg-primary)' : 'transparent',
-              borderRight: '1px solid var(--border)',
-              borderBottom: isActive ? '2px solid var(--accent)' : '2px solid transparent',
-              transition: 'background 0.15s',
+              transition: 'border-color 0.15s, background 0.15s',
+              boxShadow: isActive ? '0 0 0 1px var(--accent)20' : 'none',
             }}
-            onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)' }}
-            onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+            onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.borderColor = 'var(--border-light)' }}
+            onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)' }}
           >
             {/* Title */}
             <span style={{
               fontSize: 12, fontWeight: isActive ? 500 : 400,
-              color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
+              color: isActive ? 'var(--accent)' : 'var(--text-primary)',
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              paddingRight: 16,
+              paddingRight: 14, lineHeight: 1.4,
             }}>
               {tab.title}
             </span>
-
-            {/* Type label below title */}
+            {/* Type */}
             <span style={{
-              fontSize: 10,
+              fontSize: 10, marginTop: 2,
               color: isActive ? 'var(--accent)' : 'var(--text-muted)',
               textTransform: 'capitalize',
-              marginTop: 1,
             }}>
               {tab.type}
             </span>
-
-            {/* Close button — top right */}
+            {/* Close */}
             <button
               onClick={e => { e.stopPropagation(); closeSession(tab.id) }}
               style={{
-                position: 'absolute', top: 6, right: 4,
+                position: 'absolute', top: 6, right: 5,
                 background: 'none', border: 'none', cursor: 'pointer',
-                color: 'var(--text-muted)', display: 'flex', padding: 2, borderRadius: 3,
+                color: isActive ? 'var(--accent)' : 'var(--text-muted)',
+                display: 'flex', padding: 2, borderRadius: 3,
+                opacity: 0.7,
               }}
             >
               <X size={10} />
