@@ -1,6 +1,10 @@
 import { useState } from 'react'
-import { FileText, Bot, GitBranch, Search, Maximize2, FolderOpen, LayoutDashboard, Loader } from 'lucide-react'
+import { FileText, Bot, GitBranch, Search, Maximize2, FolderOpen, LayoutDashboard, Plus, Loader, Play, Square, Trash2 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
+import AgentModal from './AgentModal'
+import ProjectGraph from './ProjectGraph'
+
+// ── Collapsed right strip ────────────────────────────────────────────────────
 
 function CollapsedRight() {
   const session    = useAppStore(s => s.sessions.find(p => p.id === s.activeSessionId))
@@ -22,6 +26,8 @@ function CollapsedRight() {
   )
 }
 
+// ── Section header ───────────────────────────────────────────────────────────
+
 function SectionHeader({ icon: Icon, title, extra }: { icon: any; title: string; extra?: React.ReactNode }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
@@ -33,27 +39,45 @@ function SectionHeader({ icon: Icon, title, extra }: { icon: any; title: string;
 }
 
 function EmptyNote({ text }: { text: string }) {
-  return <div style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text-muted)', flex: 1 }}>{text}</div>
+  return <div style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text-muted)' }}>{text}</div>
 }
+
+// ── Agent row ────────────────────────────────────────────────────────────────
 
 function AgentRow({ agentId, sessionId }: { agentId: string; sessionId: string }) {
   const agent = useAppStore(s => s.sessions.find(p => p.id === sessionId)?.agents.find(a => a.id === agentId))
   if (!agent) return null
-  const statusColor = agent.status === 'running' ? 'var(--green)' : agent.status === 'failed' ? 'var(--red)' : 'var(--text-muted)'
+
+  const statusColor =
+    agent.status === 'running' ? 'var(--green)'
+    : agent.status === 'failed' ? 'var(--red)'
+    : 'var(--text-muted)'
+
+  const statusDot = agent.status === 'running'
+    ? <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--green)', boxShadow: '0 0 4px var(--green)', flexShrink: 0, animation: 'pulse 2s ease-in-out infinite' }} />
+    : null
+
   return (
-    <div style={{ padding: '4px 12px' }}>
+    <div style={{ padding: '6px 12px', borderBottom: '1px solid var(--border)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span className={`agent-badge badge-${agent.role}`}>{agent.role.slice(0, 2).toUpperCase()}</span>
-        <span style={{ flex: 1, fontSize: 12, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{agent.name}</span>
-        <span style={{ fontSize: 10, color: statusColor }}>{agent.status}</span>
+        <span className={`agent-badge badge-${agent.role}`} style={{ flexShrink: 0 }}>
+          {agent.role.slice(0, 2).toUpperCase()}
+        </span>
+        <span style={{ flex: 1, fontSize: 12, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {agent.name}
+        </span>
+        {statusDot}
+        <span style={{ fontSize: 10, color: statusColor, flexShrink: 0 }}>{agent.status}</span>
       </div>
+
       {agent.currentTask && (
-        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {agent.currentTask.slice(0, 46)}
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3, paddingLeft: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {agent.currentTask.slice(0, 48)}
         </div>
       )}
+
       {agent.status === 'running' && (
-        <div className="progress-bar" style={{ marginTop: 3 }}>
+        <div className="progress-bar" style={{ marginTop: 4 }}>
           <div className="progress-fill pulse" style={{ width: '60%' }} />
         </div>
       )}
@@ -61,15 +85,19 @@ function AgentRow({ agentId, sessionId }: { agentId: string; sessionId: string }
   )
 }
 
+// ── Main component ───────────────────────────────────────────────────────────
+
 export default function RightSidebar() {
   const { sessions, activeSessionId, rightExpanded } = useAppStore()
   const session = sessions.find(s => s.id === activeSessionId)
-  const [fileSearch, setFileSearch] = useState('')
-  const [showSearch, setShowSearch] = useState(false)
+
+  const [fileSearch, setFileSearch]   = useState('')
+  const [showSearch, setShowSearch]   = useState(false)
+  const [showAgentModal, setShowAgentModal] = useState(false)
+  const [graphFullscreen, setGraphFullscreen] = useState(false)
 
   if (!rightExpanded) return <CollapsedRight />
 
-  // Merge allFiles + writtenFiles, deduplicate
   const allFiles     = session?.allFiles ?? []
   const writtenFiles = session?.writtenFiles ?? []
   const mergedFiles  = [...new Set([...allFiles, ...writtenFiles])]
@@ -82,20 +110,21 @@ export default function RightSidebar() {
   const relativePath = (f: string) =>
     session?.rootPath ? f.replace(session.rootPath, '').replace(/^[/\\]/, '') : f
 
+  // We need a backend project ID — use session ID as project ID
+  // (they match because we create the backend project with the session ID)
+  const projectId = session?.id ?? ''
+
   return (
     <div style={{ background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border)', display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
 
-      {/* Workspace — fixed top strip */}
+      {/* ── Workspace ─────────────────────────────────────────────── */}
       <div style={{ flexShrink: 0, borderBottom: '1px solid var(--border)' }}>
         <SectionHeader icon={LayoutDashboard} title={`Workspace — ${session?.title ?? 'none'}`} />
         <div style={{ padding: '6px 12px 8px' }}>
           {session ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{
-                  fontSize: 10, padding: '2px 8px', borderRadius: 10, fontWeight: 600,
-                  background: 'var(--accent-dim)', color: 'var(--accent)',
-                }}>
+                <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 10, fontWeight: 600, background: 'var(--accent-dim)', color: 'var(--accent)' }}>
                   {session.type}
                 </span>
                 {session.rootPath && (
@@ -104,9 +133,8 @@ export default function RightSidebar() {
                   </span>
                 )}
               </div>
-              {/* Project summary */}
               {session.summary ? (
-                <div style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.5, maxHeight: 80, overflowY: 'auto' }}>
+                <div style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.5, maxHeight: 72, overflowY: 'auto' }}>
                   {session.summary}
                 </div>
               ) : session.type === 'project' && session.rootPath ? (
@@ -125,7 +153,7 @@ export default function RightSidebar() {
       {/* Four equal sections */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
 
-        {/* File structure */}
+        {/* ── File structure ─────────────────────────────────────── */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', borderBottom: '1px solid var(--border)', minHeight: 0 }}>
           <SectionHeader icon={FolderOpen} title={`Files (${mergedFiles.length})`}
             extra={
@@ -154,57 +182,128 @@ export default function RightSidebar() {
                   <span style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {relativePath(f)}
                   </span>
-                  {isNewFile(f) && (
-                    <span style={{ fontSize: 9, color: 'var(--accent)', marginLeft: 'auto', flexShrink: 0 }}>new</span>
-                  )}
+                  {isNewFile(f) && <span style={{ fontSize: 9, color: 'var(--accent)', marginLeft: 'auto', flexShrink: 0 }}>new</span>}
                 </div>
               ))
             }
           </div>
         </div>
 
-        {/* Git structure */}
+        {/* ── Git structure ─────────────────────────────────────── */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', borderBottom: '1px solid var(--border)', minHeight: 0 }}>
           <SectionHeader icon={GitBranch} title="Git structure" />
-          <EmptyNote text={session?.type === 'project' ? 'Git integration coming soon' : 'Available in project sessions'} />
+          <EmptyNote text="Git integration coming in Phase 2" />
         </div>
 
-        {/* Agents */}
+        {/* ── Agents ───────────────────────────────────────────── */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', borderBottom: '1px solid var(--border)', minHeight: 0 }}>
-          <SectionHeader icon={Bot} title={`Agents (${session?.agents.length ?? 0})`} />
-          <div style={{ flex: 1, overflowY: 'auto', padding: '2px 0' }}>
-            {(!session || session.agents.length === 0)
-              ? <EmptyNote text={session?.type === 'project' ? 'No agents yet' : 'Available in project sessions'} />
-              : session.agents.map(a => <AgentRow key={a.id} agentId={a.id} sessionId={session.id} />)
+          <SectionHeader icon={Bot} title={`Agents (${session?.agents.length ?? 0})`}
+            extra={
+              session?.type === 'project' && (
+                <button
+                  className="icon-btn" style={{ width: 18, height: 18 }}
+                  title="Add agent"
+                  onClick={() => setShowAgentModal(true)}
+                >
+                  <Plus size={11} />
+                </button>
+              )
             }
+          />
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            {(!session || session.agents.length === 0) ? (
+              session?.type === 'project' ? (
+                <div style={{ padding: '8px 12px' }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
+                    No agents yet. Add one to start building.
+                  </div>
+                  <button
+                    onClick={() => setShowAgentModal(true)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      width: '100%', padding: '7px 10px',
+                      background: 'var(--accent)', border: 'none', borderRadius: 7,
+                      color: 'white', fontSize: 11, fontWeight: 500, cursor: 'pointer',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Plus size={12} /> Add first agent
+                  </button>
+                </div>
+              ) : (
+                <EmptyNote text="Available in project sessions" />
+              )
+            ) : (
+              <>
+                {session.agents.map(a => (
+                  <AgentRow key={a.id} agentId={a.id} sessionId={session.id} />
+                ))}
+                <button
+                  onClick={() => setShowAgentModal(true)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 5,
+                    margin: '6px 12px', padding: '5px 8px',
+                    background: 'transparent', border: '1px dashed var(--border-light)',
+                    borderRadius: 6, color: 'var(--text-muted)', fontSize: 11,
+                    cursor: 'pointer', width: 'calc(100% - 24px)',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Plus size={11} /> Add agent
+                </button>
+              </>
+            )}
           </div>
         </div>
 
-        {/* Project graph */}
+        {/* ── Project graph ─────────────────────────────────────── */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
           <SectionHeader icon={LayoutDashboard} title="Project graph"
             extra={
-              <button className="icon-btn" style={{ width: 18, height: 18 }} title="Full view">
+              <button className="icon-btn" style={{ width: 18, height: 18 }} title="Full view"
+                onClick={() => setGraphFullscreen(true)}>
                 <Maximize2 size={11} />
               </button>
             }
           />
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '8px 12px' }}>
-            <div style={{
-              width: '100%', height: '100%', minHeight: 40,
-              background: 'var(--bg-tertiary)', borderRadius: 6,
-              border: '1px dashed var(--border-light)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', padding: 8,
-            }}>
-              {session?.type === 'project' && mergedFiles.length > 0
-                ? 'Graph generates after first agent run'
-                : 'Available after project files are created'}
-            </div>
-          </div>
+          <ProjectGraph
+            files={mergedFiles}
+            rootPath={session?.rootPath ?? ''}
+          />
         </div>
 
       </div>
+
+      {/* Agent creation modal */}
+      {showAgentModal && session && (
+        <AgentModal
+          sessionId={session.id}
+          projectId={projectId}
+          onClose={() => setShowAgentModal(false)}
+        />
+      )}
+
+      {/* Graph fullscreen overlay */}
+      {graphFullscreen && session && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300,
+        }} onClick={() => setGraphFullscreen(false)}>
+          <div style={{
+            background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+            borderRadius: 12, padding: 16, width: '80vw', height: '80vh',
+            display: 'flex', flexDirection: 'column', gap: 8,
+          }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>Project graph — {session.title}</span>
+              <button className="icon-btn" onClick={() => setGraphFullscreen(false)} style={{ width: 26, height: 26 }}>✕</button>
+            </div>
+            <div style={{ flex: 1, overflow: 'hidden' }}>
+              <ProjectGraph files={mergedFiles} rootPath={session.rootPath ?? ''} />
+            </div>
+          </div>
+        </div>
+      )}
 
       <style>{`@keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }`}</style>
     </div>

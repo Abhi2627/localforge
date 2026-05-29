@@ -1,21 +1,18 @@
 import { useRef, useEffect, KeyboardEvent, useState } from 'react'
-import { Send, Bot, Paperclip, Mic, Loader, Copy, Pencil, RefreshCw, Check } from 'lucide-react'
+import { Send, Bot, Paperclip, Mic, Loader, Copy, Pencil, RefreshCw, Check, Terminal } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useAppStore, type Message, type AgentRole } from '../store/appStore'
 import { api } from '../hooks/useApi'
 import { nanoid } from '../hooks/nanoid'
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
+import TerminalPanel from './TerminalPanel'
 
 function roleBadgeClass(role?: AgentRole) { return `badge-${role ?? 'fullstack'}` }
 
 function formatTime(ts: number): string {
-  const d = new Date(ts)
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-// Strips ALL markdown formatting — used at the title boundary
 function cleanTitle(raw: string): string {
   return raw
     .replace(/\*\*/g, '').replace(/\*/g, '').replace(/`/g, '')
@@ -23,8 +20,6 @@ function cleanTitle(raw: string): string {
     .replace(/^["'`[\]()]+|["'`[\]()]+$/g, '')
     .replace(/[^\w\s-]/g, ' ').replace(/\s+/g, ' ').trim()
 }
-
-// ── Markdown renderer ────────────────────────────────────────────────────────
 
 function MarkdownContent({ content }: { content: string }) {
   return (
@@ -57,47 +52,23 @@ function MarkdownContent({ content }: { content: string }) {
   )
 }
 
-// ── Message action buttons ────────────────────────────────────────────────────
-
-function MsgActions({ content, onEdit, onReload, isUser, isStream }: {
-  content: string
-  onEdit?: () => void
-  onReload?: () => void
-  isUser: boolean
-  isStream: boolean
-}) {
+function MsgActions({ content, onEdit, onReload, isUser }: { content: string; onEdit?: () => void; onReload?: () => void; isUser: boolean }) {
   const [copied, setCopied] = useState(false)
-  if (isStream) return null
-
   function copy() {
-    navigator.clipboard.writeText(content).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    })
+    navigator.clipboard.writeText(content).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
   }
-
   return (
-    <div style={{
-      display: 'flex', gap: 2, opacity: 0,
-      transition: 'opacity 0.15s',
-      alignItems: 'center',
-    }} className="msg-actions">
-      <button onClick={copy} title="Copy" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '3px 4px', borderRadius: 4, display: 'flex' }}
-        onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'}
-        onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'}>
+    <div className="msg-actions" style={{ display: 'flex', gap: 2, opacity: 0, transition: 'opacity 0.15s', alignItems: 'center' }}>
+      <button onClick={copy} title="Copy" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '3px 4px', borderRadius: 4, display: 'flex' }}>
         {copied ? <Check size={12} /> : <Copy size={12} />}
       </button>
       {isUser && onEdit && (
-        <button onClick={onEdit} title="Edit" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '3px 4px', borderRadius: 4, display: 'flex' }}
-          onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'}
-          onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'}>
+        <button onClick={onEdit} title="Edit" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '3px 4px', borderRadius: 4, display: 'flex' }}>
           <Pencil size={12} />
         </button>
       )}
       {!isUser && onReload && (
-        <button onClick={onReload} title="Regenerate" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '3px 4px', borderRadius: 4, display: 'flex' }}
-          onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'}
-          onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'}>
+        <button onClick={onReload} title="Regenerate" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '3px 4px', borderRadius: 4, display: 'flex' }}>
           <RefreshCw size={12} />
         </button>
       )}
@@ -105,17 +76,8 @@ function MsgActions({ content, onEdit, onReload, isUser, isStream }: {
   )
 }
 
-// ── Message bubble ─────────────────────────────────────────────────────────────
-
-function MessageBubble({ msg, onEdit, onReload }: {
-  msg: Message
-  onEdit?: (content: string) => void
-  onReload?: () => void
-}) {
-  if (msg.type === 'system') return (
-    <div className="msg-system"><span>●</span><span>{msg.content}</span></div>
-  )
-
+function MessageBubble({ msg, onEdit, onReload }: { msg: Message; onEdit?: (c: string) => void; onReload?: () => void }) {
+  if (msg.type === 'system') return <div className="msg-system"><span>●</span><span>{msg.content}</span></div>
   if (msg.type === 'stream') return (
     <div>
       {msg.agentName && <div style={{ fontSize: 10, color: 'var(--accent)', marginBottom: 3 }}>{msg.agentName}</div>}
@@ -129,39 +91,29 @@ function MessageBubble({ msg, onEdit, onReload }: {
   const isUser = msg.type === 'user'
   const time   = formatTime(msg.timestamp)
 
-  if (isUser) {
-    return (
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, alignItems: 'flex-end' }}
-        onMouseEnter={e => { const el = e.currentTarget.querySelector('.msg-actions') as HTMLElement; if (el) el.style.opacity = '1' }}
-        onMouseLeave={e => { const el = e.currentTarget.querySelector('.msg-actions') as HTMLElement; if (el) el.style.opacity = '0' }}
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
-          <MsgActions content={msg.content} isUser onEdit={() => onEdit?.(msg.content)} isStream={false} />
-          <div className="msg-user">{msg.content}</div>
-          <span style={{ fontSize: 10, color: 'var(--text-muted)', paddingRight: 2 }}>{time}</span>
-        </div>
+  if (isUser) return (
+    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, alignItems: 'flex-end' }}
+      onMouseEnter={e => { const el = e.currentTarget.querySelector('.msg-actions') as HTMLElement; if (el) el.style.opacity = '1' }}
+      onMouseLeave={e => { const el = e.currentTarget.querySelector('.msg-actions') as HTMLElement; if (el) el.style.opacity = '0' }}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+        <MsgActions content={msg.content} isUser onEdit={() => onEdit?.(msg.content)} />
+        <div className="msg-user">{msg.content}</div>
+        <span style={{ fontSize: 10, color: 'var(--text-muted)', paddingRight: 2 }}>{time}</span>
       </div>
-    )
-  }
+    </div>
+  )
 
-  // Agent message
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}
       onMouseEnter={e => { const el = e.currentTarget.querySelector('.msg-actions') as HTMLElement; if (el) el.style.opacity = '1' }}
       onMouseLeave={e => { const el = e.currentTarget.querySelector('.msg-actions') as HTMLElement; if (el) el.style.opacity = '0' }}
     >
-      {msg.agentName && (
-        <div className={`agent-badge ${roleBadgeClass(msg.agentRole)}`}
-          style={{ display: 'inline-block', fontSize: 10, alignSelf: 'flex-start' }}>
-          {msg.agentName}
-        </div>
-      )}
-      <div className="msg-agent">
-        <MarkdownContent content={msg.content} />
-      </div>
+      {msg.agentName && <div className={`agent-badge ${roleBadgeClass(msg.agentRole)}`} style={{ display: 'inline-block', fontSize: 10, alignSelf: 'flex-start' }}>{msg.agentName}</div>}
+      <div className="msg-agent"><MarkdownContent content={msg.content} /></div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ fontSize: 10, color: 'var(--text-muted)', paddingLeft: 2 }}>{time}</span>
-        <MsgActions content={msg.content} isUser={false} onReload={onReload} isStream={false} />
+        <MsgActions content={msg.content} isUser={false} onReload={onReload} />
       </div>
     </div>
   )
@@ -178,13 +130,11 @@ function ThinkingBubble() {
   )
 }
 
-// ── ChatPanel ─────────────────────────────────────────────────────────────────
-
 export default function ChatPanel() {
   const { sessions, activeSessionId, addMessage, appendStream, finalizeStream, selectedModel, updateSessionTitle } = useAppStore()
-  const [input, setInput]       = useState('')
-  const [sending, setSending]   = useState(false)
-  const [editingText, setEditingText] = useState('')
+  const [input, setInput]     = useState('')
+  const [sending, setSending] = useState(false)
+  const [showTerminal, setShowTerminal] = useState(false)
   const bottomRef   = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -204,7 +154,6 @@ export default function ChatPanel() {
     ta.style.height = Math.min(ta.scrollHeight, 140) + 'px'
   }, [input])
 
-  // ── Title generation ────────────────────────────────────────────────────────
   async function generateTitle(sessionId: string, firstMessage: string) {
     try {
       const data = await api.sendChat(
@@ -218,7 +167,6 @@ export default function ChatPanel() {
     } catch { }
   }
 
-  // ── Send ────────────────────────────────────────────────────────────────────
   async function send(overrideText?: string) {
     const text = (overrideText ?? input).trim()
     if (!text || !session || sending) return
@@ -257,20 +205,16 @@ export default function ChatPanel() {
     }
   }
 
-  // ── Edit user message ───────────────────────────────────────────────────────
   function handleEdit(content: string) {
     setInput(content)
     textareaRef.current?.focus()
   }
 
-  // ── Reload last agent response ──────────────────────────────────────────────
   async function handleReload() {
     if (!session || sending) return
-    // Find the last user message before this agent response
     const userMsgs = messages.filter(m => m.type === 'user')
     if (userMsgs.length === 0) return
-    const lastUserMsg = userMsgs[userMsgs.length - 1]
-    await send(lastUserMsg.content)
+    await send(userMsgs[userMsgs.length - 1].content)
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -280,48 +224,66 @@ export default function ChatPanel() {
   const canSend        = !!input.trim() && !!session && !sending
   const modelShortName = selectedModel ? selectedModel.split(':')[0] : 'the AI'
   const placeholder    = !session ? 'Open a chat or project…'
-    : isChat ? 'Ask anything…'
-    : !firstAgent ? 'Add an agent from the sidebar…'
+    : isChat    ? 'Ask anything…'
+    : !firstAgent ? 'Add an agent from the right sidebar…'
     : `Instruct ${firstAgent.name}…`
+
+  // Terminal height: 40% of panel when open
+  const terminalH = showTerminal ? '38%' : '0px'
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', background: 'var(--bg-primary)' }}>
 
-      {/* Session title bar */}
+      {/* Session title bar with terminal toggle */}
       {session && (
-        <div style={{ flexShrink: 0, padding: '6px 16px', borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{session.title}</span>
-          <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, fontWeight: 600, background: 'var(--accent-dim)', color: 'var(--accent)' }}>{session.type}</span>
+        <div style={{ flexShrink: 0, padding: '5px 12px', borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {session.title}
+          </span>
+          <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, fontWeight: 600, background: 'var(--accent-dim)', color: 'var(--accent)', flexShrink: 0 }}>
+            {session.type}
+          </span>
+          {/* Terminal toggle button */}
+          <button
+            onClick={() => setShowTerminal(!showTerminal)}
+            title={showTerminal ? 'Hide terminal' : 'Show terminal'}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 5,
+              padding: '3px 8px', borderRadius: 6, border: 'none', cursor: 'pointer',
+              background: showTerminal ? 'var(--accent-dim)' : 'var(--bg-tertiary)',
+              color: showTerminal ? 'var(--accent)' : 'var(--text-muted)',
+              fontSize: 11, flexShrink: 0,
+            }}
+          >
+            <Terminal size={12} />
+            <span>Terminal</span>
+          </button>
         </div>
       )}
 
-      {/* Messages */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* Messages area */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
         {session?.summary && messages.length === 0 && (
           <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
             <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--accent)', marginBottom: 5 }}>Project summary</div>
             {session.summary}
           </div>
         )}
-
         {messages.length === 0 && !session?.summary && (
           <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--text-muted)' }}>
             <Bot size={36} style={{ marginBottom: 10, opacity: 0.3 }} />
             <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 4, color: 'var(--text-secondary)' }}>
-              {isChat ? 'Ask me anything' : isProject && !firstAgent ? 'No agent yet' : 'Ready to build'}
+              {isChat ? 'Ask me anything' : isProject && !firstAgent ? 'No agents yet' : 'Ready to build'}
             </div>
             <div style={{ fontSize: 12 }}>
               {isChat ? 'I can explain concepts, review code, or answer questions'
-                : isProject && !firstAgent ? 'Create agents from the workspace panel'
+                : isProject && !firstAgent ? 'Add an agent from the right sidebar to start coding'
                 : firstAgent ? `${firstAgent.name} (${firstAgent.role}) is ready` : ''}
             </div>
           </div>
         )}
-
         {messages.map((msg, i) => (
-          <MessageBubble
-            key={msg.id}
-            msg={msg}
+          <MessageBubble key={msg.id} msg={msg}
             onEdit={handleEdit}
             onReload={i === messages.length - 1 && msg.type === 'agent' ? handleReload : undefined}
           />
@@ -330,7 +292,7 @@ export default function ChatPanel() {
         <div ref={bottomRef} />
       </div>
 
-      {/* Input */}
+      {/* Input bar */}
       {session?.type !== 'terminal' && (
         <div style={{ flexShrink: 0, padding: '10px 16px 14px', background: 'var(--bg-primary)' }}>
           <div style={{ maxWidth: 680, margin: '0 auto' }}>
@@ -355,10 +317,17 @@ export default function ChatPanel() {
         </div>
       )}
 
+      {/* Terminal panel — slides up from bottom */}
+      {showTerminal && (
+        <div style={{ flexShrink: 0, height: '38%', minHeight: 180, borderTop: '2px solid var(--accent)' }}>
+          <TerminalPanel onClose={() => setShowTerminal(false)} />
+        </div>
+      )}
+
       <style>{`
         @keyframes spin  { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }
         @keyframes blink { 0%,100% { opacity:1 } 50% { opacity:0 } }
-        .msg-actions { opacity: 0; transition: opacity 0.15s; }
+        .msg-actions { opacity: 0 !important; transition: opacity 0.15s; }
       `}</style>
     </div>
   )
