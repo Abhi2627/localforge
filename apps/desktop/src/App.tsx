@@ -8,12 +8,11 @@ import ChatPanel from './components/ChatPanel'
 import RightSidebar from './components/RightSidebar'
 import WelcomeScreen from './components/WelcomeScreen'
 import TabStrip from './components/TabStrip'
+import TerminalPanel from './components/TerminalPanel'
 import './index.css'
 
-// Breakpoints at which sidebars auto-collapse
-const BP_LEFT_COLLAPSE  = 700   // px — collapse left bar below this
-const BP_RIGHT_COLLAPSE = 900   // px — collapse right bar below this
-const BP_LEFT_HIDE      = 480   // px — hide left bar completely (icon-only still shows)
+const BP_LEFT_COLLAPSE  = 700
+const BP_RIGHT_COLLAPSE = 900
 
 export default function App() {
   useWebSocket()
@@ -29,26 +28,44 @@ export default function App() {
   const isProjectSession = screen === 'session' && activeSession?.type === 'project'
   const showRight        = isProjectSession
 
-  // Track window width for responsive layout
-  const [winW, setWinW] = useState(window.innerWidth)
+  // Terminal state — lives at App level so it spans full width below the editor
+  const [terminalOpen, setTerminalOpen]   = useState(false)
+  const [terminalCwd,  setTerminalCwd]    = useState<string | undefined>(undefined)
 
+  // Called from LeftBar terminal button — opens system root terminal
+  const openSystemTerminal = useCallback(() => {
+    setTerminalCwd(undefined)   // undefined = home dir on server
+    setTerminalOpen(true)
+  }, [])
+
+  // Called when a project session opens the terminal
+  const openProjectTerminal = useCallback((cwd: string) => {
+    setTerminalCwd(cwd)
+    setTerminalOpen(true)
+  }, [])
+
+  // When active session changes, update terminal cwd if it's a project
+  useEffect(() => {
+    if (activeSession?.type === 'project' && activeSession.rootPath) {
+      setTerminalCwd(activeSession.rootPath)
+    }
+  }, [activeSessionId])
+
+  const [winW, setWinW] = useState(window.innerWidth)
   const handleResize = useCallback(() => {
     const w = window.innerWidth
     setWinW(w)
-    // Auto-collapse when window gets small — don't expand automatically
     if (w < BP_LEFT_COLLAPSE)  setLeftExpanded(false)
     if (w < BP_RIGHT_COLLAPSE) setRightExpanded(false)
   }, [setLeftExpanded, setRightExpanded])
 
   useEffect(() => {
     window.addEventListener('resize', handleResize)
-    handleResize() // run once on mount
+    handleResize()
     return () => window.removeEventListener('resize', handleResize)
   }, [handleResize])
 
-  // Guard against React StrictMode double-invocation
   const loadedRef = useRef(false)
-
   useEffect(() => {
     if (loadedRef.current) return
     loadedRef.current = true
@@ -61,32 +78,23 @@ export default function App() {
 
     api.getSessions().then(async ({ sessions: saved }) => {
       const clean = saved.filter((s: any) =>
-        s.title &&
-        s.title.trim() !== '' &&
-        s.title !== 'Chat' &&
-        !s.id.includes('titlegentmp')
+        s.title && s.title.trim() !== '' && s.title !== 'Chat' && !s.id.includes('titlegentmp')
       )
-
       for (const s of clean) {
         let messages: Message[] = []
         try {
           const result = await api.getSession(s.id)
           const seen = new Set<string>()
           messages = (result.messages ?? [])
-            .filter((m: any) => {
-              if (seen.has(m.id)) return false
-              seen.add(m.id)
-              return true
-            })
+            .filter((m: any) => { if (seen.has(m.id)) return false; seen.add(m.id); return true })
             .map((m: any) => ({
-              id:        m.id,
-              type:      (m.role === 'user' ? 'user' : 'agent') as Message['type'],
-              content:   m.content,
+              id: m.id,
+              type: (m.role === 'user' ? 'user' : 'agent') as Message['type'],
+              content: m.content,
               agentName: m.agentName ?? undefined,
               timestamp: new Date(m.createdAt).getTime(),
             }))
         } catch { }
-
         loadSession({
           id: s.id, type: s.type, title: s.title,
           rootPath: s.rootPath, summary: s.summary,
@@ -98,43 +106,61 @@ export default function App() {
     }).catch(console.error)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Compute column widths responsively
-  const isNarrow     = winW < BP_LEFT_COLLAPSE
-  const leftW        = leftExpanded && !isNarrow ? '220px' : '48px'
-  const rightW       = showRight
-    ? (rightExpanded && winW >= BP_RIGHT_COLLAPSE ? '260px' : '40px')
-    : '0px'
+  const isNarrow = winW < BP_LEFT_COLLAPSE
+  const leftW    = leftExpanded && !isNarrow ? '220px' : '48px'
+  const rightW   = showRight ? (rightExpanded && winW >= BP_RIGHT_COLLAPSE ? '280px' : '40px') : '0px'
+  const cols     = showRight ? `${leftW} 1fr ${rightW}` : `${leftW} 1fr`
 
-  const cols = showRight
-    ? `${leftW} 1fr ${rightW}`
-    : `${leftW} 1fr`
+  // Terminal height
+  const TERMINAL_H = 260
 
   return (
     <div style={{
       display: 'grid',
       gridTemplateColumns: cols,
-      gridTemplateRows: '40px 1fr',
-      height: '100vh',
-      width: '100vw',
-      overflow: 'hidden',
-      transition: 'grid-template-columns 0.2s ease',
+      gridTemplateRows: `40px 1fr${terminalOpen ? ` ${TERMINAL_H}px` : ''}`,
+      height: '100vh', width: '100vw', overflow: 'hidden',
+      transition: 'grid-template-columns 0.2s ease, grid-template-rows 0.2s ease',
     }}>
+      {/* Top bar — spans all columns */}
       <div style={{ gridColumn: '1 / -1', minWidth: 0 }}>
         <TopBar />
       </div>
-      <div style={{ minWidth: 0, overflow: 'hidden' }}>
-        <LeftBar />
+
+      {/* Left sidebar */}
+      <div style={{ minWidth: 0, overflow: 'hidden', gridRow: terminalOpen ? '2 / 3' : '2' }}>
+        <LeftBar
+          onOpenTerminal={openSystemTerminal}
+          onOpenProjectTerminal={openProjectTerminal}
+        />
       </div>
-      <div style={{
-        display: 'flex', flexDirection: 'column',
-        overflow: 'hidden', minHeight: 0, minWidth: 0,
-      }}>
+
+      {/* Main content */}
+      <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0, minWidth: 0 }}>
         <TabStrip />
         {screen === 'welcome' ? <WelcomeScreen /> : <ChatPanel />}
       </div>
+
+      {/* Right sidebar */}
       {showRight && (
         <div style={{ minWidth: 0, overflow: 'hidden' }}>
-          <RightSidebar />
+          <RightSidebar onOpenTerminal={openProjectTerminal} />
+        </div>
+      )}
+
+      {/* Terminal — spans all columns at the bottom, VSCode-style */}
+      {terminalOpen && (
+        <div style={{
+          gridColumn: '1 / -1',
+          borderTop: '2px solid var(--accent)',
+          background: '#0a0a0a',
+          minHeight: 0, overflow: 'hidden',
+          display: 'flex', flexDirection: 'column',
+        }}>
+          <TerminalPanel
+            cwd={terminalCwd}
+            onClose={() => setTerminalOpen(false)}
+          />
         </div>
       )}
     </div>

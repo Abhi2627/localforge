@@ -24,9 +24,9 @@ function MarkdownContent({ content }: { content: string }) {
   return (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
       p:      ({ children }) => <p style={{ margin: '0 0 8px', lineHeight: 1.7 }}>{children}</p>,
-      h1:     ({ children }) => <h1 style={{ fontSize: 16, fontWeight: 700, margin: '12px 0 6px', color: 'var(--text-primary)' }}>{children}</h1>,
-      h2:     ({ children }) => <h2 style={{ fontSize: 14, fontWeight: 700, margin: '10px 0 5px', color: 'var(--text-primary)' }}>{children}</h2>,
-      h3:     ({ children }) => <h3 style={{ fontSize: 13, fontWeight: 600, margin: '8px 0 4px', color: 'var(--text-primary)' }}>{children}</h3>,
+      h1:     ({ children }) => <h1 style={{ fontSize: 16, fontWeight: 700, margin: '12px 0 6px' }}>{children}</h1>,
+      h2:     ({ children }) => <h2 style={{ fontSize: 14, fontWeight: 700, margin: '10px 0 5px' }}>{children}</h2>,
+      h3:     ({ children }) => <h3 style={{ fontSize: 13, fontWeight: 600, margin: '8px 0 4px' }}>{children}</h3>,
       ul:     ({ children }) => <ul style={{ margin: '4px 0 8px', paddingLeft: 20 }}>{children}</ul>,
       ol:     ({ children }) => <ol style={{ margin: '4px 0 8px', paddingLeft: 20 }}>{children}</ol>,
       li:     ({ children }) => <li style={{ margin: '3px 0', lineHeight: 1.6 }}>{children}</li>,
@@ -143,8 +143,9 @@ export default function ChatPanel() {
   const isProject  = session?.type === 'project'
   const isChat     = session?.type === 'chat'
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) },
-    [messages.length, messages[messages.length - 1]?.content])
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages.length, messages[messages.length - 1]?.content])
 
   useEffect(() => {
     const ta = textareaRef.current
@@ -171,23 +172,36 @@ export default function ChatPanel() {
     if (!text || !session || sending) return
     if (!overrideText) setInput('')
     setSending(true)
+
     const msgId      = nanoid()
     const isFirstMsg = messages.filter(m => m.type === 'user').length === 0
+
     addMessage(session.id, { id: msgId, type: 'user', content: text, timestamp: Date.now() })
     api.saveMessage(msgId, session.id, 'user', text).catch(() => {})
+
     try {
       if (isProject && firstAgent) {
         await api.instruct(session.id, firstAgent.id, text)
       } else if (isChat) {
+        // Build complete conversation history — include ALL user + agent messages
+        // This is what gives the model memory of the current conversation
         const history = messages
-          .filter(m => m.type === 'user' || m.type === 'agent').slice(-20)
-          .map(m => ({ role: m.type === 'user' ? 'user' : 'assistant', content: m.content }))
+          .filter(m => m.type === 'user' || m.type === 'agent')
+          .map(m => ({
+            role:    m.type === 'user' ? 'user' : 'assistant',
+            content: m.content,
+          }))
+        // Note: we intentionally do NOT slice here — the server slices to last 10
+        // so the model always sees the full available context
+
         const streamTaskId = nanoid()
         setSending(false)
+
         await api.streamChat(text, session.id, history, streamTaskId, (chunk) => {
           appendStream(session.id, streamTaskId, chunk)
         })
         finalizeStream(session.id, streamTaskId)
+
         if (isFirstMsg && session.title === 'New chat') generateTitle(session.id, text)
       }
     } catch (err: any) {
@@ -212,15 +226,15 @@ export default function ChatPanel() {
 
   const canSend        = !!input.trim() && !!session && !sending
   const modelShortName = selectedModel ? selectedModel.split(':')[0] : 'the AI'
-  const placeholder    = !session ? 'Open a chat or project…'
-    : isChat    ? 'Ask anything…'
-    : !firstAgent ? 'Add an agent from the right sidebar…'
+  const placeholder    = !session    ? 'Open a chat or project…'
+    : isChat           ? 'Ask anything…'
+    : !firstAgent      ? 'Add an agent from the right sidebar…'
     : `Instruct ${firstAgent.name}…`
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', background: 'var(--bg-primary)' }}>
 
-      {/* Session title bar */}
+      {/* Session title bar — no project summary here */}
       {session && (
         <div style={{ flexShrink: 0, padding: '5px 12px', borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -234,25 +248,22 @@ export default function ChatPanel() {
 
       {/* Messages */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
-        {session?.summary && messages.length === 0 && (
-          <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-            <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--accent)', marginBottom: 5 }}>Project summary</div>
-            {session.summary}
-          </div>
-        )}
-        {messages.length === 0 && !session?.summary && (
+        {messages.length === 0 && (
           <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--text-muted)' }}>
             <Bot size={36} style={{ marginBottom: 10, opacity: 0.3 }} />
             <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 4, color: 'var(--text-secondary)' }}>
-              {isChat ? 'Ask me anything' : isProject && !firstAgent ? 'No agents yet' : 'Ready to build'}
+              {isChat    ? 'Ask me anything'
+               : isProject && !firstAgent ? 'No agents yet'
+               : 'Ready to build'}
             </div>
             <div style={{ fontSize: 12 }}>
-              {isChat ? 'I can explain concepts, review code, or answer questions'
-                : isProject && !firstAgent ? 'Add an agent from the right sidebar to start coding'
-                : firstAgent ? `${firstAgent.name} (${firstAgent.role}) is ready` : ''}
+              {isChat    ? 'I can explain concepts, review code, or answer questions'
+               : isProject && !firstAgent ? 'Add an agent from the right sidebar to start coding'
+               : firstAgent ? `${firstAgent.name} (${firstAgent.role}) is ready` : ''}
             </div>
           </div>
         )}
+
         {messages.map((msg, i) => (
           <MessageBubble key={msg.id} msg={msg}
             onEdit={handleEdit}
@@ -264,29 +275,27 @@ export default function ChatPanel() {
       </div>
 
       {/* Input */}
-      {session?.type !== 'terminal' && (
-        <div style={{ flexShrink: 0, padding: '10px 16px 14px', background: 'var(--bg-primary)' }}>
-          <div style={{ maxWidth: 680, margin: '0 auto' }}>
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, background: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: 12, padding: '6px 8px 6px 12px' }}>
-              <button className="icon-btn" title="Upload file" style={{ width: 28, height: 28, flexShrink: 0, marginBottom: 1 }}><Paperclip size={14} /></button>
-              <textarea ref={textareaRef} value={input} onChange={e => setInput(e.target.value)}
-                onKeyDown={onKeyDown} placeholder={placeholder}
-                disabled={!session || sending} rows={1}
-                style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', resize: 'none', color: 'var(--text-primary)', fontSize: 13, lineHeight: 1.6, fontFamily: 'inherit', padding: '2px 0', maxHeight: 140, overflowY: 'auto' }}
-              />
-              <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0, marginBottom: 1 }}>
-                <button className="icon-btn" title="Voice" style={{ width: 28, height: 28 }}><Mic size={14} /></button>
-                <button onClick={() => send()} disabled={!canSend} style={{ width: 30, height: 30, borderRadius: 8, border: 'none', background: canSend ? 'var(--accent)' : 'var(--bg-hover)', color: canSend ? 'white' : 'var(--text-muted)', cursor: canSend ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.15s, color 0.15s', flexShrink: 0 }}>
-                  <Send size={13} />
-                </button>
-              </div>
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', marginTop: 6 }}>
-              {modelShortName} is AI and can make mistakes. Please double-check responses.
+      <div style={{ flexShrink: 0, padding: '10px 16px 14px', background: 'var(--bg-primary)' }}>
+        <div style={{ maxWidth: 680, margin: '0 auto' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, background: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: 12, padding: '6px 8px 6px 12px' }}>
+            <button className="icon-btn" title="Attach file" style={{ width: 28, height: 28, flexShrink: 0, marginBottom: 1 }}><Paperclip size={14} /></button>
+            <textarea ref={textareaRef} value={input} onChange={e => setInput(e.target.value)}
+              onKeyDown={onKeyDown} placeholder={placeholder}
+              disabled={!session || sending} rows={1}
+              style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', resize: 'none', color: 'var(--text-primary)', fontSize: 13, lineHeight: 1.6, fontFamily: 'inherit', padding: '2px 0', maxHeight: 140, overflowY: 'auto' }}
+            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0, marginBottom: 1 }}>
+              <button className="icon-btn" title="Voice" style={{ width: 28, height: 28 }}><Mic size={14} /></button>
+              <button onClick={() => send()} disabled={!canSend} style={{ width: 30, height: 30, borderRadius: 8, border: 'none', background: canSend ? 'var(--accent)' : 'var(--bg-hover)', color: canSend ? 'white' : 'var(--text-muted)', cursor: canSend ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.15s', flexShrink: 0 }}>
+                <Send size={13} />
+              </button>
             </div>
           </div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', marginTop: 6 }}>
+            {modelShortName} is AI and can make mistakes. Please double-check responses.
+          </div>
         </div>
-      )}
+      </div>
 
       <style>{`
         @keyframes spin  { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }

@@ -38,8 +38,9 @@ function buildSystemPrompt(selectedModel: string, summary?: string | null): stri
   )
 }
 
+// Keep last 20 turns of history for context
 function mapHistory(history: Array<{ role: string; content: string }>) {
-  return history.slice(-10).map(h => ({ role: h.role as ChatRole, content: h.content }))
+  return history.slice(-20).map(h => ({ role: h.role as ChatRole, content: h.content }))
 }
 
 async function bootstrap() {
@@ -64,7 +65,7 @@ async function bootstrap() {
     socket.on('close', () => wsClients.delete(socket))
   })
 
-  // ── PTY Terminal WebSocket ─────────────────────────────────────────────────
+  // ── PTY Terminal WebSocket — real shell, VSCode-style ─────────────────────
   server.get<{ Querystring: { cwd?: string } }>('/terminal', { websocket: true }, (socket, req) => {
     const cwd   = req.query.cwd ?? os.homedir()
     const shell = os.platform() === 'win32'
@@ -79,20 +80,25 @@ async function bootstrap() {
         cols: 120,
         rows: 30,
         cwd,
-        env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' } as Record<string, string>,
+        env: {
+          ...process.env,
+          TERM: 'xterm-256color',
+          COLORTERM: 'truecolor',
+          TERM_PROGRAM: 'LocalForge',
+        } as Record<string, string>,
       })
 
-      // PTY output → WebSocket
+      // PTY output → browser
       ptyProc.onData((data: string) => {
-        try { socket.send(data) } catch { /* client disconnected */ }
+        try { socket.send(data) } catch { /* client gone */ }
       })
 
       ptyProc.onExit(() => {
-        try { socket.send('\r\n\x1b[90m[shell exited]\x1b[0m\r\n') } catch { }
+        try { socket.send('\r\n\x1b[90m[shell exited — close to dismiss]\x1b[0m\r\n') } catch { }
         try { socket.close() } catch { }
       })
 
-      // WebSocket input → PTY
+      // Browser keystrokes / resize → PTY
       socket.on('message', (raw: Buffer | string) => {
         if (!ptyProc) return
         try {
@@ -106,7 +112,6 @@ async function bootstrap() {
             )
           }
         } catch {
-          // Not JSON — write raw (fallback)
           ptyProc.write(raw.toString())
         }
       })
@@ -186,23 +191,27 @@ async function bootstrap() {
     return { summary: getSession(req.params.sessionId)?.summary ?? null }
   })
 
-  // ── Chat streaming — SSE ───────────────────────────────────────────────────
+  // ── Chat streaming — SSE, context-aware ───────────────────────────────────
   server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>(
     '/chat/stream', async (req, reply) => {
       const { message, sessionId, history = [] } = req.body
       if (!message) { reply.status(400).send('No message'); return }
+
       const { selectedModel } = loadConfig()
       if (!getSession(sessionId)) upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: selectedModel })
       const session  = getSession(sessionId)
+
       const messages = [
         { role: 'system' as ChatRole, content: buildSystemPrompt(selectedModel, session?.summary) },
-        ...mapHistory(history),
+        ...mapHistory(history),  // up to 20 turns of context
         { role: 'user' as ChatRole, content: message },
       ]
+
       reply.raw.setHeader('Content-Type', 'text/event-stream')
       reply.raw.setHeader('Cache-Control', 'no-cache')
       reply.raw.setHeader('Connection', 'keep-alive')
       reply.raw.flushHeaders()
+
       let fullReply = ''
       try {
         await chat(selectedModel, messages, (chunk) => {
@@ -214,12 +223,14 @@ async function bootstrap() {
       }
       reply.raw.write('data: [DONE]\n\n')
       reply.raw.end()
+
+      // Save only the assistant reply — client saves user message
       const { randomUUID } = await import('crypto')
       saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: fullReply })
     }
   )
 
-  // ── Chat non-streaming (title gen only, no persistence) ───────────────────
+  // ── Chat non-streaming (title gen only) ───────────────────────────────────
   server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>(
     '/chat', async (req) => {
       const { message, sessionId, history = [] } = req.body
@@ -275,11 +286,10 @@ async function bootstrap() {
 
   const PORT = Number(process.env.PORT ?? 3001)
   await server.listen({ port: PORT, host: '0.0.0.0' })
-  console.log(`\n🔨 LocalForge agent server running on port ${PORT}`)
-  console.log(`   Mode: ${mode} | Model: ${loadConfig().selectedModel}`)
-  console.log(`   Terminal: ws://localhost:${PORT}/terminal\n`)
+  console.log(`\n🔨 LocalForge agent server  :${PORT}`)
+  console.log(`   Terminal  ws://localhost:${PORT}/terminal`)
+  console.log(`   Model     ${loadConfig().selectedModel}\n`)
 }
 
 process.on('SIGINT', async () => { await server.close(); closeDb(); process.exit(0) })
-
-bootstrap().catch(err => { console.error('[Server] Fatal startup error:', err); process.exit(1) })
+bootstrap().catch(err => { console.error('[Server] Fatal:', err); process.exit(1) })

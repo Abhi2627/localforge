@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { MessageCircle, FolderOpen, Puzzle, Settings, User, ChevronDown, ChevronRight, MoreHorizontal } from 'lucide-react'
+import { MessageCircle, FolderOpen, Puzzle, Settings, User, ChevronDown, ChevronRight, MoreHorizontal, Terminal } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { api } from '../hooks/useApi'
 import { nanoid } from '../hooks/nanoid'
@@ -7,6 +7,11 @@ import NewProjectModal from './NewProjectModal'
 import AccountModal from './AccountModal'
 
 const STORAGE_KEY = 'localforge_username'
+
+interface LeftBarProps {
+  onOpenTerminal: () => void
+  onOpenProjectTerminal: (cwd: string) => void
+}
 
 function SessionItem({ session }: { session: any }) {
   const { activeSessionId, setActiveSession, updateSessionTitle, closeSession } = useAppStore()
@@ -168,15 +173,30 @@ function ProjectSection({ sessions, expanded }: { sessions: any[]; expanded: boo
   )
 }
 
-export default function LeftBar() {
-  const { sessions, leftExpanded: expanded, setUserName } = useAppStore()
+export default function LeftBar({ onOpenTerminal, onOpenProjectTerminal }: LeftBarProps) {
+  const { sessions, leftExpanded: expanded, setUserName, activeSessionId } = useAppStore()
   const [showAccount, setShowAccount] = useState(false)
+  const activeSession = sessions.find(s => s.id === activeSessionId)
 
-  // Load saved username from localStorage on mount
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY)
     if (saved) setUserName(saved)
   }, [])
+
+  function handleTerminalClick() {
+    // If active session is a project with rootPath, open project terminal
+    if (activeSession?.type === 'project' && activeSession.rootPath) {
+      onOpenProjectTerminal(activeSession.rootPath)
+    } else {
+      onOpenTerminal()
+    }
+  }
+
+  const bottomButtons = [
+    { icon: Terminal,  label: 'Terminal', action: handleTerminalClick },
+    { icon: User,      label: 'Account',  action: () => setShowAccount(true) },
+    { icon: Settings,  label: 'Settings', action: () => {} },
+  ]
 
   return (
     <div style={{ background: 'var(--bg-secondary)', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -195,19 +215,19 @@ export default function LeftBar() {
       </div>
 
       <div style={{ borderTop: '1px solid var(--border)', padding: '4px 0' }}>
-        <button
-          onClick={() => setShowAccount(true)}
-          title={!expanded ? 'Account' : undefined}
-          style={{ display: 'flex', alignItems: 'center', gap: expanded ? 8 : 0, justifyContent: expanded ? 'flex-start' : 'center', width: '100%', padding: expanded ? '7px 10px' : '9px 0', border: 'none', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12 }}>
-          <User size={15} />
-          {expanded && <span>Account</span>}
-        </button>
-        <button
-          title={!expanded ? 'Settings' : undefined}
-          style={{ display: 'flex', alignItems: 'center', gap: expanded ? 8 : 0, justifyContent: expanded ? 'flex-start' : 'center', width: '100%', padding: expanded ? '7px 10px' : '9px 0', border: 'none', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12 }}>
-          <Settings size={15} />
-          {expanded && <span>Settings</span>}
-        </button>
+        {bottomButtons.map(({ icon: Icon, label, action }) => (
+          <button
+            key={label}
+            onClick={action}
+            title={!expanded ? label : undefined}
+            style={{ display: 'flex', alignItems: 'center', gap: expanded ? 8 : 0, justifyContent: expanded ? 'flex-start' : 'center', width: '100%', padding: expanded ? '7px 10px' : '9px 0', border: 'none', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12 }}
+            onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'}
+            onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'}
+          >
+            <Icon size={15} />
+            {expanded && <span>{label}</span>}
+          </button>
+        ))}
       </div>
 
       {showAccount && <AccountModal onClose={() => setShowAccount(false)} />}
