@@ -55,9 +55,13 @@ interface AppState {
   leftExpanded:    boolean
   rightExpanded:   boolean
   isConnected:     boolean
+  userName:        string
 
   getRecentTabs:       () => Session[]
   setScreen:           (s: AppScreen) => void
+  // loadSession is for restoring from DB — does NOT change screen
+  loadSession:         (session: Session) => void
+  // addSession is for user-initiated new sessions — DOES change screen
   addSession:          (session: Session) => void
   setActiveSession:    (id: string) => void
   updateSessionTitle:  (id: string, title: string) => void
@@ -75,10 +79,11 @@ interface AppState {
   setLeftExpanded:     (v: boolean) => void
   setRightExpanded:    (v: boolean) => void
   setConnected:        (v: boolean) => void
+  setUserName:         (name: string) => void
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
-  screen:          'welcome',
+  screen:          'welcome',   // always start on welcome
   sessions:        [],
   activeSessionId: null,
   models:          [],
@@ -86,6 +91,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   leftExpanded:    true,
   rightExpanded:   true,
   isConnected:     false,
+  userName:        '',
 
   getRecentTabs: () => {
     const { sessions } = get()
@@ -98,8 +104,13 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setScreen: (screen) => set({ screen }),
 
-  // Idempotent — if session already exists, do NOT replace it.
-  // This prevents double-loading from DB on re-renders.
+  // Restore from DB — never changes screen, never duplicates
+  loadSession: (session) => set(s => {
+    if (s.sessions.find(x => x.id === session.id)) return s   // already loaded, skip
+    return { sessions: [...s.sessions, session] }              // no screen change
+  }),
+
+  // User-initiated new session — switches to session screen
   addSession: (session) => set(s => {
     if (s.sessions.find(x => x.id === session.id)) return s
     return { sessions: [...s.sessions, session], screen: 'session' }
@@ -110,7 +121,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     screen: 'session',
     sessions: s.sessions.map(sess => ({
       ...sess,
-      isActive: sess.id === id,
+      isActive:       sess.id === id,
       lastAccessedAt: sess.id === id ? Date.now() : sess.lastAccessedAt,
     })),
   })),
@@ -122,14 +133,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   closeSession: (id) => set(s => {
     const remaining = s.sessions.filter(sess => sess.id !== id)
     const newActive = remaining.length > 0 ? remaining[remaining.length - 1].id : null
-    return { sessions: remaining, activeSessionId: newActive, screen: newActive ? 'session' : 'welcome' }
+    return {
+      sessions:        remaining,
+      activeSessionId: newActive,
+      screen:          'welcome',   // always go back to welcome, not to another session
+    }
   }),
 
   addMessage: (sessionId, msg) => set(s => ({
     sessions: s.sessions.map(sess => {
       if (sess.id !== sessionId) return sess
-      // Deduplicate by message id
-      if (sess.messages.find(m => m.id === msg.id)) return sess
+      if (sess.messages.find(m => m.id === msg.id)) return sess  // deduplicate
       return { ...sess, messages: [...sess.messages, msg] }
     })
   })),
@@ -197,4 +211,5 @@ export const useAppStore = create<AppState>((set, get) => ({
   setLeftExpanded:  (v) => set({ leftExpanded: v }),
   setRightExpanded: (v) => set({ rightExpanded: v }),
   setConnected:     (v) => set({ isConnected: v }),
+  setUserName:      (name) => set({ userName: name }),
 }))

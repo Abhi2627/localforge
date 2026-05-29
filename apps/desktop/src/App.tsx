@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useAppStore, type Message } from './store/appStore'
 import { useWebSocket } from './hooks/useWebSocket'
 import { api } from './hooks/useApi'
@@ -16,14 +16,20 @@ export default function App() {
     setModels, setSelectedModel,
     screen, leftExpanded, rightExpanded,
     sessions, activeSessionId,
-    addSession,
+    loadSession,
   } = useAppStore()
 
   const activeSession    = sessions.find(s => s.id === activeSessionId)
   const isProjectSession = screen === 'session' && activeSession?.type === 'project'
   const showRight        = isProjectSession
 
+  // Guard against React StrictMode double-invocation
+  const loadedRef = useRef(false)
+
   useEffect(() => {
+    if (loadedRef.current) return
+    loadedRef.current = true
+
     // Load models
     api.getModels().then(({ models }) => {
       setModels(models)
@@ -31,40 +37,45 @@ export default function App() {
       if (selected) setSelectedModel(selected.name)
     }).catch(console.error)
 
-    // Load all sessions with their messages in one pass
-    // Build complete session objects BEFORE adding to store
-    // so there is zero cross-contamination between sessions
+    // Load persisted sessions — use loadSession (no screen change)
     api.getSessions().then(async ({ sessions: saved }) => {
       const clean = saved.filter((s: any) =>
         s.title &&
         s.title.trim() !== '' &&
         s.title !== 'Chat' &&
-        !s.id.endsWith('-titlegentmp')
+        !s.id.includes('titlegentmp')
       )
 
       for (const s of clean) {
-        // Fetch messages for this specific session
         let messages: Message[] = []
         try {
           const result = await api.getSession(s.id)
-          messages = (result.messages ?? []).map((m: any) => ({
-            id:        m.id,
-            type:      (m.role === 'user' ? 'user' : 'agent') as Message['type'],
-            content:   m.content,
-            agentName: m.agentName ?? undefined,
-            timestamp: new Date(m.createdAt).getTime(),
-          }))
+          // Deduplicate messages by ID at load time
+          const seen = new Set<string>()
+          messages = (result.messages ?? [])
+            .filter((m: any) => {
+              if (seen.has(m.id)) return false
+              seen.add(m.id)
+              return true
+            })
+            .map((m: any) => ({
+              id:        m.id,
+              type:      (m.role === 'user' ? 'user' : 'agent') as Message['type'],
+              content:   m.content,
+              agentName: m.agentName ?? undefined,
+              timestamp: new Date(m.createdAt).getTime(),
+            }))
         } catch { }
 
-        // Add session with its messages already populated
-        addSession({
+        // loadSession never changes screen — welcome stays on welcome
+        loadSession({
           id:             s.id,
           type:           s.type,
           title:          s.title,
           rootPath:       s.rootPath,
           summary:        s.summary,
           agents:         [],
-          messages,           // ← messages included upfront, not added separately
+          messages,
           allFiles:       [],
           writtenFiles:   [],
           lastAccessedAt: new Date(s.updatedAt).getTime(),

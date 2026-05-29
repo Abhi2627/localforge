@@ -6,7 +6,7 @@ import NewProjectModal from './NewProjectModal'
 
 const FEATURES = [
   { title: 'Multi-agent orchestration',  desc: 'Run frontend, backend and test agents in parallel or sequentially based on your hardware.' },
-  { title: 'Fully local & private',       desc: 'No data leaves your machine. Works completely offline with Ollama-powered models.' },
+  { title: 'Fully local & private',      desc: 'No data leaves your machine. Works completely offline with Ollama-powered models.' },
   { title: 'Crash recovery',             desc: 'Write-ahead log ensures agents resume from the exact task after any crash — no re-prompting.' },
   { title: 'Internet RAG',               desc: 'Auto-fetches live web context when the model hits its knowledge cutoff. No retraining needed.' },
   { title: 'Knowledge graph',            desc: 'Tracks every function and interface written to prevent cross-agent drift across files.' },
@@ -27,7 +27,6 @@ const FEATURES = [
   { title: 'Tab strip',                  desc: 'Quickly switch between your most recently accessed chats, projects, and terminals.' },
 ]
 
-// Split into 5 rows of 4
 const ROWS = [
   FEATURES.slice(0,  4),
   FEATURES.slice(4,  8),
@@ -54,15 +53,11 @@ function FeatureCard({ title, desc }: { title: string; desc: string }) {
 
 function ScrollRow({ items, direction }: { items: typeof ROWS[0]; direction: 'left' | 'right' }) {
   const tripled = [...items, ...items, ...items]
-  const cardW = 210  // 200px + 10px gap
-  const shift = `${cardW * items.length}px`
+  const cardW   = 210
+  const shift   = `${cardW * items.length}px`
   return (
     <div style={{ overflow: 'hidden', width: '100%' }}>
-      <div style={{
-        display: 'flex', gap: 10,
-        animation: `scroll-${direction}-${items.length} 36s linear infinite`,
-        width: 'max-content',
-      }}>
+      <div style={{ display: 'flex', gap: 10, animation: `scroll-${direction}-${items.length} 36s linear infinite`, width: 'max-content' }}>
         {tripled.map((f, i) => <FeatureCard key={i} {...f} />)}
       </div>
       <style>{`
@@ -74,31 +69,37 @@ function ScrollRow({ items, direction }: { items: typeof ROWS[0]; direction: 'le
 }
 
 export default function WelcomeScreen() {
-  const { addSession, setActiveSession, isConnected } = useAppStore()
+  const { addSession, setActiveSession, isConnected, userName } = useAppStore()
   const [showProjectModal, setShowProjectModal] = useState(false)
+
+  const greeting = userName
+    ? `Welcome onboard, ${userName} 👋`
+    : 'Welcome to LocalForge'
+
+  const subtext = userName
+    ? 'Local-first AI coding agent. No cloud. No subscription. Everything runs on your machine.'
+    : 'Local-first AI coding agent. No cloud. No subscription. Everything runs on your machine.'
 
   function newChat() {
     const id = nanoid()
     addSession({ id, type: 'chat', title: 'New chat', agents: [], messages: [], allFiles: [], writtenFiles: [], lastAccessedAt: Date.now(), isActive: true })
     setActiveSession(id)
-    // Persist to DB
     api.createSession(id, 'chat', 'New chat').catch(console.error)
   }
 
   return (
-    <div style={{
-      flex: 1, display: 'flex', flexDirection: 'column',
-      alignItems: 'center', justifyContent: 'center',
-      overflow: 'hidden', background: 'var(--bg-primary)',
-      gap: 12,
-    }}>
-      {/* Heading */}
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', background: 'var(--bg-primary)', gap: 12 }}>
+
       <div style={{ textAlign: 'center', padding: '0 20px' }}>
         <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 8, letterSpacing: '-0.5px' }}>
-          Welcome to <span style={{ color: 'var(--accent)' }}>LocalForge</span>
+          {userName ? (
+            <>Welcome onboard, <span style={{ color: 'var(--accent)' }}>{userName}</span> 👋</>
+          ) : (
+            <>Welcome to <span style={{ color: 'var(--accent)' }}>LocalForge</span></>
+          )}
         </div>
         <div style={{ fontSize: 13, color: 'var(--text-secondary)', maxWidth: 420, margin: '0 auto' }}>
-          Local-first AI coding agent. No cloud. No subscription. Everything runs on your machine.
+          {subtext}
         </div>
         <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 16 }}>
           <button onClick={newChat} style={{ background: 'transparent', border: '1px solid var(--border-light)', borderRadius: 8, padding: '8px 24px', color: 'var(--text-primary)', fontSize: 13, cursor: 'pointer', fontWeight: 500 }}>
@@ -110,12 +111,9 @@ export default function WelcomeScreen() {
         </div>
       </div>
 
-      {/* Scrolling rows */}
       {isConnected ? (
         <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {ROWS.map((row, i) => (
-            <ScrollRow key={i} items={row} direction={DIRECTIONS[i]} />
-          ))}
+          {ROWS.map((row, i) => <ScrollRow key={i} items={row} direction={DIRECTIONS[i]} />)}
         </div>
       ) : (
         <div style={{ padding: '0 40px', maxWidth: 560, width: '100%' }}>

@@ -4,22 +4,22 @@ import { useAppStore } from '../store/appStore'
 import { api } from '../hooks/useApi'
 import { nanoid } from '../hooks/nanoid'
 import NewProjectModal from './NewProjectModal'
+import AccountModal from './AccountModal'
+
+const STORAGE_KEY = 'localforge_username'
 
 function SessionItem({ session }: { session: any }) {
   const { activeSessionId, setActiveSession, updateSessionTitle, closeSession } = useAppStore()
-  const isActive   = session.id === activeSessionId
-  const [showMenu, setShowMenu] = useState(false)
-  const [renaming, setRenaming] = useState(false)
+  const isActive  = session.id === activeSessionId
+  const [showMenu, setShowMenu]   = useState(false)
+  const [renaming, setRenaming]   = useState(false)
   const [renameVal, setRenameVal] = useState(session.title)
   const menuRef = useRef<HTMLDivElement>(null)
 
-  // Close menu when clicking outside
   useEffect(() => {
     if (!showMenu) return
     function handleClick(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setShowMenu(false)
-      }
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setShowMenu(false)
     }
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
@@ -59,15 +59,12 @@ function SessionItem({ session }: { session: any }) {
         {renaming ? (
           <input autoFocus value={renameVal}
             onChange={e => setRenameVal(e.target.value)}
-            onKeyDown={handleRename}
-            onBlur={() => setRenaming(false)}
+            onKeyDown={handleRename} onBlur={() => setRenaming(false)}
             onClick={e => e.stopPropagation()}
             style={{ flex: 1, background: 'var(--bg-tertiary)', border: '1px solid var(--accent)', borderRadius: 4, padding: '1px 6px', color: 'var(--text-primary)', fontSize: 12, outline: 'none' }}
           />
         ) : (
-          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {session.title}
-          </span>
+          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{session.title}</span>
         )}
         <button onClick={e => { e.stopPropagation(); setShowMenu(v => !v) }}
           style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: 0, display: 'flex', opacity: 0.6 }}>
@@ -172,7 +169,14 @@ function ProjectSection({ sessions, expanded }: { sessions: any[]; expanded: boo
 }
 
 export default function LeftBar() {
-  const { sessions, leftExpanded: expanded } = useAppStore()
+  const { sessions, leftExpanded: expanded, setUserName } = useAppStore()
+  const [showAccount, setShowAccount] = useState(false)
+
+  // Load saved username from localStorage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem(STORAGE_KEY)
+    if (saved) setUserName(saved)
+  }, [])
 
   return (
     <div style={{ background: 'var(--bg-secondary)', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -189,14 +193,24 @@ export default function LeftBar() {
           </button>
         )}
       </div>
+
       <div style={{ borderTop: '1px solid var(--border)', padding: '4px 0' }}>
-        {[{ Icon: User, label: 'Account' }, { Icon: Settings, label: 'Settings' }].map(({ Icon, label }) => (
-          <button key={label} title={!expanded ? label : undefined} style={{ display: 'flex', alignItems: 'center', gap: expanded ? 8 : 0, justifyContent: expanded ? 'flex-start' : 'center', width: '100%', padding: expanded ? '7px 10px' : '9px 0', border: 'none', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12 }}>
-            <Icon size={15} />
-            {expanded && <span>{label}</span>}
-          </button>
-        ))}
+        <button
+          onClick={() => setShowAccount(true)}
+          title={!expanded ? 'Account' : undefined}
+          style={{ display: 'flex', alignItems: 'center', gap: expanded ? 8 : 0, justifyContent: expanded ? 'flex-start' : 'center', width: '100%', padding: expanded ? '7px 10px' : '9px 0', border: 'none', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12 }}>
+          <User size={15} />
+          {expanded && <span>Account</span>}
+        </button>
+        <button
+          title={!expanded ? 'Settings' : undefined}
+          style={{ display: 'flex', alignItems: 'center', gap: expanded ? 8 : 0, justifyContent: expanded ? 'flex-start' : 'center', width: '100%', padding: expanded ? '7px 10px' : '9px 0', border: 'none', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12 }}>
+          <Settings size={15} />
+          {expanded && <span>Settings</span>}
+        </button>
       </div>
+
+      {showAccount && <AccountModal onClose={() => setShowAccount(false)} />}
     </div>
   )
 }
