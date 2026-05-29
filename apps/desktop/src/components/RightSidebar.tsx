@@ -52,6 +52,8 @@ function buildTree(files: string[], rootPath: string, newFiles: Set<string>): Tr
 
 function FileTreeNode({ node, depth = 0, filter }: { node: TreeNode; depth?: number; filter: string }) {
   const [open, setOpen] = useState(depth < 2)  // auto-expand first 2 levels
+  const activeSessionId = useAppStore(s => s.activeSessionId)
+  const openFile = useAppStore(s => s.openFile)
 
   const matches = !filter || node.name.toLowerCase().includes(filter.toLowerCase()) || node.children.some(c => c.name.toLowerCase().includes(filter.toLowerCase()))
   if (!matches && filter) return null
@@ -97,9 +99,10 @@ function FileTreeNode({ node, depth = 0, filter }: { node: TreeNode; depth?: num
     <div style={{
       display: 'flex', alignItems: 'center', gap: 5,
       padding: `2px 8px 2px ${20 + indent}px`,
-      cursor: 'default', fontSize: 12,
+      cursor: 'pointer', fontSize: 12,
       color: node.isNew ? 'var(--green)' : 'var(--text-secondary)',
     }}
+      onClick={() => { if (activeSessionId) openFile(activeSessionId, node.path) }}
       onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)'}
       onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}
     >
@@ -144,15 +147,6 @@ function CollapsedRight() {
   )
 }
 
-function SectionHeader({ icon: Icon, title, extra }: { icon: any; title: string; extra?: React.ReactNode }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderBottom: '1px solid var(--border)', flexShrink: 0, userSelect: 'none' }}>
-      <Icon size={12} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-      <span style={{ flex: 1, fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>{title}</span>
-      {extra}
-    </div>
-  )
-}
 
 function EmptyNote({ text }: { text: string }) {
   return <div style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>{text}</div>
@@ -213,7 +207,7 @@ function Section({ icon, title, extra, defaultOpen = true, children, flex = 1 }:
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function RightSidebar({ onOpenTerminal }: RightSidebarProps) {
+export default function RightSidebar({ onOpenTerminal: _onOpenTerminal }: RightSidebarProps) {
   const { sessions, activeSessionId, rightExpanded } = useAppStore()
   const session = sessions.find(s => s.id === activeSessionId)
 
@@ -256,18 +250,22 @@ export default function RightSidebar({ onOpenTerminal }: RightSidebarProps) {
       {/* Sections */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
 
-        {/* Files — VSCode-style tree, flex: 2 so it gets most space */}
-        <div style={{ flex: 2, display: 'flex', flexDirection: 'column', overflow: 'hidden', borderBottom: '1px solid var(--border)', minHeight: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', flexShrink: 0, borderBottom: '1px solid var(--border)' }}>
-            <FolderOpen size={12} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-            <span style={{ flex: 1, fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>
-              Explorer {mergedFiles.length > 0 ? `(${mergedFiles.length})` : ''}
-            </span>
+        {/* Explorer Section */}
+        <Section
+          icon={<FolderOpen />}
+          title={`Explorer ${mergedFiles.length > 0 ? `(${mergedFiles.length})` : ''}`}
+          defaultOpen={true}
+          flex={2}
+          extra={
             <button className="icon-btn" style={{ width: 16, height: 16 }} title="Search files"
-              onClick={() => setShowSearch(!showSearch)}>
+              onClick={(e) => {
+                e.stopPropagation()
+                setShowSearch(!showSearch)
+              }}>
               <Search size={10} />
             </button>
-          </div>
+          }
+        >
           {showSearch && (
             <input autoFocus placeholder="Filter files…" value={fileSearch}
               onChange={e => setFileSearch(e.target.value)}
@@ -280,31 +278,33 @@ export default function RightSidebar({ onOpenTerminal }: RightSidebarProps) {
               : tree.map(node => <FileTreeNode key={node.path} node={node} depth={0} filter={fileSearch} />)
             }
           </div>
-        </div>
+        </Section>
 
-        {/* Git */}
-        <div style={{ flexShrink: 0, borderBottom: '1px solid var(--border)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', cursor: 'default' }}>
-            <GitBranch size={12} style={{ color: 'var(--text-muted)' }} />
-            <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>Source Control</span>
-            <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--text-muted)' }}>Phase 3</span>
+        {/* Git Section */}
+        <Section icon={<GitBranch />} title="Source Control" defaultOpen={false} flex={0.5}>
+          <div style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text-muted)' }}>
+            Git integrations available in Phase 3
           </div>
-        </div>
+        </Section>
 
-        {/* Agents */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', borderBottom: '1px solid var(--border)', minHeight: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', flexShrink: 0, borderBottom: '1px solid var(--border)' }}>
-            <Bot size={12} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-            <span style={{ flex: 1, fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>
-              Agents ({session?.agents.length ?? 0})
-            </span>
-            {session?.type === 'project' && (
+        {/* Agents Section */}
+        <Section
+          icon={<Bot />}
+          title={`Agents (${session?.agents.length ?? 0})`}
+          defaultOpen={true}
+          flex={1}
+          extra={
+            session?.type === 'project' && (
               <button className="icon-btn" style={{ width: 16, height: 16 }} title="Add agent"
-                onClick={() => setShowAgentModal(true)}>
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setShowAgentModal(true)
+                }}>
                 <Plus size={10} />
               </button>
-            )}
-          </div>
+            )
+          }
+        >
           <div style={{ flex: 1, overflowY: 'auto' }}>
             {(!session || session.agents.length === 0) ? (
               session?.type === 'project' ? (
@@ -324,18 +324,24 @@ export default function RightSidebar({ onOpenTerminal }: RightSidebarProps) {
               </>
             )}
           </div>
-        </div>
+        </Section>
 
-        {/* Project graph */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', flexShrink: 0, borderBottom: '1px solid var(--border)' }}>
-            <LayoutDashboard size={12} style={{ color: 'var(--text-muted)' }} />
-            <span style={{ flex: 1, fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>Graph</span>
+        {/* Project Graph Section */}
+        <Section
+          icon={<LayoutDashboard />}
+          title="Project Graph"
+          defaultOpen={true}
+          flex={1}
+          extra={
             <button className="icon-btn" style={{ width: 16, height: 16 }} title="Fullscreen"
-              onClick={() => setGraphFullscreen(true)}>⤢</button>
-          </div>
+              onClick={(e) => {
+                e.stopPropagation()
+                setGraphFullscreen(true)
+              }}>⤢</button>
+          }
+        >
           <ProjectGraph files={mergedFiles} rootPath={session?.rootPath ?? ''} />
-        </div>
+        </Section>
 
       </div>
 

@@ -37,6 +37,12 @@ interface AppState {
   models: OllamaModel[]; selectedModel: string; leftExpanded: boolean
   rightExpanded: boolean; isConnected: boolean; userName: string
 
+  openFiles:          Record<string, string[]>      // sessionId -> open files paths
+  activeFile:         Record<string, string | null> // sessionId -> active file path (null = chat)
+  openFile:           (sessionId: string, filePath: string) => void
+  closeFile:          (sessionId: string, filePath: string) => void
+  setActiveFile:      (sessionId: string, filePath: string | null) => void
+
   getRecentTabs:      () => Session[]
   setScreen:          (s: AppScreen) => void
   loadSession:        (session: Session) => void
@@ -64,6 +70,34 @@ export const useAppStore = create<AppState>((set, get) => ({
   screen: 'welcome', sessions: [], activeSessionId: null,
   models: [], selectedModel: '', leftExpanded: true,
   rightExpanded: true, isConnected: false, userName: '',
+
+  openFiles: {}, activeFile: {},
+
+  openFile: (sessionId, filePath) => set(s => {
+    const sessionFiles = s.openFiles[sessionId] ?? []
+    const updated = sessionFiles.includes(filePath) ? sessionFiles : [...sessionFiles, filePath]
+    return {
+      openFiles: { ...s.openFiles, [sessionId]: updated },
+      activeFile: { ...s.activeFile, [sessionId]: filePath }
+    }
+  }),
+
+  closeFile: (sessionId, filePath) => set(s => {
+    const sessionFiles = s.openFiles[sessionId] ?? []
+    const updated = sessionFiles.filter(f => f !== filePath)
+    let nextActive = s.activeFile[sessionId] ?? null
+    if (nextActive === filePath) {
+      nextActive = updated.length > 0 ? updated[updated.length - 1] : null
+    }
+    return {
+      openFiles: { ...s.openFiles, [sessionId]: updated },
+      activeFile: { ...s.activeFile, [sessionId]: nextActive }
+    }
+  }),
+
+  setActiveFile: (sessionId, filePath) => set(s => ({
+    activeFile: { ...s.activeFile, [sessionId]: filePath }
+  })),
 
   getRecentTabs: () => {
     const { sessions } = get()

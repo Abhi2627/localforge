@@ -3,6 +3,7 @@ import cors from '@fastify/cors'
 import websocket from '@fastify/websocket'
 import pty from 'node-pty'
 import os from 'os'
+import fs from 'fs'
 import { getDb, closeDb } from './persistence/Database.js'
 import { initSessionTables, upsertSession, saveMessage, getAllSessions, getSession, getSessionMessages, deleteSession } from './persistence/SessionStore.js'
 import { profileSystem } from './orchestrator/SystemProfiler.js'
@@ -59,14 +60,16 @@ async function bootstrap() {
   orchestrator.onEvent((projectId, event) => broadcast({ type: 'agent_event', projectId, event }))
 
   // ── Agent events WebSocket ─────────────────────────────────────────────────
-  server.get('/ws', { websocket: true }, (socket) => {
+  server.get('/ws', { websocket: true }, (connection) => {
+    const socket = connection.socket
     wsClients.add(socket)
     socket.send(JSON.stringify({ type: 'connected' }))
     socket.on('close', () => wsClients.delete(socket))
   })
 
   // ── PTY Terminal WebSocket — real shell, VSCode-style ─────────────────────
-  server.get<{ Querystring: { cwd?: string } }>('/terminal', { websocket: true }, (socket, req) => {
+  server.get<{ Querystring: { cwd?: string } }>('/terminal', { websocket: true }, (connection, req) => {
+    const socket = connection.socket
     const cwd   = req.query.cwd ?? os.homedir()
     const shell = os.platform() === 'win32'
       ? 'powershell.exe'
@@ -189,6 +192,39 @@ async function bootstrap() {
   })
   server.get<{ Params: { sessionId: string } }>('/project/:sessionId/summary', async (req) => {
     return { summary: getSession(req.params.sessionId)?.summary ?? null }
+  })
+
+  // ── Project file read / write ──────────────────────────────────────────────
+  server.get<{ Querystring: { path: string } }>('/project/file', async (req, reply) => {
+    const filePath = req.query.path
+    if (!filePath) {
+      reply.status(400).send({ error: 'path required' })
+      return
+    }
+    try {
+      if (!fs.existsSync(filePath)) {
+        reply.status(404).send({ error: 'file not found' })
+        return
+      }
+      const content = fs.readFileSync(filePath, 'utf8')
+      return { content }
+    } catch (err: any) {
+      reply.status(500).send({ error: err.message })
+    }
+  })
+
+  server.post<{ Body: { path: string; content: string } }>('/project/file', async (req, reply) => {
+    const { path: filePath, content } = req.body
+    if (!filePath) {
+      reply.status(400).send({ error: 'path required' })
+      return
+    }
+    try {
+      fs.writeFileSync(filePath, content ?? '', 'utf8')
+      return { success: true }
+    } catch (err: any) {
+      reply.status(500).send({ error: err.message })
+    }
   })
 
   // ── Chat streaming — SSE, context-aware ───────────────────────────────────

@@ -76,6 +76,12 @@ export const api = {
   getProjectSummary: (sessionId: string) =>
     req<{ summary: string | null }>('GET', `/project/${sessionId}/summary`),
 
+  // File operations
+  readFile: (filePath: string) =>
+    req<{ content: string }>('GET', `/project/file?path=${encodeURIComponent(filePath)}`),
+  writeFile: (filePath: string, content: string) =>
+    req<{ success: boolean }>('POST', '/project/file', { path: filePath, content }),
+
   // Chat — non-streaming (used for title generation only)
   sendChat: (message: string, sessionId: string, history: any[] = []) =>
     req<{ success: boolean; reply: string }>('POST', '/chat', { message, sessionId, history }),

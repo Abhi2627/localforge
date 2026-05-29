@@ -1,10 +1,11 @@
 import { useRef, useEffect, KeyboardEvent, useState } from 'react'
-import { Send, Bot, Paperclip, Mic, Loader, Copy, Pencil, RefreshCw, Check } from 'lucide-react'
+import { Send, Bot, Paperclip, Mic, Loader, Copy, Pencil, RefreshCw, Check, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useAppStore, type Message, type AgentRole } from '../store/appStore'
 import { api } from '../hooks/useApi'
 import { nanoid } from '../hooks/nanoid'
+import FileEditorPanel from './FileEditorPanel'
 
 function roleBadgeClass(role?: AgentRole) { return `badge-${role ?? 'fullstack'}` }
 
@@ -153,6 +154,7 @@ export default function ChatPanel() {
     sessions, activeSessionId,
     addMessage, appendStream, finalizeStream,
     selectedModel, updateSessionTitle,
+    openFiles, activeFile, setActiveFile, closeFile,
   } = useAppStore()
 
   const [input, setInput]       = useState('')
@@ -163,9 +165,10 @@ export default function ChatPanel() {
 
   const session    = sessions.find(s => s.id === activeSessionId)
   const messages   = session?.messages ?? []
-  const firstAgent = session?.agents[0]
   const isProject  = session?.type === 'project'
   const isChat     = session?.type === 'chat'
+  
+  const currentActiveFile = session ? (activeFile[session.id] ?? null) : null
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -307,87 +310,160 @@ export default function ChatPanel() {
         </div>
       )}
 
-      {/* Messages */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
-        {messages.length === 0 && !isBusy && (
-          <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--text-muted)' }}>
-            <Bot size={36} style={{ marginBottom: 10, opacity: 0.3 }} />
-            <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 4, color: 'var(--text-secondary)' }}>
-              {isChat ? 'Ask me anything' : 'Project assistant'}
-            </div>
-            <div style={{ fontSize: 12 }}>
-              {isChat
-                ? 'I can explain concepts, review code, or answer questions'
-                : 'Ask about the codebase, request changes, or instruct agents'}
-            </div>
+      {/* Project Open File Tabs */}
+      {session && isProject && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '4px 8px', background: 'var(--bg-secondary)',
+          borderBottom: '1px solid var(--border)', flexShrink: 0,
+          overflowX: 'auto', scrollbarWidth: 'none',
+          whiteSpace: 'nowrap'
+        }}>
+          {/* Leftmost Chat Tab */}
+          <div
+            onClick={() => setActiveFile(session.id, null)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '4px 10px', borderRadius: 4,
+              background: !currentActiveFile ? 'var(--bg-primary)' : 'transparent',
+              border: `1px solid ${!currentActiveFile ? 'var(--border)' : 'transparent'}`,
+              color: !currentActiveFile ? 'var(--accent)' : 'var(--text-secondary)',
+              cursor: 'pointer', fontSize: 11, fontWeight: 500, userSelect: 'none',
+              transition: 'all 0.15s'
+            }}
+          >
+            <Bot size={12} />
+            <span>Project Chat</span>
           </div>
-        )}
 
-        {messages.map((msg, i) => (
-          <MessageBubble
-            key={msg.id}
-            msg={msg}
-            onEdit={handleEdit}
-            onReload={i === messages.length - 1 && msg.type === 'agent' ? handleReload : undefined}
-          />
-        ))}
-
-        {/* ThinkingBubble: shown while waiting for first token */}
-        {sending && !streaming && <ThinkingBubble mode="thinking" />}
-
-        <div ref={bottomRef} />
-      </div>
-
-      {/* Input */}
-      <div style={{ flexShrink: 0, padding: '10px 16px 14px', background: 'var(--bg-primary)' }}>
-        <div style={{ maxWidth: 680, margin: '0 auto' }}>
-          <div style={{
-            display: 'flex', alignItems: 'flex-end', gap: 6,
-            background: 'var(--bg-tertiary)', border: `1px solid ${isBusy ? 'var(--accent)' : 'var(--border)'}`,
-            borderRadius: 12, padding: '6px 8px 6px 12px',
-            transition: 'border-color 0.2s',
-          }}>
-            <button className="icon-btn" title="Attach file" style={{ width: 28, height: 28, flexShrink: 0, marginBottom: 1 }}>
-              <Paperclip size={14} />
-            </button>
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={onKeyDown}
-              placeholder={placeholder}
-              disabled={!session || isBusy}
-              rows={1}
-              style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', resize: 'none', color: 'var(--text-primary)', fontSize: 13, lineHeight: 1.6, fontFamily: 'inherit', padding: '2px 0', maxHeight: 140, overflowY: 'auto' }}
-            />
-            <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0, marginBottom: 1 }}>
-              <button className="icon-btn" title="Voice" style={{ width: 28, height: 28 }}>
-                <Mic size={14} />
-              </button>
-              <button
-                onClick={() => send()}
-                disabled={!canSend}
+          {/* File Tabs */}
+          {(openFiles[session.id] ?? []).map(file => {
+            const isActive = currentActiveFile === file
+            const name = file.replace(/\\/g, '/').split('/').pop() ?? 'file'
+            return (
+              <div
+                key={file}
+                onClick={() => setActiveFile(session.id, file)}
                 style={{
-                  width: 30, height: 30, borderRadius: 8, border: 'none',
-                  background: canSend ? 'var(--accent)' : 'var(--bg-hover)',
-                  color: canSend ? 'white' : 'var(--text-muted)',
-                  cursor: canSend ? 'pointer' : 'not-allowed',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  transition: 'background 0.15s', flexShrink: 0,
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '4px 8px 4px 10px', borderRadius: 4,
+                  background: isActive ? 'var(--bg-primary)' : 'transparent',
+                  border: `1px solid ${isActive ? 'var(--border)' : 'transparent'}`,
+                  color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
+                  cursor: 'pointer', fontSize: 11, userSelect: 'none',
+                  transition: 'all 0.15s', flexShrink: 0
                 }}
               >
-                {isBusy
-                  ? <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} />
-                  : <Send size={13} />
-                }
-              </button>
+                <span>{name}</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    closeFile(session.id, file)
+                  }}
+                  style={{
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    color: 'var(--text-muted)', display: 'flex', padding: 1,
+                    borderRadius: 3, opacity: 0.7
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.color = 'var(--text-primary)'}
+                  onMouseLeave={e => e.currentTarget.style.color = 'var(--text-muted)'}
+                >
+                  <X size={10} />
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Main Workspace Area: Conditionally render Editor or Chat */}
+      {currentActiveFile ? (
+        <FileEditorPanel filePath={currentActiveFile} />
+      ) : (
+        <>
+          {/* Messages */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
+            {messages.length === 0 && !isBusy && (
+              <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--text-muted)' }}>
+                <Bot size={36} style={{ marginBottom: 10, opacity: 0.3 }} />
+                <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 4, color: 'var(--text-secondary)' }}>
+                  {isChat ? 'Ask me anything' : 'Project assistant'}
+                </div>
+                <div style={{ fontSize: 12 }}>
+                  {isChat
+                    ? 'I can explain concepts, review code, or answer questions'
+                    : 'Ask about the codebase, request changes, or instruct agents'}
+                </div>
+              </div>
+            )}
+
+            {messages.map((msg, i) => (
+              <MessageBubble
+                key={msg.id}
+                msg={msg}
+                onEdit={handleEdit}
+                onReload={i === messages.length - 1 && msg.type === 'agent' ? handleReload : undefined}
+              />
+            ))}
+
+            {/* ThinkingBubble: shown while waiting for first token */}
+            {sending && !streaming && <ThinkingBubble mode="thinking" />}
+
+            <div ref={bottomRef} />
+          </div>
+
+          {/* Input */}
+          <div style={{ flexShrink: 0, padding: '10px 16px 14px', background: 'var(--bg-primary)' }}>
+            <div style={{ maxWidth: 680, margin: '0 auto' }}>
+              <div style={{
+                display: 'flex', alignItems: 'flex-end', gap: 6,
+                background: 'var(--bg-tertiary)', border: `1px solid ${isBusy ? 'var(--accent)' : 'var(--border)'}`,
+                borderRadius: 12, padding: '6px 8px 6px 12px',
+                transition: 'border-color 0.2s',
+              }}>
+                <button className="icon-btn" title="Attach file" style={{ width: 28, height: 28, flexShrink: 0, marginBottom: 1 }}>
+                  <Paperclip size={14} />
+                </button>
+                <textarea
+                  ref={textareaRef}
+                  value={input}
+                  onChange={e => setInput(e.target.value)}
+                  onKeyDown={onKeyDown}
+                  placeholder={placeholder}
+                  disabled={!session || isBusy}
+                  rows={1}
+                  style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', resize: 'none', color: 'var(--text-primary)', fontSize: 13, lineHeight: 1.6, fontFamily: 'inherit', padding: '2px 0', maxHeight: 140, overflowY: 'auto' }}
+                />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0, marginBottom: 1 }}>
+                  <button className="icon-btn" title="Voice" style={{ width: 28, height: 28 }}>
+                    <Mic size={14} />
+                  </button>
+                  <button
+                    onClick={() => send()}
+                    disabled={!canSend}
+                    style={{
+                      width: 30, height: 30, borderRadius: 8, border: 'none',
+                      background: canSend ? 'var(--accent)' : 'var(--bg-hover)',
+                      color: canSend ? 'white' : 'var(--text-muted)',
+                      cursor: canSend ? 'pointer' : 'not-allowed',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      transition: 'background 0.15s', flexShrink: 0,
+                    }}
+                  >
+                    {isBusy
+                      ? <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} />
+                      : <Send size={13} />
+                    }
+                  </button>
+                </div>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', marginTop: 6 }}>
+                {modelShortName} · {isBusy ? 'Generating…' : 'Enter to send · Shift+Enter for new line'}
+              </div>
             </div>
           </div>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', marginTop: 6 }}>
-            {modelShortName} · {isBusy ? 'Generating…' : 'Enter to send · Shift+Enter for new line'}
-          </div>
-        </div>
-      </div>
+        </>
+      )}
 
       <style>{`
         @keyframes spin  { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }

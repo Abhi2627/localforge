@@ -1,8 +1,7 @@
 import { useState } from 'react'
-import { X, Plus, Trash2 } from 'lucide-react'
+import { X, Plus } from 'lucide-react'
 import { useAppStore, type AgentRole } from '../store/appStore'
 import { api } from '../hooks/useApi'
-import { nanoid } from '../hooks/nanoid'
 
 interface Props {
   sessionId: string

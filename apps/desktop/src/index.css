@@ -1,23 +1,23 @@
 @import "tailwindcss";
 
 :root {
-  --bg-primary:     #0f0f0f;
-  --bg-secondary:   #1a1a1a;
-  --bg-tertiary:    #242424;
-  --bg-hover:       #2a2a2a;
-  --border:         #2e2e2e;
-  --border-light:   #3a3a3a;
-  --text-primary:   #e8e8e8;
-  --text-secondary: #888;
-  --text-muted:     #555;
-  --accent:         #7c6af7;
-  --accent-dim:     #7c6af720;
-  --green:          #3dd68c;
-  --green-dim:      #3dd68c20;
-  --amber:          #f5a623;
-  --amber-dim:      #f5a62320;
-  --red:            #f56565;
-  --red-dim:        #f5656520;
+  --bg-primary:     #0a0a0c;
+  --bg-secondary:   #111115;
+  --bg-tertiary:    #181820;
+  --bg-hover:       #1e1e28;
+  --border:         #1f1f2a;
+  --border-light:   #2f2f3d;
+  --text-primary:   #f1f1f6;
+  --text-secondary: #9499ad;
+  --text-muted:     #62677c;
+  --accent:         #8b5cf6;
+  --accent-dim:     rgba(139, 92, 246, 0.15);
+  --green:          #10b981;
+  --green-dim:      rgba(16, 185, 129, 0.15);
+  --amber:          #f59e0b;
+  --amber-dim:      rgba(245, 158, 11, 0.15);
+  --red:            #ef4444;
+  --red-dim:        rgba(239, 68, 68, 0.15);
 
   /* Responsive sidebar widths */
   --left-expanded:   220px;

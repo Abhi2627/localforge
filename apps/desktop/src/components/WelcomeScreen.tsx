@@ -37,10 +37,10 @@ const ROWS = [
 
 const DIRECTIONS: Array<'left' | 'right'> = ['left', 'right', 'left', 'right', 'left']
 
-function FeatureCard({ title, desc }: { title: string; desc: string }) {
+function FeatureCard({ title, desc, width = 200 }: { title: string; desc: string; width?: string | number }) {
   return (
     <div style={{
-      flexShrink: 0, width: 200,
+      flexShrink: 0, width,
       background: 'var(--bg-secondary)', border: '1px solid var(--border)',
       borderRadius: 10, padding: '11px 13px',
       display: 'flex', flexDirection: 'column', gap: 4,
@@ -89,7 +89,8 @@ export default function WelcomeScreen() {
     <div style={{
       flex: 1, display: 'flex', flexDirection: 'column',
       alignItems: 'center', justifyContent: 'center',
-      overflow: 'hidden', background: 'var(--bg-primary)', gap: 10,
+      overflowY: 'auto', background: 'var(--bg-primary)', gap: 10,
+      padding: '24px 0'
     }}>
       {/* Heading */}
       <div style={{ textAlign: 'center', padding: '0 20px', flexShrink: 0 }}>
@@ -136,7 +137,7 @@ export default function WelcomeScreen() {
             in packages/agent-core
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-            {FEATURES.slice(0, 8).map((f, i) => <FeatureCard key={i} {...f} />)}
+            {FEATURES.slice(0, 8).map((f, i) => <FeatureCard key={i} {...f} width="100%" />)}
           </div>
         </div>
       )}
