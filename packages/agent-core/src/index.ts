@@ -11,7 +11,7 @@ import { getInstalledModels, selectModel, setFallbackModels, loadConfig, saveCon
 import { scanProjectFiles, generateProjectSummary } from './mcp/ProjectScanner.js'
 import { connectMCP } from './mcp/MCPClient.js'
 
-const server  = Fastify({ logger: false })
+const server    = Fastify({ logger: false })
 let taskQueue: TaskQueue
 const wsClients = new Set<any>()
 
@@ -90,7 +90,6 @@ async function bootstrap() {
   server.post<{ Body: { id: string; sessionId: string; role: string; content: string; agentName?: string } }>(
     '/sessions/message', async (req) => {
       const { id, sessionId, role, content, agentName } = req.body
-      // Ensure session exists before saving message — upsert a minimal record if missing
       const existing = getSession(sessionId)
       if (!existing) {
         upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: loadConfig().selectedModel })
@@ -105,28 +104,20 @@ async function bootstrap() {
     '/project/open', async (req) => {
       const { sessionId, rootPath } = req.body
       if (!rootPath) return { success: false, message: 'rootPath required' }
-
       await connectMCP(rootPath)
       const scan = scanProjectFiles(rootPath)
-
-      // Fire-and-forget summary generation
       generateProjectSummary(sessionId, rootPath, scan).then(summary => {
         broadcast({ type: 'project_summary', sessionId, summary })
       })
-
-      return {
-        success: true, isEmpty: scan.isEmpty,
-        fileList: scan.fileList, fileTree: scan.fileTree, fileCount: scan.fileList.length,
-      }
+      return { success: true, isEmpty: scan.isEmpty, fileList: scan.fileList, fileTree: scan.fileTree, fileCount: scan.fileList.length }
     }
   )
 
   server.get<{ Params: { sessionId: string } }>('/project/:sessionId/summary', async (req) => {
-    const session = getSession(req.params.sessionId)
-    return { summary: session?.summary ?? null }
+    return { summary: getSession(req.params.sessionId)?.summary ?? null }
   })
 
-  // ── Chat (local Ollama only, no internet) ──────────────────────────────────
+  // ── Chat (local Ollama only, structured markdown responses) ───────────────
   server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>(
     '/chat', async (req) => {
       const { message, sessionId, history = [] } = req.body
@@ -134,12 +125,11 @@ async function bootstrap() {
 
       const { selectedModel } = loadConfig()
 
-      // Ensure session row exists before saving messages
+      // Ensure session row exists
       const existing = getSession(sessionId)
       if (!existing) {
         upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: selectedModel })
       }
-
       const session = getSession(sessionId)
 
       const systemContent =
@@ -147,7 +137,10 @@ async function bootstrap() {
         `You are powered by ${selectedModel} running via Ollama on this machine — fully offline, no internet. ` +
         `You are NOT ChatGPT, Claude, GPT-4, or any cloud model. ` +
         `If asked what you are, say you are ${selectedModel} running locally via Ollama inside LocalForge. ` +
-        `Keep responses clear and concise. Do not add thinking steps or preamble.` +
+        `Always format your responses using clean Markdown: use **bold** for key terms, ## or ### headers for sections, ` +
+        `- bullet lists for items, numbered lists for steps, and fenced code blocks with language tags for code. ` +
+        `Keep responses well-structured and easy to read. Do not write walls of unformatted text. ` +
+        `Do not add thinking steps, preamble, or filler phrases.` +
         (session?.summary ? `\n\nProject context:\n${session.summary}` : '')
 
       const messages = [
@@ -156,10 +149,8 @@ async function bootstrap() {
         { role: 'user' as const, content: message },
       ]
 
-      // Call local Ollama — no external API
       const reply = await chat(selectedModel, messages)
 
-      // Persist both turns
       const { randomUUID } = await import('crypto')
       saveMessage({ id: randomUUID(), sessionId, role: 'user',      content: message })
       saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: reply })
