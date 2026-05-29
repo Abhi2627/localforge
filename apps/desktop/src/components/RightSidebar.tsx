@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { ChevronRight, ChevronDown, Bot, GitBranch, LayoutDashboard, Plus, Loader, File, Folder, FolderOpen, Search } from 'lucide-react'
+import { ChevronRight, ChevronDown, Bot, GitBranch, LayoutDashboard, Plus, Loader, File, Folder, FolderOpen, Search, LucideIcon } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import AgentModal from './AgentModal'
 import ProjectGraph from './ProjectGraph'
@@ -38,7 +38,6 @@ function buildTree(files: string[], rootPath: string, newFiles: Set<string>): Tr
     }
   }
 
-  // Sort: dirs first, then files, both alphabetical
   function sort(nodes: TreeNode[]) {
     nodes.sort((a, b) => {
       if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
@@ -51,11 +50,13 @@ function buildTree(files: string[], rootPath: string, newFiles: Set<string>): Tr
 }
 
 function FileTreeNode({ node, depth = 0, filter }: { node: TreeNode; depth?: number; filter: string }) {
-  const [open, setOpen] = useState(depth < 2)  // auto-expand first 2 levels
+  const [open, setOpen] = useState(depth < 2)
   const activeSessionId = useAppStore(s => s.activeSessionId)
-  const openFile = useAppStore(s => s.openFile)
+  const openFile        = useAppStore(s => s.openFile)
 
-  const matches = !filter || node.name.toLowerCase().includes(filter.toLowerCase()) || node.children.some(c => c.name.toLowerCase().includes(filter.toLowerCase()))
+  const matches = !filter ||
+    node.name.toLowerCase().includes(filter.toLowerCase()) ||
+    node.children.some(c => c.name.toLowerCase().includes(filter.toLowerCase()))
   if (!matches && filter) return null
 
   const indent = depth * 12
@@ -63,27 +64,15 @@ function FileTreeNode({ node, depth = 0, filter }: { node: TreeNode; depth?: num
   if (node.isDir) {
     return (
       <div>
-        <div onClick={() => setOpen(!open)} style={{
-          display: 'flex', alignItems: 'center', gap: 3,
-          padding: `2px 8px 2px ${8 + indent}px`,
-          cursor: 'pointer', fontSize: 12,
-          color: 'var(--text-secondary)',
-          userSelect: 'none',
-        }}
+        <div
+          onClick={() => setOpen(!open)}
+          style={{ display: 'flex', alignItems: 'center', gap: 3, padding: `2px 8px 2px ${8 + indent}px`, cursor: 'pointer', fontSize: 12, color: 'var(--text-secondary)', userSelect: 'none' }}
           onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)'}
           onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}
         >
-          {open
-            ? <ChevronDown size={11} style={{ flexShrink: 0, opacity: 0.5 }} />
-            : <ChevronRight size={11} style={{ flexShrink: 0, opacity: 0.5 }} />
-          }
-          {open
-            ? <FolderOpen size={13} style={{ flexShrink: 0, color: '#dcb67a' }} />
-            : <Folder     size={13} style={{ flexShrink: 0, color: '#dcb67a' }} />
-          }
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {node.name}
-          </span>
+          {open ? <ChevronDown size={11} style={{ flexShrink: 0, opacity: 0.5 }} /> : <ChevronRight size={11} style={{ flexShrink: 0, opacity: 0.5 }} />}
+          {open ? <FolderOpen size={13} style={{ flexShrink: 0, color: '#dcb67a' }} /> : <Folder size={13} style={{ flexShrink: 0, color: '#dcb67a' }} />}
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</span>
         </div>
         {open && node.children.map(child => (
           <FileTreeNode key={child.path} node={child} depth={depth + 1} filter={filter} />
@@ -92,24 +81,17 @@ function FileTreeNode({ node, depth = 0, filter }: { node: TreeNode; depth?: num
     )
   }
 
-  // File
   const ext   = node.name.split('.').pop() ?? ''
   const color = fileColor(ext)
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 5,
-      padding: `2px 8px 2px ${20 + indent}px`,
-      cursor: 'pointer', fontSize: 12,
-      color: node.isNew ? 'var(--green)' : 'var(--text-secondary)',
-    }}
+    <div
+      style={{ display: 'flex', alignItems: 'center', gap: 5, padding: `2px 8px 2px ${20 + indent}px`, cursor: 'pointer', fontSize: 12, color: node.isNew ? 'var(--green)' : 'var(--text-secondary)' }}
       onClick={() => { if (activeSessionId) openFile(activeSessionId, node.path) }}
       onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)'}
       onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}
     >
       <File size={12} style={{ flexShrink: 0, color }} />
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-        {node.name}
-      </span>
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{node.name}</span>
       {node.isNew && <span style={{ fontSize: 9, color: 'var(--green)', flexShrink: 0 }}>M</span>}
     </div>
   )
@@ -147,7 +129,6 @@ function CollapsedRight() {
   )
 }
 
-
 function EmptyNote({ text }: { text: string }) {
   return <div style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>{text}</div>
 }
@@ -180,39 +161,59 @@ function AgentRow({ agentId, sessionId }: { agentId: string; sessionId: string }
   )
 }
 
-// ── Collapsible section wrapper ────────────────────────────────────────────────
+// ── Collapsible section — icon passed as component ref, not JSX instance ──────
 
-function Section({ icon, title, extra, defaultOpen = true, children, flex = 1 }: {
-  icon: any; title: string; extra?: React.ReactNode
-  defaultOpen?: boolean; children: React.ReactNode; flex?: number
+function Section({ Icon, title, extra, defaultOpen = true, children, flex = 1 }: {
+  Icon: LucideIcon
+  title: string
+  extra?: React.ReactNode
+  defaultOpen?: boolean
+  children: React.ReactNode
+  flex?: number
 }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', borderBottom: '1px solid var(--border)', flex: open ? flex : 0, minHeight: 0, flexShrink: open ? undefined : 0 }}>
+    <div style={{
+      display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      borderBottom: '1px solid var(--border)',
+      flex: open ? flex : 0,
+      minHeight: 0,
+      flexShrink: open ? undefined : 0,
+    }}>
       <div
         onClick={() => setOpen(!open)}
         style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderBottom: open ? '1px solid var(--border)' : 'none', flexShrink: 0, cursor: 'pointer', userSelect: 'none' }}
         onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)'}
         onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}
       >
-        {open ? <ChevronDown size={10} style={{ color: 'var(--text-muted)', flexShrink: 0 }} /> : <ChevronRight size={10} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />}
-        <icon.type {...icon.props} size={12} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-        <span style={{ flex: 1, fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>{title}</span>
+        {open
+          ? <ChevronDown  size={10} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+          : <ChevronRight size={10} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+        }
+        {/* Icon is a component reference — safe to render as JSX */}
+        <Icon size={12} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+        <span style={{ flex: 1, fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>
+          {title}
+        </span>
         {extra && <div onClick={e => e.stopPropagation()}>{extra}</div>}
       </div>
-      {open && <div style={{ flex: 1, overflow: 'hidden', minHeight: 0, display: 'flex', flexDirection: 'column' }}>{children}</div>}
+      {open && (
+        <div style={{ flex: 1, overflow: 'hidden', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          {children}
+        </div>
+      )}
     </div>
   )
 }
 
-// ── Main component ─────────────────────────────────────────────────────────────
+// ── Main ──────────────────────────────────────────────────────────────────────
 
 export default function RightSidebar({ onOpenTerminal: _onOpenTerminal }: RightSidebarProps) {
   const { sessions, activeSessionId, rightExpanded } = useAppStore()
   const session = sessions.find(s => s.id === activeSessionId)
 
-  const [fileSearch, setFileSearch]   = useState('')
-  const [showSearch, setShowSearch]   = useState(false)
+  const [fileSearch, setFileSearch]         = useState('')
+  const [showSearch, setShowSearch]         = useState(false)
   const [showAgentModal, setShowAgentModal] = useState(false)
   const [graphFullscreen, setGraphFullscreen] = useState(false)
 
@@ -225,13 +226,14 @@ export default function RightSidebar({ onOpenTerminal: _onOpenTerminal }: RightS
 
   const tree = useMemo(
     () => buildTree(mergedFiles, session?.rootPath ?? '', newFileSet),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [mergedFiles.join(','), session?.rootPath, writtenFiles.join(',')]
   )
 
   return (
     <div style={{ background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border)', display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
 
-      {/* Workspace header — just project name, no summary */}
+      {/* Workspace header */}
       <div style={{ flexShrink: 0, padding: '6px 12px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 6 }}>
         <LayoutDashboard size={12} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
         <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
@@ -247,27 +249,24 @@ export default function RightSidebar({ onOpenTerminal: _onOpenTerminal }: RightS
         )}
       </div>
 
-      {/* Sections */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
 
-        {/* Explorer Section */}
+        {/* Explorer */}
         <Section
-          icon={<FolderOpen />}
-          title={`Explorer ${mergedFiles.length > 0 ? `(${mergedFiles.length})` : ''}`}
-          defaultOpen={true}
+          Icon={FolderOpen}
+          title={`Explorer${mergedFiles.length > 0 ? ` (${mergedFiles.length})` : ''}`}
+          defaultOpen
           flex={2}
           extra={
-            <button className="icon-btn" style={{ width: 16, height: 16 }} title="Search files"
-              onClick={(e) => {
-                e.stopPropagation()
-                setShowSearch(!showSearch)
-              }}>
+            <button className="icon-btn" style={{ width: 16, height: 16 }} title="Filter files"
+              onClick={e => { e.stopPropagation(); setShowSearch(!showSearch) }}>
               <Search size={10} />
             </button>
           }
         >
           {showSearch && (
-            <input autoFocus placeholder="Filter files…" value={fileSearch}
+            <input
+              autoFocus placeholder="Filter files…" value={fileSearch}
               onChange={e => setFileSearch(e.target.value)}
               style={{ flexShrink: 0, margin: '4px 8px', background: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: 4, padding: '3px 8px', color: 'var(--text-primary)', fontSize: 11, outline: 'none' }}
             />
@@ -280,29 +279,26 @@ export default function RightSidebar({ onOpenTerminal: _onOpenTerminal }: RightS
           </div>
         </Section>
 
-        {/* Git Section */}
-        <Section icon={<GitBranch />} title="Source Control" defaultOpen={false} flex={0.5}>
+        {/* Source Control */}
+        <Section Icon={GitBranch} title="Source Control" defaultOpen={false} flex={0.5}>
           <div style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text-muted)' }}>
-            Git integrations available in Phase 3
+            Git integration — Phase 3
           </div>
         </Section>
 
-        {/* Agents Section */}
+        {/* Agents */}
         <Section
-          icon={<Bot />}
+          Icon={Bot}
           title={`Agents (${session?.agents.length ?? 0})`}
-          defaultOpen={true}
+          defaultOpen
           flex={1}
           extra={
-            session?.type === 'project' && (
+            session?.type === 'project' ? (
               <button className="icon-btn" style={{ width: 16, height: 16 }} title="Add agent"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setShowAgentModal(true)
-                }}>
+                onClick={e => { e.stopPropagation(); setShowAgentModal(true) }}>
                 <Plus size={10} />
               </button>
-            )
+            ) : undefined
           }
         >
           <div style={{ flex: 1, overflowY: 'auto' }}>
@@ -310,7 +306,9 @@ export default function RightSidebar({ onOpenTerminal: _onOpenTerminal }: RightS
               session?.type === 'project' ? (
                 <div style={{ padding: '8px 12px' }}>
                   <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>No agents yet.</div>
-                  <button onClick={() => setShowAgentModal(true)} style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', padding: '6px 10px', background: 'var(--accent)', border: 'none', borderRadius: 6, color: 'white', fontSize: 11, fontWeight: 500, cursor: 'pointer', justifyContent: 'center' }}>
+                  <button
+                    onClick={() => setShowAgentModal(true)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', padding: '6px 10px', background: 'var(--accent)', border: 'none', borderRadius: 6, color: 'white', fontSize: 11, fontWeight: 500, cursor: 'pointer', justifyContent: 'center' }}>
                     <Plus size={12} /> Add first agent
                   </button>
                 </div>
@@ -318,7 +316,9 @@ export default function RightSidebar({ onOpenTerminal: _onOpenTerminal }: RightS
             ) : (
               <>
                 {session.agents.map(a => <AgentRow key={a.id} agentId={a.id} sessionId={session.id} />)}
-                <button onClick={() => setShowAgentModal(true)} style={{ display: 'flex', alignItems: 'center', gap: 5, margin: '5px 10px', padding: '4px 8px', background: 'transparent', border: '1px dashed var(--border-light)', borderRadius: 5, color: 'var(--text-muted)', fontSize: 11, cursor: 'pointer', width: 'calc(100% - 20px)', justifyContent: 'center' }}>
+                <button
+                  onClick={() => setShowAgentModal(true)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 5, margin: '5px 10px', padding: '4px 8px', background: 'transparent', border: '1px dashed var(--border-light)', borderRadius: 5, color: 'var(--text-muted)', fontSize: 11, cursor: 'pointer', width: 'calc(100% - 20px)', justifyContent: 'center' }}>
                   <Plus size={10} /> Add agent
                 </button>
               </>
@@ -326,18 +326,17 @@ export default function RightSidebar({ onOpenTerminal: _onOpenTerminal }: RightS
           </div>
         </Section>
 
-        {/* Project Graph Section */}
+        {/* Project Graph */}
         <Section
-          icon={<LayoutDashboard />}
+          Icon={LayoutDashboard}
           title="Project Graph"
-          defaultOpen={true}
+          defaultOpen
           flex={1}
           extra={
             <button className="icon-btn" style={{ width: 16, height: 16 }} title="Fullscreen"
-              onClick={(e) => {
-                e.stopPropagation()
-                setGraphFullscreen(true)
-              }}>⤢</button>
+              onClick={e => { e.stopPropagation(); setGraphFullscreen(true) }}>
+              ⤢
+            </button>
           }
         >
           <ProjectGraph files={mergedFiles} rootPath={session?.rootPath ?? ''} />
@@ -350,10 +349,14 @@ export default function RightSidebar({ onOpenTerminal: _onOpenTerminal }: RightS
         <AgentModal sessionId={session.id} projectId={session.id} onClose={() => setShowAgentModal(false)} />
       )}
       {graphFullscreen && session && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300 }}
-          onClick={() => setGraphFullscreen(false)}>
-          <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 12, padding: 16, width: '80vw', height: '80vh', display: 'flex', flexDirection: 'column', gap: 8 }}
-            onClick={e => e.stopPropagation()}>
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300 }}
+          onClick={() => setGraphFullscreen(false)}
+        >
+          <div
+            style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 12, padding: 16, width: '80vw', height: '80vh', display: 'flex', flexDirection: 'column', gap: 8 }}
+            onClick={e => e.stopPropagation()}
+          >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: 13, fontWeight: 600 }}>Project graph — {session.title}</span>
               <button className="icon-btn" onClick={() => setGraphFullscreen(false)} style={{ width: 26, height: 26 }}>✕</button>
