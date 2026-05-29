@@ -56,7 +56,9 @@ function MsgActions({ content, onEdit, onReload, isUser }: {
 }) {
   const [copied, setCopied] = useState(false)
   function copy() {
-    navigator.clipboard.writeText(content).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
+    navigator.clipboard.writeText(content).then(() => {
+      setCopied(true); setTimeout(() => setCopied(false), 1500)
+    })
   }
   return (
     <div className="msg-actions" style={{ display: 'flex', gap: 2, opacity: 0, transition: 'opacity 0.15s', alignItems: 'center' }}>
@@ -80,7 +82,9 @@ function MsgActions({ content, onEdit, onReload, isUser }: {
 function MessageBubble({ msg, onEdit, onReload }: {
   msg: Message; onEdit?: (c: string) => void; onReload?: () => void
 }) {
-  if (msg.type === 'system') return <div className="msg-system"><span>●</span><span>{msg.content}</span></div>
+  if (msg.type === 'system') return (
+    <div className="msg-system"><span>●</span><span>{msg.content}</span></div>
+  )
   if (msg.type === 'stream') return (
     <div>
       {msg.agentName && <div style={{ fontSize: 10, color: 'var(--accent)', marginBottom: 3 }}>{msg.agentName}</div>}
@@ -93,7 +97,8 @@ function MessageBubble({ msg, onEdit, onReload }: {
   const isUser = msg.type === 'user'
   const time   = formatTime(msg.timestamp)
   if (isUser) return (
-    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, alignItems: 'flex-end' }}
+    <div
+      style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, alignItems: 'flex-end' }}
       onMouseEnter={e => { const el = e.currentTarget.querySelector('.msg-actions') as HTMLElement; if (el) el.style.opacity = '1' }}
       onMouseLeave={e => { const el = e.currentTarget.querySelector('.msg-actions') as HTMLElement; if (el) el.style.opacity = '0' }}
     >
@@ -105,11 +110,17 @@ function MessageBubble({ msg, onEdit, onReload }: {
     </div>
   )
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}
+    <div
+      style={{ display: 'flex', flexDirection: 'column', gap: 3 }}
       onMouseEnter={e => { const el = e.currentTarget.querySelector('.msg-actions') as HTMLElement; if (el) el.style.opacity = '1' }}
       onMouseLeave={e => { const el = e.currentTarget.querySelector('.msg-actions') as HTMLElement; if (el) el.style.opacity = '0' }}
     >
-      {msg.agentName && <div className={`agent-badge ${roleBadgeClass(msg.agentRole)}`} style={{ display: 'inline-block', fontSize: 10, alignSelf: 'flex-start' }}>{msg.agentName}</div>}
+      {msg.agentName && (
+        <div className={`agent-badge ${roleBadgeClass(msg.agentRole)}`}
+          style={{ display: 'inline-block', fontSize: 10, alignSelf: 'flex-start' }}>
+          {msg.agentName}
+        </div>
+      )}
       <div className="msg-agent"><MarkdownContent content={msg.content} /></div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ fontSize: 10, color: 'var(--text-muted)', paddingLeft: 2 }}>{time}</span>
@@ -119,21 +130,34 @@ function MessageBubble({ msg, onEdit, onReload }: {
   )
 }
 
-function ThinkingBubble() {
+// Thinking bubble — shown while waiting for first token
+function ThinkingBubble({ mode }: { mode: 'thinking' | 'streaming' }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center' }}>
-      <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: '3px 12px 12px 12px', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{
+        background: 'var(--bg-tertiary)', border: '1px solid var(--border)',
+        borderRadius: '3px 12px 12px 12px', padding: '10px 14px',
+        display: 'flex', alignItems: 'center', gap: 8,
+      }}>
         <Loader size={13} style={{ color: 'var(--accent)', animation: 'spin 1s linear infinite', flexShrink: 0 }} />
-        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Thinking…</span>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+          {mode === 'thinking' ? 'Thinking…' : 'Generating…'}
+        </span>
       </div>
     </div>
   )
 }
 
 export default function ChatPanel() {
-  const { sessions, activeSessionId, addMessage, appendStream, finalizeStream, selectedModel, updateSessionTitle } = useAppStore()
-  const [input, setInput]     = useState('')
-  const [sending, setSending] = useState(false)
+  const {
+    sessions, activeSessionId,
+    addMessage, appendStream, finalizeStream,
+    selectedModel, updateSessionTitle,
+  } = useAppStore()
+
+  const [input, setInput]       = useState('')
+  const [sending, setSending]   = useState(false)   // true = waiting for first token (show ThinkingBubble)
+  const [streaming, setStreaming] = useState(false)  // true = tokens arriving (hide ThinkingBubble)
   const bottomRef   = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -169,9 +193,8 @@ export default function ChatPanel() {
 
   async function send(overrideText?: string) {
     const text = (overrideText ?? input).trim()
-    if (!text || !session || sending) return
+    if (!text || !session || sending || streaming) return
     if (!overrideText) setInput('')
-    setSending(true)
 
     const msgId      = nanoid()
     const isFirstMsg = messages.filter(m => m.type === 'user').length === 0
@@ -179,42 +202,75 @@ export default function ChatPanel() {
     addMessage(session.id, { id: msgId, type: 'user', content: text, timestamp: Date.now() })
     api.saveMessage(msgId, session.id, 'user', text).catch(() => {})
 
+    // Show ThinkingBubble immediately
+    setSending(true)
+    setStreaming(false)
+
     try {
-      if (isProject && firstAgent) {
-        await api.instruct(session.id, firstAgent.id, text)
-      } else if (isChat) {
-        // Build complete conversation history — include ALL user + agent messages
-        // This is what gives the model memory of the current conversation
+      if (isProject) {
+        // Project mode: use /chat/stream with project session context
+        // (agent instructions go through orchestrator but chat fallback is plain stream)
         const history = messages
           .filter(m => m.type === 'user' || m.type === 'agent')
-          .map(m => ({
-            role:    m.type === 'user' ? 'user' : 'assistant',
-            content: m.content,
-          }))
-        // Note: we intentionally do NOT slice here — the server slices to last 10
-        // so the model always sees the full available context
+          .map(m => ({ role: m.type === 'user' ? 'user' : 'assistant', content: m.content }))
 
         const streamTaskId = nanoid()
-        setSending(false)
+        let firstChunk = true
 
         await api.streamChat(text, session.id, history, streamTaskId, (chunk) => {
+          if (firstChunk) {
+            // First token arrived — hide ThinkingBubble, show stream
+            setSending(false)
+            setStreaming(true)
+            firstChunk = false
+          }
           appendStream(session.id, streamTaskId, chunk)
         })
         finalizeStream(session.id, streamTaskId)
+        setStreaming(false)
 
-        if (isFirstMsg && session.title === 'New chat') generateTitle(session.id, text)
+      } else if (isChat) {
+        const history = messages
+          .filter(m => m.type === 'user' || m.type === 'agent')
+          .map(m => ({ role: m.type === 'user' ? 'user' : 'assistant', content: m.content }))
+
+        const streamTaskId = nanoid()
+        let firstChunk = true
+
+        await api.streamChat(text, session.id, history, streamTaskId, (chunk) => {
+          if (firstChunk) {
+            setSending(false)
+            setStreaming(true)
+            firstChunk = false
+          }
+          appendStream(session.id, streamTaskId, chunk)
+        })
+        finalizeStream(session.id, streamTaskId)
+        setStreaming(false)
+
+        if (isFirstMsg && session.title === 'New chat') {
+          generateTitle(session.id, text)
+        }
       }
     } catch (err: any) {
-      addMessage(session.id, { id: nanoid(), type: 'system', content: `Error: ${err.message}`, timestamp: Date.now() })
+      addMessage(session.id, {
+        id: nanoid(), type: 'system',
+        content: `Error: ${err.message}`,
+        timestamp: Date.now(),
+      })
     } finally {
       setSending(false)
+      setStreaming(false)
     }
   }
 
-  function handleEdit(content: string) { setInput(content); textareaRef.current?.focus() }
+  function handleEdit(content: string) {
+    setInput(content)
+    textareaRef.current?.focus()
+  }
 
   async function handleReload() {
-    if (!session || sending) return
+    if (!session || sending || streaming) return
     const userMsgs = messages.filter(m => m.type === 'user')
     if (userMsgs.length === 0) return
     await send(userMsgs[userMsgs.length - 1].content)
@@ -224,19 +280,24 @@ export default function ChatPanel() {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }
 
-  const canSend        = !!input.trim() && !!session && !sending
+  const isBusy         = sending || streaming
+  const canSend        = !!input.trim() && !!session && !isBusy
   const modelShortName = selectedModel ? selectedModel.split(':')[0] : 'the AI'
-  const placeholder    = !session    ? 'Open a chat or project…'
+  const placeholder    = !session   ? 'Open a chat or project…'
     : isChat           ? 'Ask anything…'
-    : !firstAgent      ? 'Add an agent from the right sidebar…'
-    : `Instruct ${firstAgent.name}…`
+    : 'Ask anything about this project…'
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', background: 'var(--bg-primary)' }}>
 
-      {/* Session title bar — no project summary here */}
+      {/* Session title bar */}
       {session && (
-        <div style={{ flexShrink: 0, padding: '5px 12px', borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{
+          flexShrink: 0, padding: '5px 12px',
+          borderBottom: '1px solid var(--border)',
+          background: 'var(--bg-secondary)',
+          display: 'flex', alignItems: 'center', gap: 8,
+        }}>
           <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {session.title}
           </span>
@@ -248,51 +309,82 @@ export default function ChatPanel() {
 
       {/* Messages */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
-        {messages.length === 0 && (
+        {messages.length === 0 && !isBusy && (
           <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--text-muted)' }}>
             <Bot size={36} style={{ marginBottom: 10, opacity: 0.3 }} />
             <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 4, color: 'var(--text-secondary)' }}>
-              {isChat    ? 'Ask me anything'
-               : isProject && !firstAgent ? 'No agents yet'
-               : 'Ready to build'}
+              {isChat ? 'Ask me anything' : 'Project assistant'}
             </div>
             <div style={{ fontSize: 12 }}>
-              {isChat    ? 'I can explain concepts, review code, or answer questions'
-               : isProject && !firstAgent ? 'Add an agent from the right sidebar to start coding'
-               : firstAgent ? `${firstAgent.name} (${firstAgent.role}) is ready` : ''}
+              {isChat
+                ? 'I can explain concepts, review code, or answer questions'
+                : 'Ask about the codebase, request changes, or instruct agents'}
             </div>
           </div>
         )}
 
         {messages.map((msg, i) => (
-          <MessageBubble key={msg.id} msg={msg}
+          <MessageBubble
+            key={msg.id}
+            msg={msg}
             onEdit={handleEdit}
             onReload={i === messages.length - 1 && msg.type === 'agent' ? handleReload : undefined}
           />
         ))}
-        {sending && <ThinkingBubble />}
+
+        {/* ThinkingBubble: shown while waiting for first token */}
+        {sending && !streaming && <ThinkingBubble mode="thinking" />}
+
         <div ref={bottomRef} />
       </div>
 
       {/* Input */}
       <div style={{ flexShrink: 0, padding: '10px 16px 14px', background: 'var(--bg-primary)' }}>
         <div style={{ maxWidth: 680, margin: '0 auto' }}>
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, background: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: 12, padding: '6px 8px 6px 12px' }}>
-            <button className="icon-btn" title="Attach file" style={{ width: 28, height: 28, flexShrink: 0, marginBottom: 1 }}><Paperclip size={14} /></button>
-            <textarea ref={textareaRef} value={input} onChange={e => setInput(e.target.value)}
-              onKeyDown={onKeyDown} placeholder={placeholder}
-              disabled={!session || sending} rows={1}
+          <div style={{
+            display: 'flex', alignItems: 'flex-end', gap: 6,
+            background: 'var(--bg-tertiary)', border: `1px solid ${isBusy ? 'var(--accent)' : 'var(--border)'}`,
+            borderRadius: 12, padding: '6px 8px 6px 12px',
+            transition: 'border-color 0.2s',
+          }}>
+            <button className="icon-btn" title="Attach file" style={{ width: 28, height: 28, flexShrink: 0, marginBottom: 1 }}>
+              <Paperclip size={14} />
+            </button>
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder={placeholder}
+              disabled={!session || isBusy}
+              rows={1}
               style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', resize: 'none', color: 'var(--text-primary)', fontSize: 13, lineHeight: 1.6, fontFamily: 'inherit', padding: '2px 0', maxHeight: 140, overflowY: 'auto' }}
             />
             <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0, marginBottom: 1 }}>
-              <button className="icon-btn" title="Voice" style={{ width: 28, height: 28 }}><Mic size={14} /></button>
-              <button onClick={() => send()} disabled={!canSend} style={{ width: 30, height: 30, borderRadius: 8, border: 'none', background: canSend ? 'var(--accent)' : 'var(--bg-hover)', color: canSend ? 'white' : 'var(--text-muted)', cursor: canSend ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.15s', flexShrink: 0 }}>
-                <Send size={13} />
+              <button className="icon-btn" title="Voice" style={{ width: 28, height: 28 }}>
+                <Mic size={14} />
+              </button>
+              <button
+                onClick={() => send()}
+                disabled={!canSend}
+                style={{
+                  width: 30, height: 30, borderRadius: 8, border: 'none',
+                  background: canSend ? 'var(--accent)' : 'var(--bg-hover)',
+                  color: canSend ? 'white' : 'var(--text-muted)',
+                  cursor: canSend ? 'pointer' : 'not-allowed',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  transition: 'background 0.15s', flexShrink: 0,
+                }}
+              >
+                {isBusy
+                  ? <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} />
+                  : <Send size={13} />
+                }
               </button>
             </div>
           </div>
           <div style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', marginTop: 6 }}>
-            {modelShortName} is AI and can make mistakes. Please double-check responses.
+            {modelShortName} · {isBusy ? 'Generating…' : 'Enter to send · Shift+Enter for new line'}
           </div>
         </div>
       </div>
