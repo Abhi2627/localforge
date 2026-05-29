@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { MessageCircle, FolderOpen, Puzzle, Settings, User, ChevronDown, ChevronRight, MoreHorizontal } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { api } from '../hooks/useApi'
@@ -7,12 +7,24 @@ import NewProjectModal from './NewProjectModal'
 
 function SessionItem({ session }: { session: any }) {
   const { activeSessionId, setActiveSession, updateSessionTitle, closeSession } = useAppStore()
-  const isActive = session.id === activeSessionId
+  const isActive   = session.id === activeSessionId
   const [showMenu, setShowMenu] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [renameVal, setRenameVal] = useState(session.title)
+  const menuRef = useRef<HTMLDivElement>(null)
 
-  // Skip sessions with no meaningful title or content
+  // Close menu when clicking outside
+  useEffect(() => {
+    if (!showMenu) return
+    function handleClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setShowMenu(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [showMenu])
+
   if (!session.title || session.title.trim() === '') return null
 
   function handleRename(e: React.KeyboardEvent) {
@@ -57,17 +69,18 @@ function SessionItem({ session }: { session: any }) {
             {session.title}
           </span>
         )}
-        <button onClick={e => { e.stopPropagation(); setShowMenu(!showMenu) }}
+        <button onClick={e => { e.stopPropagation(); setShowMenu(v => !v) }}
           style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: 0, display: 'flex', opacity: 0.6 }}>
           <MoreHorizontal size={12} />
         </button>
       </div>
 
       {showMenu && (
-        <div style={{
-          position: 'absolute', right: 8, top: '100%', zIndex: 50,
+        <div ref={menuRef} style={{
+          position: 'absolute', right: 8, top: '100%', zIndex: 100,
           background: 'var(--bg-secondary)', border: '1px solid var(--border)',
-          borderRadius: 6, padding: 4, minWidth: 100,
+          borderRadius: 6, padding: 4, minWidth: 110,
+          boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
         }}>
           {[
             { label: 'Rename', action: () => { setRenaming(true); setShowMenu(false) }, color: 'var(--text-secondary)' },
@@ -75,7 +88,7 @@ function SessionItem({ session }: { session: any }) {
           ].map(item => (
             <button key={item.label} onClick={item.action} style={{
               display: 'block', width: '100%', textAlign: 'left',
-              padding: '5px 10px', background: 'none', border: 'none',
+              padding: '6px 10px', background: 'none', border: 'none',
               color: item.color, fontSize: 12, cursor: 'pointer', borderRadius: 4,
             }}
               onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)'}
@@ -91,7 +104,6 @@ function SessionItem({ session }: { session: any }) {
 function ChatSection({ sessions, expanded }: { sessions: any[]; expanded: boolean }) {
   const [open, setOpen] = useState(true)
   const { addSession, setActiveSession } = useAppStore()
-  // Filter out empty/untitled sessions
   const filtered = sessions.filter(s => s.type === 'chat' && s.title && s.title.trim() !== '')
 
   function createNewChat() {
@@ -177,7 +189,6 @@ export default function LeftBar() {
           </button>
         )}
       </div>
-
       <div style={{ borderTop: '1px solid var(--border)', padding: '4px 0' }}>
         {[{ Icon: User, label: 'Account' }, { Icon: Settings, label: 'Settings' }].map(({ Icon, label }) => (
           <button key={label} title={!expanded ? label : undefined} style={{ display: 'flex', alignItems: 'center', gap: expanded ? 8 : 0, justifyContent: expanded ? 'flex-start' : 'center', width: '100%', padding: expanded ? '7px 10px' : '9px 0', border: 'none', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12 }}>

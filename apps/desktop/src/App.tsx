@@ -16,7 +16,7 @@ export default function App() {
     setModels, setSelectedModel,
     screen, leftExpanded, rightExpanded,
     sessions, activeSessionId,
-    addSession,
+    addSession, addMessage,
   } = useAppStore()
 
   const activeSession    = sessions.find(s => s.id === activeSessionId)
@@ -31,14 +31,15 @@ export default function App() {
     }).catch(console.error)
 
     api.getSessions().then(({ sessions: saved }) => {
-      // Filter out empty/placeholder sessions created by internal calls
       const clean = saved.filter((s: any) =>
         s.title &&
         s.title.trim() !== '' &&
         s.title !== 'Chat' &&
         !s.id.endsWith('-titlegentmp')
       )
-      clean.forEach((s: any) => {
+
+      // Load each session and its messages
+      clean.forEach(async (s: any) => {
         addSession({
           id: s.id, type: s.type, title: s.title,
           rootPath: s.rootPath, summary: s.summary,
@@ -46,6 +47,20 @@ export default function App() {
           lastAccessedAt: new Date(s.updatedAt).getTime(),
           isActive: false,
         })
+
+        // Load persisted messages for this session
+        try {
+          const { messages } = await api.getSession(s.id)
+          messages.forEach((m: any) => {
+            addMessage(s.id, {
+              id:        m.id,
+              type:      m.role === 'user' ? 'user' : 'agent',
+              content:   m.content,
+              agentName: m.agentName ?? undefined,
+              timestamp: new Date(m.createdAt).getTime(),
+            })
+          })
+        } catch { }
       })
     }).catch(console.error)
   }, [])
