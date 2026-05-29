@@ -4,94 +4,66 @@ export type AgentRole    = 'frontend' | 'backend' | 'fullstack' | 'test' | 'revi
 export type MessageType  = 'user' | 'agent' | 'system' | 'stream'
 export type SessionType  = 'chat' | 'project' | 'terminal'
 
+// Strip markdown from titles at the store boundary
+function cleanTitleStr(raw: string): string {
+  return raw
+    .replace(/\*\*/g, '').replace(/\*/g, '').replace(/`/g, '')
+    .replace(/#{1,6}\s/g, '').replace(/[_~]/g, '')
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim()
+    || raw.trim()
+}
+
 export interface Message {
-  id:         string
-  type:       MessageType
-  content:    string
-  agentName?: string
-  agentRole?: AgentRole
-  taskId?:    string
-  filePath?:  string
-  timestamp:  number
+  id: string; type: MessageType; content: string
+  agentName?: string; agentRole?: AgentRole; taskId?: string; filePath?: string; timestamp: number
 }
-
 export interface Agent {
-  id:           string
-  name:         string
-  role:         AgentRole
-  status:       'idle' | 'running' | 'done' | 'failed'
-  currentTask?: string
+  id: string; name: string; role: AgentRole
+  status: 'idle' | 'running' | 'done' | 'failed'; currentTask?: string
 }
-
 export interface Session {
-  id:              string
-  type:            SessionType
-  title:           string
-  rootPath?:       string
-  agents:          Agent[]
-  messages:        Message[]
-  allFiles:        string[]
-  writtenFiles:    string[]
-  summary?:        string
-  lastAccessedAt:  number
-  isActive:        boolean
+  id: string; type: SessionType; title: string; rootPath?: string
+  agents: Agent[]; messages: Message[]; allFiles: string[]; writtenFiles: string[]
+  summary?: string; lastAccessedAt: number; isActive: boolean
 }
-
 export interface OllamaModel {
-  name:       string
-  sizeGb:     string
-  isSelected: boolean
-  isFallback: boolean
+  name: string; sizeGb: string; isSelected: boolean; isFallback: boolean
 }
-
 export type AppScreen = 'welcome' | 'session'
 
 interface AppState {
-  screen:          AppScreen
-  sessions:        Session[]
-  activeSessionId: string | null
-  models:          OllamaModel[]
-  selectedModel:   string
-  leftExpanded:    boolean
-  rightExpanded:   boolean
-  isConnected:     boolean
-  userName:        string
+  screen: AppScreen; sessions: Session[]; activeSessionId: string | null
+  models: OllamaModel[]; selectedModel: string; leftExpanded: boolean
+  rightExpanded: boolean; isConnected: boolean; userName: string
 
-  getRecentTabs:       () => Session[]
-  setScreen:           (s: AppScreen) => void
-  // loadSession is for restoring from DB — does NOT change screen
-  loadSession:         (session: Session) => void
-  // addSession is for user-initiated new sessions — DOES change screen
-  addSession:          (session: Session) => void
-  setActiveSession:    (id: string) => void
-  updateSessionTitle:  (id: string, title: string) => void
-  closeSession:        (id: string) => void
-  addMessage:          (sessionId: string, msg: Message) => void
-  appendStream:        (sessionId: string, taskId: string, chunk: string) => void
-  finalizeStream:      (sessionId: string, taskId: string) => void
-  addAgent:            (sessionId: string, agent: Agent) => void
-  updateAgent:         (sessionId: string, agentId: string, update: Partial<Agent>) => void
-  addWrittenFile:      (sessionId: string, filePath: string) => void
-  setAllFiles:         (sessionId: string, files: string[]) => void
-  setSessionSummary:   (sessionId: string, summary: string) => void
-  setModels:           (models: OllamaModel[]) => void
-  setSelectedModel:    (model: string) => void
-  setLeftExpanded:     (v: boolean) => void
-  setRightExpanded:    (v: boolean) => void
-  setConnected:        (v: boolean) => void
-  setUserName:         (name: string) => void
+  getRecentTabs:      () => Session[]
+  setScreen:          (s: AppScreen) => void
+  loadSession:        (session: Session) => void
+  addSession:         (session: Session) => void
+  setActiveSession:   (id: string) => void
+  updateSessionTitle: (id: string, title: string) => void
+  closeSession:       (id: string) => void
+  addMessage:         (sessionId: string, msg: Message) => void
+  appendStream:       (sessionId: string, taskId: string, chunk: string) => void
+  finalizeStream:     (sessionId: string, taskId: string) => void
+  addAgent:           (sessionId: string, agent: Agent) => void
+  updateAgent:        (sessionId: string, agentId: string, update: Partial<Agent>) => void
+  addWrittenFile:     (sessionId: string, filePath: string) => void
+  setAllFiles:        (sessionId: string, files: string[]) => void
+  setSessionSummary:  (sessionId: string, summary: string) => void
+  setModels:          (models: OllamaModel[]) => void
+  setSelectedModel:   (model: string) => void
+  setLeftExpanded:    (v: boolean) => void
+  setRightExpanded:   (v: boolean) => void
+  setConnected:       (v: boolean) => void
+  setUserName:        (name: string) => void
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
-  screen:          'welcome',   // always start on welcome
-  sessions:        [],
-  activeSessionId: null,
-  models:          [],
-  selectedModel:   '',
-  leftExpanded:    true,
-  rightExpanded:   true,
-  isConnected:     false,
-  userName:        '',
+  screen: 'welcome', sessions: [], activeSessionId: null,
+  models: [], selectedModel: '', leftExpanded: true,
+  rightExpanded: true, isConnected: false, userName: '',
 
   getRecentTabs: () => {
     const { sessions } = get()
@@ -104,46 +76,40 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setScreen: (screen) => set({ screen }),
 
-  // Restore from DB — never changes screen, never duplicates
   loadSession: (session) => set(s => {
-    if (s.sessions.find(x => x.id === session.id)) return s   // already loaded, skip
-    return { sessions: [...s.sessions, session] }              // no screen change
+    if (s.sessions.find(x => x.id === session.id)) return s
+    return { sessions: [...s.sessions, { ...session, title: cleanTitleStr(session.title) }] }
   }),
 
-  // User-initiated new session — switches to session screen
   addSession: (session) => set(s => {
     if (s.sessions.find(x => x.id === session.id)) return s
-    return { sessions: [...s.sessions, session], screen: 'session' }
+    return { sessions: [...s.sessions, { ...session, title: cleanTitleStr(session.title) }], screen: 'session' }
   }),
 
   setActiveSession: (id) => set(s => ({
-    activeSessionId: id,
-    screen: 'session',
+    activeSessionId: id, screen: 'session',
     sessions: s.sessions.map(sess => ({
-      ...sess,
-      isActive:       sess.id === id,
+      ...sess, isActive: sess.id === id,
       lastAccessedAt: sess.id === id ? Date.now() : sess.lastAccessedAt,
     })),
   })),
 
+  // Always strip markdown when saving a title
   updateSessionTitle: (id, title) => set(s => ({
-    sessions: s.sessions.map(sess => sess.id === id ? { ...sess, title } : sess)
+    sessions: s.sessions.map(sess =>
+      sess.id === id ? { ...sess, title: cleanTitleStr(title) } : sess
+    )
   })),
 
   closeSession: (id) => set(s => {
     const remaining = s.sessions.filter(sess => sess.id !== id)
-    const newActive = remaining.length > 0 ? remaining[remaining.length - 1].id : null
-    return {
-      sessions:        remaining,
-      activeSessionId: newActive,
-      screen:          'welcome',   // always go back to welcome, not to another session
-    }
+    return { sessions: remaining, activeSessionId: null, screen: 'welcome' }
   }),
 
   addMessage: (sessionId, msg) => set(s => ({
     sessions: s.sessions.map(sess => {
       if (sess.id !== sessionId) return sess
-      if (sess.messages.find(m => m.id === msg.id)) return sess  // deduplicate
+      if (sess.messages.find(m => m.id === msg.id)) return sess
       return { ...sess, messages: [...sess.messages, msg] }
     })
   })),
@@ -158,8 +124,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         )}
       }
       return { ...sess, messages: [...sess.messages, {
-        id: `stream-${taskId}-${Date.now()}`,
-        type: 'stream' as MessageType, content: chunk, taskId, timestamp: Date.now()
+        id: `stream-${taskId}-${Date.now()}`, type: 'stream' as MessageType,
+        content: chunk, taskId, timestamp: Date.now()
       }]}
     })
   })),
@@ -172,39 +138,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     )
   })),
 
-  addAgent: (sessionId, agent) => set(s => ({
-    sessions: s.sessions.map(sess =>
-      sess.id === sessionId ? { ...sess, agents: [...sess.agents, agent] } : sess
-    )
-  })),
-
-  updateAgent: (sessionId, agentId, update) => set(s => ({
-    sessions: s.sessions.map(sess =>
-      sess.id === sessionId ? { ...sess, agents: sess.agents.map(a =>
-        a.id === agentId ? { ...a, ...update } : a
-      )} : sess
-    )
-  })),
-
-  addWrittenFile: (sessionId, filePath) => set(s => ({
-    sessions: s.sessions.map(sess =>
-      sess.id === sessionId && !sess.writtenFiles.includes(filePath)
-        ? { ...sess, writtenFiles: [...sess.writtenFiles, filePath] }
-        : sess
-    )
-  })),
-
-  setAllFiles: (sessionId, files) => set(s => ({
-    sessions: s.sessions.map(sess =>
-      sess.id === sessionId ? { ...sess, allFiles: files } : sess
-    )
-  })),
-
-  setSessionSummary: (sessionId, summary) => set(s => ({
-    sessions: s.sessions.map(sess =>
-      sess.id === sessionId ? { ...sess, summary } : sess
-    )
-  })),
+  addAgent:       (sessionId, agent)         => set(s => ({ sessions: s.sessions.map(sess => sess.id === sessionId ? { ...sess, agents: [...sess.agents, agent] } : sess) })),
+  updateAgent:    (sessionId, agentId, upd)  => set(s => ({ sessions: s.sessions.map(sess => sess.id === sessionId ? { ...sess, agents: sess.agents.map(a => a.id === agentId ? { ...a, ...upd } : a) } : sess) })),
+  addWrittenFile: (sessionId, filePath)      => set(s => ({ sessions: s.sessions.map(sess => sess.id === sessionId && !sess.writtenFiles.includes(filePath) ? { ...sess, writtenFiles: [...sess.writtenFiles, filePath] } : sess) })),
+  setAllFiles:    (sessionId, files)         => set(s => ({ sessions: s.sessions.map(sess => sess.id === sessionId ? { ...sess, allFiles: files } : sess) })),
+  setSessionSummary: (sessionId, summary)    => set(s => ({ sessions: s.sessions.map(sess => sess.id === sessionId ? { ...sess, summary } : sess) })),
 
   setModels:        (models)        => set({ models }),
   setSelectedModel: (selectedModel) => set({ selectedModel }),
