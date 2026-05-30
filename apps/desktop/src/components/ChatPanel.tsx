@@ -88,16 +88,20 @@ function MessageBubble({ msg, onEdit, onReload }: { msg: Message; onEdit?: (c: s
   )
   const isUser = msg.type === 'user'
   const time   = formatTime(msg.timestamp)
+
   if (isUser) return (
     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, alignItems: 'flex-end' }}
       onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3,
+        // User bubble takes up to 72% of container width — fluid, not hardcoded
+        maxWidth: '72%', minWidth: 0 }}>
         <MsgActions content={msg.content} isUser visible={hovered} onEdit={() => onEdit?.(msg.content)} />
-        <div className="msg-user">{msg.content}</div>
+        <div className="msg-user" style={{ width: '100%', boxSizing: 'border-box' }}>{msg.content}</div>
         <span style={{ fontSize: 10, color: 'var(--text-muted)', paddingRight: 2 }}>{time}</span>
       </div>
     </div>
   )
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}
       onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
@@ -265,7 +269,8 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
         <FileEditorPanel filePath={currentActiveFile} />
       ) : (
         <>
-          <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
+          {/* Messages — padding scales with container */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '20px 5%', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
             {messages.length === 0 && !isBusy && (
               <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--text-muted)' }}>
                 <Bot size={36} style={{ marginBottom: 10, opacity: 0.3 }} />
@@ -286,8 +291,14 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
             <div ref={bottomRef} />
           </div>
 
-          <div style={{ flexShrink: 0, padding: '10px 16px 14px', background: 'var(--bg-primary)' }}>
-            <div style={{ maxWidth: 680, margin: '0 auto' }}>
+          {/* Input — fluid width, no hardcoded maxWidth */}
+          <div style={{ flexShrink: 0, padding: '10px 5% 14px', background: 'var(--bg-primary)' }}>
+            <div style={{
+              // Fluid: fills 90% of the container, capped at 860px for very wide windows
+              width: '100%',
+              maxWidth: 860,
+              margin: '0 auto',
+            }}>
               <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, background: 'var(--bg-tertiary)', border: `1px solid ${isBusy ? 'var(--accent)' : 'var(--border)'}`, borderRadius: 12, padding: '6px 8px 6px 12px', transition: 'border-color 0.2s' }}>
                 <button className="icon-btn" title="Attach" style={{ width: 28, height: 28, flexShrink: 0, marginBottom: 1 }}><Paperclip size={14} /></button>
                 <textarea ref={textareaRef} value={input} onChange={e => setInput(e.target.value)}
