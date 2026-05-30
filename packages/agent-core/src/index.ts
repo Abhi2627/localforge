@@ -15,6 +15,7 @@ import { chat } from './ollama/OllamaClient.js'
 import { getInstalledModels, selectModel, setFallbackModels, loadConfig, saveConfig } from './ollama/ModelManager.js'
 import { scanProjectFiles, generateProjectSummary } from './mcp/ProjectScanner.js'
 import { connectMCP } from './mcp/MCPClient.js'
+import { runRAG, injectRAGContext } from './rag/RAGPipeline.js'
 
 type ChatRole = 'system' | 'user' | 'assistant'
 
@@ -85,7 +86,6 @@ async function bootstrap() {
   server.get<{ Querystring: { cwd?: string } }>('/terminal', { websocket: true }, (socket, req) => {
     const rawCwd = req.query.cwd ?? os.homedir()
     const cwd    = fs.existsSync(rawCwd) ? rawCwd : os.homedir()
-
     let ptyProc: ReturnType<typeof pty.spawn> | null = null
     try {
       console.log(`[terminal] spawning ${DEFAULT_SHELL} in ${cwd}`)
@@ -101,13 +101,11 @@ async function bootstrap() {
           LANG:  process.env.LANG  ?? 'en_US.UTF-8',
         } as Record<string, string>,
       })
-
       ptyProc.onData((data: string) => { try { socket.send(data) } catch { } })
       ptyProc.onExit(({ exitCode }) => {
         try { socket.send(`\r\n\x1b[90m[shell exited ${exitCode}]\x1b[0m\r\n`) } catch { }
         try { socket.close() } catch { }
       })
-
       socket.on('message', (raw: Buffer | string) => {
         if (!ptyProc) return
         const str = typeof raw === 'string' ? raw : raw.toString('utf8')
@@ -117,9 +115,7 @@ async function bootstrap() {
           if (msg.type === 'resize') ptyProc.resize(Math.max(1, Math.floor(Number(msg.cols))), Math.max(1, Math.floor(Number(msg.rows))))
         } catch { ptyProc.write(str) }
       })
-
       socket.on('close', () => { if (ptyProc) { try { ptyProc.kill() } catch { } ptyProc = null } })
-
     } catch (err: any) {
       console.error('[terminal] spawn error:', err.message)
       try { socket.send(`\r\n\x1b[31m[Failed: ${err.message}]\x1b[0m\r\nShell: ${DEFAULT_SHELL}\r\n`) } catch { }
@@ -189,29 +185,62 @@ async function bootstrap() {
     try { fs.writeFileSync(p, content ?? '', 'utf8'); return { success: true } } catch (e: any) { reply.status(500).send({ error: e.message }) }
   })
 
-  // ── Chat streaming ─────────────────────────────────────────────────────────
+  // ── Chat streaming — with automatic RAG ───────────────────────────────────
   server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>('/chat/stream', async (req, reply) => {
     const { message, sessionId, history = [] } = req.body
     if (!message) { reply.status(400).send('No message'); return }
+
     const { selectedModel } = loadConfig()
     if (!getSession(sessionId)) upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: selectedModel })
-    const session  = getSession(sessionId)
-    const messages = [
-      { role: 'system' as ChatRole, content: buildSystemPrompt(selectedModel, session?.summary) },
-      ...mapHistory(history),
-      { role: 'user' as ChatRole, content: message },
-    ]
+    const session = getSession(sessionId)
+
     reply.raw.setHeader('Content-Type', 'text/event-stream')
     reply.raw.setHeader('Cache-Control', 'no-cache')
     reply.raw.setHeader('Connection', 'keep-alive')
     reply.raw.flushHeaders()
+
+    // Helper to send SSE events
+    const sendEvent = (data: object) => {
+      try { reply.raw.write(`data: ${JSON.stringify(data)}\n\n`) } catch { }
+    }
+
+    // ── Step 1: Run RAG (automatic — heuristic decides if web search needed) ──
+    let systemPrompt = buildSystemPrompt(selectedModel, session?.summary)
+
+    try {
+      const rag = await runRAG(message, (status) => {
+        // Stream RAG status to client so UI can show "Searching web…"
+        sendEvent({ type: 'rag_status', status })
+      })
+
+      if (rag.didSearch) {
+        // Inject web context into system prompt
+        systemPrompt = injectRAGContext(systemPrompt, rag)
+        // Tell client which sources were found
+        sendEvent({ type: 'rag_sources', sources: rag.sources.map(s => ({ title: s.title, url: s.url })) })
+        console.log(`[RAG] Searched for: "${rag.query}" — ${rag.sources.length} sources`)
+      }
+    } catch (err) {
+      console.warn('[RAG] Pipeline failed, continuing without web context:', (err as Error).message)
+    }
+
+    // ── Step 2: Call the model with (possibly enriched) context ───────────────
+    const messages = [
+      { role: 'system' as ChatRole, content: systemPrompt },
+      ...mapHistory(history),
+      { role: 'user' as ChatRole, content: message },
+    ]
+
     let fullReply = ''
     try {
       await chat(selectedModel, messages, (chunk) => {
         fullReply += chunk.content
-        reply.raw.write(`data: ${JSON.stringify({ chunk: chunk.content })}\n\n`)
+        sendEvent({ chunk: chunk.content })
       })
-    } catch (err: any) { reply.raw.write(`data: ${JSON.stringify({ chunk: `\n\nError: ${err.message}` })}\n\n`) }
+    } catch (err: any) {
+      sendEvent({ chunk: `\n\nError: ${err.message}` })
+    }
+
     reply.raw.write('data: [DONE]\n\n')
     reply.raw.end()
     saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: fullReply })
@@ -263,6 +292,7 @@ async function bootstrap() {
   await server.listen({ port: PORT, host: '0.0.0.0' })
   console.log(`\n🔨 LocalForge  :${PORT}  |  Model: ${loadConfig().selectedModel}`)
   console.log(`   Shell: ${DEFAULT_SHELL}`)
+  console.log(`   RAG:   DuckDuckGo (automatic)`)
   console.log(`   Terminal ws://localhost:${PORT}/terminal\n`)
 }
 

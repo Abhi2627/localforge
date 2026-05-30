@@ -1,9 +1,9 @@
 import { useRef, useEffect, KeyboardEvent, useState } from 'react'
-import { Send, Bot, Paperclip, Mic, Loader, Copy, Pencil, RefreshCw, Check, X, Terminal } from 'lucide-react'
+import { Send, Bot, Paperclip, Mic, Loader, Copy, Pencil, RefreshCw, Check, X, Terminal, Globe } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useAppStore, type Message, type AgentRole } from '../store/appStore'
-import { api } from '../hooks/useApi'
+import { api, type RAGSource } from '../hooks/useApi'
 import { nanoid } from '../hooks/nanoid'
 import FileEditorPanel from './FileEditorPanel'
 
@@ -111,6 +111,38 @@ function MessageBubble({ msg, onEdit, onReload }: { msg: Message; onEdit?: (c: s
   )
 }
 
+// RAG status bubble — shown while web search is running
+function RAGBubble({ status }: { status: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center' }}>
+      <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: '3px 12px 12px 12px', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Globe size={13} style={{ color: '#06b6d4', animation: 'spin 2s linear infinite', flexShrink: 0 }} />
+        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{status}</span>
+      </div>
+    </div>
+  )
+}
+
+// RAG sources pill row — shown below response when web search was used
+function RAGSources({ sources }: { sources: RAGSource[] }) {
+  if (sources.length === 0) return null
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
+      <span style={{ fontSize: 10, color: 'var(--text-muted)', alignSelf: 'center' }}>Sources:</span>
+      {sources.map((s, i) => (
+        <a key={i} href={s.url} target="_blank" rel="noreferrer"
+          style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: '#06b6d4', background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.2)', borderRadius: 12, padding: '2px 8px', textDecoration: 'none', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'rgba(6,182,212,0.15)'}
+          onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'rgba(6,182,212,0.08)'}
+        >
+          <Globe size={9} style={{ flexShrink: 0 }} />
+          {s.title.slice(0, 30)}{s.title.length > 30 ? '…' : ''}
+        </a>
+      ))}
+    </div>
+  )
+}
+
 function ThinkingBubble() {
   return (
     <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -127,6 +159,8 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
   const [input,     setInput]     = useState('')
   const [sending,   setSending]   = useState(false)
   const [streaming, setStreaming] = useState(false)
+  const [ragStatus, setRagStatus] = useState<string | null>(null)       // "Searching web…"
+  const [ragSources, setRagSources] = useState<RAGSource[]>([])          // shown after response
   const bottomRef   = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -143,6 +177,9 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
     ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 140) + 'px'
   }, [input])
 
+  // Clear RAG state when session changes
+  useEffect(() => { setRagStatus(null); setRagSources([]) }, [activeSessionId])
+
   async function generateTitle(sessionId: string, firstMessage: string) {
     try {
       const data = await api.sendChat(`Give a 3 to 5 word plain text title for: "${firstMessage.slice(0, 100)}". Only plain words separated by spaces. No asterisks, no bold, no markdown, no punctuation. Example: Java Interview Preparation`, sessionId + '-titlegentmp', [])
@@ -157,23 +194,60 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
     const text = (overrideText ?? input).trim()
     if (!text || !session || sending || streaming) return
     if (!overrideText) setInput('')
+
     const msgId      = nanoid()
     const isFirstMsg = messages.filter(m => m.type === 'user').length === 0
+
     addMessage(session.id, { id: msgId, type: 'user', content: text, timestamp: Date.now() })
     api.saveMessage(msgId, session.id, 'user', text).catch(() => {})
-    setSending(true); setStreaming(false)
+
+    setSending(true)
+    setStreaming(false)
+    setRagStatus(null)
+    setRagSources([])
+
     try {
-      const history = messages.filter(m => m.type === 'user' || m.type === 'agent').map(m => ({ role: m.type === 'user' ? 'user' : 'assistant', content: m.content }))
-      const streamTaskId = nanoid(); let firstChunk = true
-      await api.streamChat(text, session.id, history, streamTaskId, (chunk) => {
-        if (firstChunk) { setSending(false); setStreaming(true); firstChunk = false }
-        appendStream(session.id, streamTaskId, chunk)
-      })
-      finalizeStream(session.id, streamTaskId); setStreaming(false)
+      const history = messages
+        .filter(m => m.type === 'user' || m.type === 'agent')
+        .map(m => ({ role: m.type === 'user' ? 'user' : 'assistant', content: m.content }))
+
+      const streamTaskId = nanoid()
+      let firstChunk = true
+
+      await api.streamChat(
+        text, session.id, history, streamTaskId,
+        // onChunk
+        (chunk) => {
+          if (firstChunk) {
+            setSending(false)
+            setStreaming(true)
+            setRagStatus(null)   // clear "Searching web…" once tokens start
+            firstChunk = false
+          }
+          appendStream(session.id, streamTaskId, chunk)
+        },
+        // onRagStatus — show "Searching web…" while RAG runs
+        (status) => {
+          setSending(false)   // hide ThinkingBubble
+          setRagStatus(status)
+        },
+        // onRagSources — save for display below response
+        (sources) => {
+          setRagSources(sources)
+        }
+      )
+
+      finalizeStream(session.id, streamTaskId)
+      setStreaming(false)
+
       if (isChat && isFirstMsg && session.title === 'New chat') generateTitle(session.id, text)
     } catch (err: any) {
       addMessage(session.id, { id: nanoid(), type: 'system', content: `Error: ${err.message}`, timestamp: Date.now() })
-    } finally { setSending(false); setStreaming(false) }
+    } finally {
+      setSending(false)
+      setStreaming(false)
+      setRagStatus(null)
+    }
   }
 
   function handleEdit(content: string) { setInput(content); textareaRef.current?.focus() }
@@ -195,46 +269,35 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', background: 'var(--bg-primary)' }}>
 
-      {/* ── Session title bar ─────────────────────────────────────── */}
+      {/* Session title bar */}
       {session && (
         <div style={{ flexShrink: 0, padding: '0 12px', height: 36, borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', gap: 8, overflow: 'hidden' }}>
-          {/* Project name */}
           <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1, minWidth: 0 }}>
             {session.title}
           </span>
-
-          {/* Path — shown only for project sessions, beside the terminal button */}
           {isProject && session.rootPath && (
             <span style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1, minWidth: 0 }}>
               {session.rootPath}
             </span>
           )}
-
-          {/* Spacer */}
           <div style={{ flex: 1, minWidth: 8 }} />
-
-          {/* Terminal button — project sessions only */}
           {isProject && session.rootPath && onOpenTerminal && (
-            <button
-              onClick={() => onOpenTerminal(session.rootPath!)}
+            <button onClick={() => onOpenTerminal(session.rootPath!)}
               title={`Open terminal at ${session.rootPath}`}
               style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 8px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text-muted)', cursor: 'pointer', fontSize: 11, flexShrink: 0 }}
               onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent)'; (e.currentTarget as HTMLElement).style.color = 'var(--accent)' }}
               onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)' }}
             >
-              <Terminal size={12} />
-              <span>Terminal</span>
+              <Terminal size={12} /><span>Terminal</span>
             </button>
           )}
-
-          {/* Type badge */}
           <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, fontWeight: 600, background: 'var(--accent-dim)', color: 'var(--accent)', flexShrink: 0 }}>
             {session.type}
           </span>
         </div>
       )}
 
-      {/* ── File tabs (project sessions) ──────────────────────────── */}
+      {/* File tabs */}
       {session && isProject && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 8px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)', flexShrink: 0, overflowX: 'auto', scrollbarWidth: 'none' }}>
           <div onClick={() => setActiveFile(session.id, null)}
@@ -259,29 +322,41 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
         </div>
       )}
 
-      {/* ── Main content ──────────────────────────────────────────── */}
+      {/* Main content */}
       {currentActiveFile ? (
         <FileEditorPanel filePath={currentActiveFile} />
       ) : (
         <>
           <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
-            {messages.length === 0 && !isBusy && (
+            {messages.length === 0 && !isBusy && !ragStatus && (
               <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--text-muted)' }}>
                 <Bot size={36} style={{ marginBottom: 10, opacity: 0.3 }} />
                 <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 4, color: 'var(--text-secondary)' }}>
                   {isChat ? 'Ask me anything' : 'Project assistant'}
                 </div>
                 <div style={{ fontSize: 12 }}>
-                  {isChat ? 'I can explain concepts, review code, or answer questions' : 'Ask about the codebase, request changes, or instruct agents'}
+                  {isChat ? 'I can explain concepts, review code, or search the web automatically' : 'Ask about the codebase, request changes, or instruct agents'}
                 </div>
               </div>
             )}
+
             {messages.map((msg, i) => (
               <MessageBubble key={msg.id} msg={msg} onEdit={handleEdit}
                 onReload={i === messages.length - 1 && msg.type === 'agent' ? handleReload : undefined}
               />
             ))}
-            {sending && !streaming && <ThinkingBubble />}
+
+            {/* RAG source pills — shown after last agent response */}
+            {ragSources.length > 0 && !isBusy && (
+              <RAGSources sources={ragSources} />
+            )}
+
+            {/* RAG status bubble — "Searching web…" */}
+            {ragStatus && <RAGBubble status={ragStatus} />}
+
+            {/* Thinking bubble — waiting for first token */}
+            {sending && !streaming && !ragStatus && <ThinkingBubble />}
+
             <div ref={bottomRef} />
           </div>
 
@@ -302,7 +377,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
                 </div>
               </div>
               <div style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', marginTop: 6 }}>
-                {modelShortName} · {isBusy ? 'Generating…' : 'Enter to send · Shift+Enter for new line'}
+                {modelShortName} · {ragStatus ? ragStatus : isBusy ? 'Generating…' : 'Enter to send · Shift+Enter for new line'}
               </div>
             </div>
           </div>
