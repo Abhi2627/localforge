@@ -1,14 +1,15 @@
 import { useEffect, useRef } from 'react'
 import { useAppStore } from '../store/appStore'
 
+// Must be absolute — Tauri webview doesn't use Vite's proxy
 const WS_URL = 'ws://localhost:3001/ws'
 
 export function useWebSocket() {
-  const ws = useRef<WebSocket | null>(null)
+  const ws             = useRef<WebSocket | null>(null)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const {
     setConnected, appendStream, finalizeStream,
-    updateAgent, addWrittenFile, setSessionSummary,
+    updateAgent, addWrittenFile, setSessionSummary, setAllFiles,
   } = useAppStore()
 
   function connect() {
@@ -31,9 +32,19 @@ export function useWebSocket() {
   }
 
   function handleMessage(data: any) {
-    // Project summary generated in background
+    // Project file scan results broadcast after openProject
+    if (data.type === 'project_files') {
+      if (data.sessionId && data.fileList?.length) {
+        setAllFiles(data.sessionId, data.fileList)
+      }
+      return
+    }
+
+    // AI-generated project summary
     if (data.type === 'project_summary') {
-      setSessionSummary(data.sessionId, data.summary)
+      if (data.sessionId && data.summary) {
+        setSessionSummary(data.sessionId, data.summary)
+      }
       return
     }
 
@@ -68,5 +79,5 @@ export function useWebSocket() {
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       ws.current?.close()
     }
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 }

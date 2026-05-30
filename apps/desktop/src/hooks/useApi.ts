@@ -1,10 +1,12 @@
-const BASE = '/api'
+// Use absolute URL so requests work in both Vite browser mode AND Tauri webview.
+// In Tauri the webview doesn't go through Vite's proxy, so /api/... would fail.
+const BASE = 'http://localhost:3001'
 
 async function req<T>(method: string, path: string, body?: object): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers: { 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined
+    body: body ? JSON.stringify(body) : undefined,
   })
   if (!res.ok) {
     const err = await res.text()
@@ -15,17 +17,16 @@ async function req<T>(method: string, path: string, body?: object): Promise<T> {
 
 // Streaming chat — reads SSE chunks and calls onChunk for each token
 export async function streamChatRequest(
-  message: string,
+  message:  string,
   sessionId: string,
-  history: Array<{ role: string; content: string }>,
-  onChunk: (chunk: string) => void
+  history:  Array<{ role: string; content: string }>,
+  onChunk:  (chunk: string) => void
 ): Promise<void> {
   const res = await fetch(`${BASE}/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message, sessionId, history }),
   })
-
   if (!res.ok) {
     const err = await res.text()
     throw new Error(`Stream failed (${res.status}): ${err}`)
@@ -53,11 +54,11 @@ export async function streamChatRequest(
 
 export const api = {
   // Models
-  getModels:    () => req<{ models: any[] }>('GET', '/models'),
-  selectModel:  (model: string) => req<any>('POST', '/models/select', { model }),
+  getModels:   () => req<{ models: any[] }>('GET', '/models'),
+  selectModel: (model: string) => req<any>('POST', '/models/select', { model }),
 
   // System
-  getSystem:    () => req<any>('GET', '/system'),
+  getSystem: () => req<any>('GET', '/system'),
 
   // Sessions
   getSessions:   () => req<{ sessions: any[] }>('GET', '/sessions'),
@@ -68,7 +69,7 @@ export const api = {
   saveMessage:   (id: string, sessionId: string, role: string, content: string, agentName?: string) =>
     req<any>('POST', '/sessions/message', { id, sessionId, role, content, agentName }),
 
-  // Project open
+  // Project
   openProject:       (sessionId: string, rootPath: string) =>
     req<{ success: boolean; isEmpty: boolean; fileList: string[]; fileTree: string; fileCount: number }>(
       'POST', '/project/open', { sessionId, rootPath }
@@ -77,25 +78,25 @@ export const api = {
     req<{ summary: string | null }>('GET', `/project/${sessionId}/summary`),
 
   // File operations
-  readFile: (filePath: string) =>
+  readFile:  (filePath: string) =>
     req<{ content: string }>('GET', `/project/file?path=${encodeURIComponent(filePath)}`),
   writeFile: (filePath: string, content: string) =>
     req<{ success: boolean }>('POST', '/project/file', { path: filePath, content }),
 
-  // Chat — non-streaming (used for title generation only)
+  // Chat — non-streaming (title generation only)
   sendChat: (message: string, sessionId: string, history: any[] = []) =>
     req<{ success: boolean; reply: string }>('POST', '/chat', { message, sessionId, history }),
 
-  // Chat — streaming (used for all real user messages)
+  // Chat — streaming (all real user messages)
   streamChat: (
-    message: string,
+    message:   string,
     sessionId: string,
-    history: Array<{ role: string; content: string }>,
-    _taskId: string,
-    onChunk: (chunk: string) => void
+    history:   Array<{ role: string; content: string }>,
+    _taskId:   string,
+    onChunk:   (chunk: string) => void
   ) => streamChatRequest(message, sessionId, history, onChunk),
 
-  // Agent instructions
+  // Projects / agents
   createProject: (name: string, rootPath: string) =>
     req<any>('POST', '/projects', { name, rootPath }),
   createAgent: (projectId: string, name: string, role: string, allowedPaths: string[] = []) =>

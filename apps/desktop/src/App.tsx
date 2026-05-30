@@ -21,7 +21,7 @@ export default function App() {
     screen, leftExpanded, rightExpanded,
     setLeftExpanded, setRightExpanded,
     sessions, activeSessionId,
-    loadSession,
+    loadSession, setAllFiles, setSessionSummary,
   } = useAppStore()
 
   const activeSession    = sessions.find(s => s.id === activeSessionId)
@@ -41,10 +41,38 @@ export default function App() {
     setTerminalOpen(true)
   }, [])
 
+  // Track which project sessions have already had their files loaded
+  // to avoid re-scanning on every re-render
+  const scannedProjects = useRef<Set<string>>(new Set())
+
+  // When a project session becomes active, scan its files if not done yet
   useEffect(() => {
-    if (activeSession?.type === 'project' && activeSession.rootPath) {
-      setTerminalCwd(activeSession.rootPath)
-    }
+    if (!activeSession || activeSession.type !== 'project' || !activeSession.rootPath) return
+    if (scannedProjects.current.has(activeSession.id)) return
+
+    // Mark as scanned immediately to prevent duplicate calls
+    scannedProjects.current.add(activeSession.id)
+
+    // Update terminal cwd
+    setTerminalCwd(activeSession.rootPath)
+
+    // If files already loaded (e.g. just opened via NewProjectModal), skip scan
+    if (activeSession.allFiles.length > 0) return
+
+    // Scan project files — this populates the explorer, graph, and summary
+    api.openProject(activeSession.id, activeSession.rootPath)
+      .then(result => {
+        if (result.fileList?.length) {
+          setAllFiles(activeSession.id, result.fileList)
+        }
+        // Summary comes via WebSocket broadcast (project_summary event)
+        // but also try fetching it directly in case WS missed it
+        return api.getProjectSummary(activeSession.id)
+      })
+      .then(({ summary }) => {
+        if (summary) setSessionSummary(activeSession.id, summary)
+      })
+      .catch(console.error)
   }, [activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const [winW, setWinW] = useState(window.innerWidth)
