@@ -27,8 +27,8 @@ function SessionItem({ session }: { session: any }) {
   const [showMenu, setShowMenu]   = useState(false)
   const [renaming, setRenaming]   = useState(false)
   const [renameVal, setRenameVal] = useState(session.title)
-  const menuRef    = useRef<HTMLDivElement>(null)
-  const btnRef     = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const btnRef  = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     if (!showMenu) return
@@ -58,17 +58,15 @@ function SessionItem({ session }: { session: any }) {
 
   return (
     <div style={{ position: 'relative' }}>
-      <div
-        onClick={() => setActiveSession(session.id)}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 6,
-          padding: '5px 8px 5px 20px', borderRadius: 6,
-          background: isActive ? 'var(--accent-dim)' : 'transparent',
-          color: isActive ? 'var(--accent)' : 'var(--text-secondary)',
-          cursor: 'pointer', fontSize: 12,
-          borderLeft: isActive ? '2px solid var(--accent)' : '2px solid transparent',
-          transition: 'background 0.15s',
-        }}
+      <div onClick={() => setActiveSession(session.id)} style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        padding: '5px 8px 5px 20px', borderRadius: 6,
+        background: isActive ? 'var(--accent-dim)' : 'transparent',
+        color: isActive ? 'var(--accent)' : 'var(--text-secondary)',
+        cursor: 'pointer', fontSize: 12,
+        borderLeft: isActive ? '2px solid var(--accent)' : '2px solid transparent',
+        transition: 'background 0.15s',
+      }}
         onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)' }}
         onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
       >
@@ -84,41 +82,29 @@ function SessionItem({ session }: { session: any }) {
             {session.title}
           </span>
         )}
-        <button
-          ref={btnRef}
-          onClick={e => { e.stopPropagation(); setShowMenu(v => !v) }}
-          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: 0, display: 'flex', opacity: 0.6 }}
-        >
+        <button ref={btnRef} onClick={e => { e.stopPropagation(); setShowMenu(v => !v) }}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: 0, display: 'flex', opacity: 0.6 }}>
           <MoreHorizontal size={12} />
         </button>
       </div>
 
-      {/* Menu — positioned to the RIGHT of the sidebar, never off-screen */}
       {showMenu && (
-        <div
-          ref={menuRef}
-          style={{
-            position: 'fixed',
-            // Compute left based on sidebar width (220px) + small gap
-            left: 228,
-            // Align vertically with the button
-            top: (() => {
-              if (btnRef.current) {
-                const rect = btnRef.current.getBoundingClientRect()
-                return Math.min(rect.top, window.innerHeight - 180)
-              }
-              return 100
-            })(),
-            zIndex: 200,
-            background: 'var(--bg-secondary)',
-            border: '1px solid var(--border)',
-            borderRadius: 8,
-            padding: 4,
-            minWidth: 200,
-            boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
-          }}
-        >
-          {/* Metadata */}
+        <div ref={menuRef} style={{
+          position: 'fixed',
+          left: 228,
+          top: (() => {
+            if (btnRef.current) {
+              const rect = btnRef.current.getBoundingClientRect()
+              return Math.min(rect.top, window.innerHeight - 160)
+            }
+            return 100
+          })(),
+          zIndex: 200,
+          background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+          borderRadius: 8, padding: 4, minWidth: 200,
+          boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+        }}>
+          {/* Metadata — created/updated only, NO path */}
           <div style={{ padding: '6px 10px 8px', borderBottom: '1px solid var(--border)', marginBottom: 3 }}>
             {session.createdAt && (
               <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 2 }}>
@@ -126,13 +112,8 @@ function SessionItem({ session }: { session: any }) {
               </div>
             )}
             {session.updatedAt && (
-              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 2 }}>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
                 Updated: <span style={{ color: 'var(--text-secondary)' }}>{formatDate(session.updatedAt)}</span>
-              </div>
-            )}
-            {session.rootPath && (
-              <div style={{ fontSize: 10, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                Path: <span style={{ color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{session.rootPath}</span>
               </div>
             )}
           </div>
@@ -176,8 +157,7 @@ function ChatSection({ sessions, expanded }: { sessions: any[]; expanded: boolea
   return (
     <div style={{ marginBottom: 4 }}>
       <button onClick={() => setOpen(!open)} style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', padding: '6px 10px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-        <MessageCircle size={13} />
-        <span style={{ flex: 1, textAlign: 'left' }}>Chats</span>
+        <MessageCircle size={13} /><span style={{ flex: 1, textAlign: 'left' }}>Chats</span>
         {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
       </button>
       {open && (
@@ -196,16 +176,10 @@ function ChatSection({ sessions, expanded }: { sessions: any[]; expanded: boolea
 function ProjectSection({ sessions, expanded }: { sessions: any[]; expanded: boolean }) {
   const [open, setOpen] = useState(true)
   const [showModal, setShowModal] = useState(false)
-
   const seen = new Set<string>()
   const filtered = sessions
     .filter(s => s.type === 'project' && s.title && s.title.trim() !== '')
-    .filter(s => {
-      const key = s.rootPath ?? s.id
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
+    .filter(s => { const key = s.rootPath ?? s.id; if (seen.has(key)) return false; seen.add(key); return true })
 
   if (!expanded) return (
     <button title="Projects" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', padding: '9px 0', border: 'none', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer' }}>
@@ -216,8 +190,7 @@ function ProjectSection({ sessions, expanded }: { sessions: any[]; expanded: boo
   return (
     <div style={{ marginBottom: 4 }}>
       <button onClick={() => setOpen(!open)} style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', padding: '6px 10px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-        <FolderOpen size={13} />
-        <span style={{ flex: 1, textAlign: 'left' }}>Projects</span>
+        <FolderOpen size={13} /><span style={{ flex: 1, textAlign: 'left' }}>Projects</span>
         {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
       </button>
       {open && (

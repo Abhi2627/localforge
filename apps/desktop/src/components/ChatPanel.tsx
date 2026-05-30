@@ -12,47 +12,38 @@ interface ChatPanelProps {
 }
 
 function roleBadgeClass(role?: AgentRole) { return `badge-${role ?? 'fullstack'}` }
-
-function formatTime(ts: number): string {
-  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
-
-function cleanTitle(raw: string): string {
-  return raw
-    .replace(/\*\*/g, '').replace(/\*/g, '').replace(/`/g, '')
-    .replace(/#{1,6}\s?/g, '').replace(/[_~]/g, '')
-    .replace(/^["'`[\]()]+|["'`[\]()]+$/g, '')
-    .replace(/[^\w\s-]/g, ' ').replace(/\s+/g, ' ').trim()
+function formatTime(ts: number) { return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
+function cleanTitle(raw: string) {
+  return raw.replace(/\*\*/g,'').replace(/\*/g,'').replace(/`/g,'').replace(/#{1,6}\s?/g,'').replace(/[_~]/g,'')
+    .replace(/^["'`[\]()]+|["'`[\]()]+$/g,'').replace(/[^\w\s-]/g,' ').replace(/\s+/g,' ').trim()
 }
 
 function MarkdownContent({ content }: { content: string }) {
   return (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
-      p:      ({ children }) => <p style={{ margin: '0 0 8px', lineHeight: 1.7 }}>{children}</p>,
-      h1:     ({ children }) => <h1 style={{ fontSize: 16, fontWeight: 700, margin: '12px 0 6px' }}>{children}</h1>,
-      h2:     ({ children }) => <h2 style={{ fontSize: 14, fontWeight: 700, margin: '10px 0 5px' }}>{children}</h2>,
-      h3:     ({ children }) => <h3 style={{ fontSize: 13, fontWeight: 600, margin: '8px 0 4px' }}>{children}</h3>,
-      ul:     ({ children }) => <ul style={{ margin: '4px 0 8px', paddingLeft: 20 }}>{children}</ul>,
-      ol:     ({ children }) => <ol style={{ margin: '4px 0 8px', paddingLeft: 20 }}>{children}</ol>,
-      li:     ({ children }) => <li style={{ margin: '3px 0', lineHeight: 1.6 }}>{children}</li>,
-      strong: ({ children }) => <strong style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{children}</strong>,
-      em:     ({ children }) => <em style={{ color: 'var(--text-secondary)' }}>{children}</em>,
-      code:   ({ children, className }) => {
+      p:          ({ children }) => <p style={{ margin: '0 0 8px', lineHeight: 1.7 }}>{children}</p>,
+      h1:         ({ children }) => <h1 style={{ fontSize: 16, fontWeight: 700, margin: '12px 0 6px' }}>{children}</h1>,
+      h2:         ({ children }) => <h2 style={{ fontSize: 14, fontWeight: 700, margin: '10px 0 5px' }}>{children}</h2>,
+      h3:         ({ children }) => <h3 style={{ fontSize: 13, fontWeight: 600, margin: '8px 0 4px' }}>{children}</h3>,
+      ul:         ({ children }) => <ul style={{ margin: '4px 0 8px', paddingLeft: 20 }}>{children}</ul>,
+      ol:         ({ children }) => <ol style={{ margin: '4px 0 8px', paddingLeft: 20 }}>{children}</ol>,
+      li:         ({ children }) => <li style={{ margin: '3px 0', lineHeight: 1.6 }}>{children}</li>,
+      strong:     ({ children }) => <strong style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{children}</strong>,
+      em:         ({ children }) => <em style={{ color: 'var(--text-secondary)' }}>{children}</em>,
+      blockquote: ({ children }) => <blockquote style={{ borderLeft: '3px solid var(--accent)', paddingLeft: 12, margin: '6px 0', color: 'var(--text-secondary)', fontStyle: 'italic' }}>{children}</blockquote>,
+      hr:         () => <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '10px 0' }} />,
+      a:          ({ children, href }) => <a href={href} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)', textDecoration: 'underline' }}>{children}</a>,
+      pre:        ({ children }) => <>{children}</>,
+      code:       ({ children, className }) => {
         const isBlock = !!className?.includes('language-')
         return isBlock
           ? <code style={{ display: 'block', background: 'var(--bg-primary)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 14px', fontSize: 12, fontFamily: 'monospace', overflowX: 'auto', margin: '6px 0', lineHeight: 1.6, color: 'var(--text-primary)' }}>{children}</code>
           : <code style={{ background: 'var(--bg-primary)', border: '1px solid var(--border)', borderRadius: 4, padding: '1px 5px', fontSize: 12, fontFamily: 'monospace', color: 'var(--accent)' }}>{children}</code>
       },
-      pre:        ({ children }) => <>{children}</>,
-      blockquote: ({ children }) => <blockquote style={{ borderLeft: '3px solid var(--accent)', paddingLeft: 12, margin: '6px 0', color: 'var(--text-secondary)', fontStyle: 'italic' }}>{children}</blockquote>,
-      hr:    () => <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '10px 0' }} />,
-      a:     ({ children, href }) => <a href={href} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)', textDecoration: 'underline' }}>{children}</a>,
       table: ({ children }) => <div style={{ overflowX: 'auto', margin: '8px 0' }}><table style={{ borderCollapse: 'collapse', fontSize: 12, width: '100%' }}>{children}</table></div>,
       th:    ({ children }) => <th style={{ border: '1px solid var(--border)', padding: '5px 10px', background: 'var(--bg-tertiary)', fontWeight: 600, textAlign: 'left' }}>{children}</th>,
       td:    ({ children }) => <td style={{ border: '1px solid var(--border)', padding: '5px 10px' }}>{children}</td>,
-    }}>
-      {content}
-    </ReactMarkdown>
+    }}>{content}</ReactMarkdown>
   )
 }
 
@@ -60,28 +51,21 @@ function MsgActions({ content, onEdit, onReload, isUser, visible }: {
   content: string; onEdit?: () => void; onReload?: () => void; isUser: boolean; visible: boolean
 }) {
   const [copied, setCopied] = useState(false)
-  function copy() {
-    navigator.clipboard.writeText(content).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
-  }
+  function copy() { navigator.clipboard.writeText(content).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) }) }
   return (
     <div style={{ display: 'flex', gap: 2, opacity: visible ? 1 : 0, transition: 'opacity 0.15s', alignItems: 'center', pointerEvents: visible ? 'auto' : 'none' }}>
-      <button onClick={copy} title="Copy"
-        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '3px 4px', borderRadius: 4, display: 'flex' }}
+      <button onClick={copy} title="Copy" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '3px 4px', borderRadius: 4, display: 'flex' }}
         onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'}
         onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'}
-      >
-        {copied ? <Check size={12} style={{ color: 'var(--green)' }} /> : <Copy size={12} />}
-      </button>
+      >{copied ? <Check size={12} style={{ color: 'var(--green)' }} /> : <Copy size={12} />}</button>
       {isUser && onEdit && (
-        <button onClick={onEdit} title="Edit"
-          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '3px 4px', borderRadius: 4, display: 'flex' }}
+        <button onClick={onEdit} title="Edit" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '3px 4px', borderRadius: 4, display: 'flex' }}
           onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'}
           onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'}
         ><Pencil size={12} /></button>
       )}
       {!isUser && onReload && (
-        <button onClick={onReload} title="Regenerate"
-          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '3px 4px', borderRadius: 4, display: 'flex' }}
+        <button onClick={onReload} title="Regenerate" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '3px 4px', borderRadius: 4, display: 'flex' }}
           onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'}
           onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'}
         ><RefreshCw size={12} /></button>
@@ -90,14 +74,9 @@ function MsgActions({ content, onEdit, onReload, isUser, visible }: {
   )
 }
 
-function MessageBubble({ msg, onEdit, onReload }: {
-  msg: Message; onEdit?: (c: string) => void; onReload?: () => void
-}) {
+function MessageBubble({ msg, onEdit, onReload }: { msg: Message; onEdit?: (c: string) => void; onReload?: () => void }) {
   const [hovered, setHovered] = useState(false)
-
-  if (msg.type === 'system') return (
-    <div className="msg-system"><span>●</span><span>{msg.content}</span></div>
-  )
+  if (msg.type === 'system') return <div className="msg-system"><span>●</span><span>{msg.content}</span></div>
   if (msg.type === 'stream') return (
     <div>
       {msg.agentName && <div style={{ fontSize: 10, color: 'var(--accent)', marginBottom: 3 }}>{msg.agentName}</div>}
@@ -107,10 +86,8 @@ function MessageBubble({ msg, onEdit, onReload }: {
       </div>
     </div>
   )
-
   const isUser = msg.type === 'user'
   const time   = formatTime(msg.timestamp)
-
   if (isUser) return (
     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, alignItems: 'flex-end' }}
       onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
@@ -121,16 +98,10 @@ function MessageBubble({ msg, onEdit, onReload }: {
       </div>
     </div>
   )
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}
       onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
-      {msg.agentName && (
-        <div className={`agent-badge ${roleBadgeClass(msg.agentRole)}`}
-          style={{ display: 'inline-block', fontSize: 10, alignSelf: 'flex-start' }}>
-          {msg.agentName}
-        </div>
-      )}
+      {msg.agentName && <div className={`agent-badge ${roleBadgeClass(msg.agentRole)}`} style={{ display: 'inline-block', fontSize: 10, alignSelf: 'flex-start' }}>{msg.agentName}</div>}
       <div className="msg-agent"><MarkdownContent content={msg.content} /></div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ fontSize: 10, color: 'var(--text-muted)', paddingLeft: 2 }}>{time}</span>
@@ -152,13 +123,7 @@ function ThinkingBubble() {
 }
 
 export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
-  const {
-    sessions, activeSessionId,
-    addMessage, appendStream, finalizeStream,
-    selectedModel, updateSessionTitle,
-    openFiles, activeFile, setActiveFile, closeFile,
-  } = useAppStore()
-
+  const { sessions, activeSessionId, addMessage, appendStream, finalizeStream, selectedModel, updateSessionTitle, openFiles, activeFile, setActiveFile, closeFile } = useAppStore()
   const [input,     setInput]     = useState('')
   const [sending,   setSending]   = useState(false)
   const [streaming, setStreaming] = useState(false)
@@ -173,20 +138,14 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) },
     [messages.length, messages[messages.length - 1]?.content])
-
   useEffect(() => {
-    const ta = textareaRef.current
-    if (!ta) return
-    ta.style.height = 'auto'
-    ta.style.height = Math.min(ta.scrollHeight, 140) + 'px'
+    const ta = textareaRef.current; if (!ta) return
+    ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 140) + 'px'
   }, [input])
 
   async function generateTitle(sessionId: string, firstMessage: string) {
     try {
-      const data = await api.sendChat(
-        `Give a 3 to 5 word plain text title for: "${firstMessage.slice(0, 100)}". Only plain words separated by spaces. No asterisks, no bold, no markdown, no punctuation. Example: Java Interview Preparation`,
-        sessionId + '-titlegentmp', []
-      )
+      const data = await api.sendChat(`Give a 3 to 5 word plain text title for: "${firstMessage.slice(0, 100)}". Only plain words separated by spaces. No asterisks, no bold, no markdown, no punctuation. Example: Java Interview Preparation`, sessionId + '-titlegentmp', [])
       const raw   = data.reply?.trim() ?? firstMessage
       const title = cleanTitle(raw) || firstMessage.slice(0, 40)
       updateSessionTitle(sessionId, title)
@@ -198,46 +157,32 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
     const text = (overrideText ?? input).trim()
     if (!text || !session || sending || streaming) return
     if (!overrideText) setInput('')
-
     const msgId      = nanoid()
     const isFirstMsg = messages.filter(m => m.type === 'user').length === 0
-
     addMessage(session.id, { id: msgId, type: 'user', content: text, timestamp: Date.now() })
     api.saveMessage(msgId, session.id, 'user', text).catch(() => {})
     setSending(true); setStreaming(false)
-
     try {
-      const history = messages
-        .filter(m => m.type === 'user' || m.type === 'agent')
-        .map(m => ({ role: m.type === 'user' ? 'user' : 'assistant', content: m.content }))
-
-      const streamTaskId = nanoid()
-      let firstChunk = true
-
+      const history = messages.filter(m => m.type === 'user' || m.type === 'agent').map(m => ({ role: m.type === 'user' ? 'user' : 'assistant', content: m.content }))
+      const streamTaskId = nanoid(); let firstChunk = true
       await api.streamChat(text, session.id, history, streamTaskId, (chunk) => {
         if (firstChunk) { setSending(false); setStreaming(true); firstChunk = false }
         appendStream(session.id, streamTaskId, chunk)
       })
-      finalizeStream(session.id, streamTaskId)
-      setStreaming(false)
-
+      finalizeStream(session.id, streamTaskId); setStreaming(false)
       if (isChat && isFirstMsg && session.title === 'New chat') generateTitle(session.id, text)
     } catch (err: any) {
       addMessage(session.id, { id: nanoid(), type: 'system', content: `Error: ${err.message}`, timestamp: Date.now() })
-    } finally {
-      setSending(false); setStreaming(false)
-    }
+    } finally { setSending(false); setStreaming(false) }
   }
 
   function handleEdit(content: string) { setInput(content); textareaRef.current?.focus() }
-
   async function handleReload() {
     if (!session || sending || streaming) return
     const userMsgs = messages.filter(m => m.type === 'user')
     if (userMsgs.length === 0) return
     await send(userMsgs[userMsgs.length - 1].content)
   }
-
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }
@@ -245,20 +190,30 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
   const isBusy         = sending || streaming
   const canSend        = !!input.trim() && !!session && !isBusy
   const modelShortName = selectedModel ? selectedModel.split(':')[0] : 'the AI'
-  const placeholder    = !session ? 'Open a chat or project…'
-    : isChat    ? 'Ask anything…'
-    : 'Ask anything about this project…'
+  const placeholder    = !session ? 'Open a chat or project…' : isChat ? 'Ask anything…' : 'Ask anything about this project…'
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', background: 'var(--bg-primary)' }}>
 
-      {/* Session title bar */}
+      {/* ── Session title bar ─────────────────────────────────────── */}
       {session && (
-        <div style={{ flexShrink: 0, padding: '0 12px', height: 36, borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <div style={{ flexShrink: 0, padding: '0 12px', height: 36, borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', gap: 8, overflow: 'hidden' }}>
+          {/* Project name */}
+          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1, minWidth: 0 }}>
             {session.title}
           </span>
-          {/* Terminal button — only for project sessions */}
+
+          {/* Path — shown only for project sessions, beside the terminal button */}
+          {isProject && session.rootPath && (
+            <span style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1, minWidth: 0 }}>
+              {session.rootPath}
+            </span>
+          )}
+
+          {/* Spacer */}
+          <div style={{ flex: 1, minWidth: 8 }} />
+
+          {/* Terminal button — project sessions only */}
           {isProject && session.rootPath && onOpenTerminal && (
             <button
               onClick={() => onOpenTerminal(session.rootPath!)}
@@ -271,6 +226,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
               <span>Terminal</span>
             </button>
           )}
+
           {/* Type badge */}
           <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, fontWeight: 600, background: 'var(--accent-dim)', color: 'var(--accent)', flexShrink: 0 }}>
             {session.type}
@@ -278,7 +234,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
         </div>
       )}
 
-      {/* File tabs for project sessions */}
+      {/* ── File tabs (project sessions) ──────────────────────────── */}
       {session && isProject && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 8px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)', flexShrink: 0, overflowX: 'auto', scrollbarWidth: 'none' }}>
           <div onClick={() => setActiveFile(session.id, null)}
@@ -303,7 +259,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
         </div>
       )}
 
-      {/* Main content */}
+      {/* ── Main content ──────────────────────────────────────────── */}
       {currentActiveFile ? (
         <FileEditorPanel filePath={currentActiveFile} />
       ) : (
@@ -321,8 +277,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
               </div>
             )}
             {messages.map((msg, i) => (
-              <MessageBubble key={msg.id} msg={msg}
-                onEdit={handleEdit}
+              <MessageBubble key={msg.id} msg={msg} onEdit={handleEdit}
                 onReload={i === messages.length - 1 && msg.type === 'agent' ? handleReload : undefined}
               />
             ))}
@@ -333,7 +288,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
           <div style={{ flexShrink: 0, padding: '10px 16px 14px', background: 'var(--bg-primary)' }}>
             <div style={{ maxWidth: 680, margin: '0 auto' }}>
               <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, background: 'var(--bg-tertiary)', border: `1px solid ${isBusy ? 'var(--accent)' : 'var(--border)'}`, borderRadius: 12, padding: '6px 8px 6px 12px', transition: 'border-color 0.2s' }}>
-                <button className="icon-btn" title="Attach file" style={{ width: 28, height: 28, flexShrink: 0, marginBottom: 1 }}><Paperclip size={14} /></button>
+                <button className="icon-btn" title="Attach" style={{ width: 28, height: 28, flexShrink: 0, marginBottom: 1 }}><Paperclip size={14} /></button>
                 <textarea ref={textareaRef} value={input} onChange={e => setInput(e.target.value)}
                   onKeyDown={onKeyDown} placeholder={placeholder} disabled={!session || isBusy} rows={1}
                   style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', resize: 'none', color: 'var(--text-primary)', fontSize: 13, lineHeight: 1.6, fontFamily: 'inherit', padding: '2px 0', maxHeight: 140, overflowY: 'auto' }}
@@ -355,7 +310,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
       )}
 
       <style>{`
-        @keyframes spin  { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }
+        @keyframes spin  { from { transform: rotate(0deg)  } to { transform: rotate(360deg) } }
         @keyframes blink { 0%,100% { opacity: 1 } 50% { opacity: 0 } }
       `}</style>
     </div>
