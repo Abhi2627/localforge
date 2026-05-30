@@ -4,6 +4,7 @@ import websocket from '@fastify/websocket'
 import pty from 'node-pty'
 import os from 'os'
 import fs from 'fs'
+import { execSync } from 'child_process'
 import { getDb, closeDb } from './persistence/Database.js'
 import { initSessionTables, upsertSession, saveMessage, getAllSessions, getSession, getSessionMessages, deleteSession } from './persistence/SessionStore.js'
 import { profileSystem } from './orchestrator/SystemProfiler.js'
@@ -19,6 +20,42 @@ type ChatRole = 'system' | 'user' | 'assistant'
 const server    = Fastify({ logger: false })
 let taskQueue: TaskQueue
 const wsClients = new Set<any>()
+
+// Detect the user's default shell with multiple fallbacks
+function detectShell(): string {
+  if (os.platform() === 'win32') return 'powershell.exe'
+
+  // 1. $SHELL env var (set when launched from a real terminal)
+  if (process.env.SHELL && fs.existsSync(process.env.SHELL)) {
+    return process.env.SHELL
+  }
+
+  // 2. Read from /etc/passwd for the current user (works on macOS/Linux)
+  try {
+    const username = os.userInfo().username
+    const passwd   = fs.readFileSync('/etc/passwd', 'utf8')
+    const line     = passwd.split('\n').find(l => l.startsWith(username + ':'))
+    if (line) {
+      const shell = line.split(':').pop()?.trim()
+      if (shell && fs.existsSync(shell)) return shell
+    }
+  } catch { }
+
+  // 3. macOS dscl (Directory Services)
+  try {
+    const shell = execSync('dscl . -read /Users/$USER UserShell 2>/dev/null | awk \'{print $2}\'', { encoding: 'utf8' }).trim()
+    if (shell && fs.existsSync(shell)) return shell
+  } catch { }
+
+  // 4. Try common shells in order
+  for (const s of ['/bin/zsh', '/bin/bash', '/bin/sh']) {
+    if (fs.existsSync(s)) return s
+  }
+
+  return '/bin/sh'
+}
+
+const DEFAULT_SHELL = detectShell()
 
 function broadcast(data: object) {
   const msg = JSON.stringify(data)
@@ -67,45 +104,83 @@ async function bootstrap() {
 
   // ── PTY Terminal WebSocket ─────────────────────────────────────────────────
   server.get<{ Querystring: { cwd?: string } }>('/terminal', { websocket: true }, (socket, req) => {
-    const cwd   = req.query.cwd ?? os.homedir()
-    const shell = os.platform() === 'win32'
-      ? 'powershell.exe'
-      : (process.env.SHELL ?? '/bin/zsh')
+    const rawCwd = req.query.cwd ?? os.homedir()
+    // Validate cwd exists, fall back to home dir
+    const cwd = fs.existsSync(rawCwd) ? rawCwd : os.homedir()
 
     let ptyProc: ReturnType<typeof pty.spawn> | null = null
 
     try {
-      ptyProc = pty.spawn(shell, [], {
+      console.log(`[terminal] spawning ${DEFAULT_SHELL} in ${cwd}`)
+
+      ptyProc = pty.spawn(DEFAULT_SHELL, [], {
         name: 'xterm-256color',
-        cols: 120, rows: 30, cwd,
-        env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'LocalForge' } as Record<string, string>,
+        cols: 120,
+        rows: 30,
+        cwd,
+        env: {
+          ...process.env,
+          // Ensure these are always set so the shell initialises properly
+          TERM:         'xterm-256color',
+          COLORTERM:    'truecolor',
+          TERM_PROGRAM: 'LocalForge',
+          HOME:         process.env.HOME ?? os.homedir(),
+          USER:         process.env.USER ?? os.userInfo().username,
+          SHELL:        DEFAULT_SHELL,
+          PATH:         process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin',
+          LANG:         process.env.LANG ?? 'en_US.UTF-8',
+        } as Record<string, string>,
       })
 
-      ptyProc.onData((data: string) => { try { socket.send(data) } catch { } })
-      ptyProc.onExit(() => {
-        try { socket.send('\r\n\x1b[90m[shell exited]\x1b[0m\r\n') } catch { }
+      // PTY → WebSocket
+      ptyProc.onData((data: string) => {
+        try { socket.send(data) } catch { }
+      })
+
+      ptyProc.onExit(({ exitCode }) => {
+        try { socket.send(`\r\n\x1b[90m[shell exited with code ${exitCode}]\x1b[0m\r\n`) } catch { }
         try { socket.close() } catch { }
       })
 
+      // WebSocket → PTY
       socket.on('message', (raw: Buffer | string) => {
         if (!ptyProc) return
+        const str = typeof raw === 'string' ? raw : raw.toString('utf8')
         try {
-          const msg = JSON.parse(raw.toString())
-          if (msg.type === 'input')  ptyProc.write(msg.data as string)
-          if (msg.type === 'resize') ptyProc.resize(Math.max(1, Math.floor(Number(msg.cols))), Math.max(1, Math.floor(Number(msg.rows))))
-        } catch { ptyProc.write(raw.toString()) }
+          const msg = JSON.parse(str)
+          if (msg.type === 'input') {
+            ptyProc.write(msg.data as string)
+          } else if (msg.type === 'resize') {
+            const cols = Math.max(1, Math.floor(Number(msg.cols)))
+            const rows = Math.max(1, Math.floor(Number(msg.rows)))
+            ptyProc.resize(cols, rows)
+          }
+        } catch {
+          // Not JSON — write raw bytes directly (fallback)
+          ptyProc.write(str)
+        }
       })
 
-      socket.on('close', () => { if (ptyProc) { ptyProc.kill(); ptyProc = null } })
+      socket.on('close', () => {
+        if (ptyProc) {
+          try { ptyProc.kill() } catch { }
+          ptyProc = null
+        }
+      })
 
     } catch (err: any) {
-      try { socket.send(`\r\n\x1b[31mFailed to spawn shell: ${err.message}\x1b[0m\r\n`) } catch { }
-      socket.close()
+      console.error('[terminal] spawn error:', err.message)
+      try {
+        socket.send(`\r\n\x1b[31m[Failed to spawn shell: ${err.message}]\x1b[0m\r\n`)
+        socket.send(`\x1b[90mShell: ${DEFAULT_SHELL}\x1b[0m\r\n`)
+        socket.send(`\x1b[90mCwd:   ${cwd}\x1b[0m\r\n`)
+      } catch { }
+      try { socket.close() } catch { }
     }
   })
 
   // ── Health / System ────────────────────────────────────────────────────────
-  server.get('/health', async () => ({ status: 'ok', mode: taskQueue.currentMode }))
+  server.get('/health', async () => ({ status: 'ok', mode: taskQueue.currentMode, shell: DEFAULT_SHELL }))
   server.get('/system', async () => profileSystem())
   server.post<{ Body: { mode: 'sequential' | 'parallel'; maxParallel?: number } }>('/system/mode', async (req) => {
     taskQueue.setMode(req.body.mode, req.body.maxParallel)
@@ -267,6 +342,7 @@ async function bootstrap() {
   const PORT = Number(process.env.PORT ?? 3001)
   await server.listen({ port: PORT, host: '0.0.0.0' })
   console.log(`\n🔨 LocalForge  :${PORT}  |  Model: ${loadConfig().selectedModel}`)
+  console.log(`   Shell: ${DEFAULT_SHELL}`)
   console.log(`   Terminal ws://localhost:${PORT}/terminal\n`)
 }
 
