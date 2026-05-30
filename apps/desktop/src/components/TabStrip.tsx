@@ -1,58 +1,66 @@
+import { useState } from 'react'
 import { X } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 
-// Max number of tabs to show — fits comfortably at any window width
 const MAX_TABS = 4
+const CARD_W   = 160  // fixed card width px
 
 export default function TabStrip() {
   const { sessions, activeSessionId, setActiveSession } = useAppStore()
 
-  // Always derive tabs directly from sessions sorted by lastAccessedAt descending
-  // No ref, no dismissed set — the strip purely reflects "most recently active"
-  // Deleted sessions automatically disappear because they're removed from `sessions`
+  // Manually dismissed tabs (removed from strip, session still exists)
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set())
+
+  // Always the N most recently accessed sessions, excluding dismissed and blank
   const tabs = [...sessions]
     .sort((a, b) => b.lastAccessedAt - a.lastAccessedAt)
-    .slice(0, MAX_TABS)          // keep only the N most recent
-    .filter(s => s.title && s.title.trim() !== '')
+    .filter(s => s.title && s.title.trim() !== '' && !dismissed.has(s.id))
+    .slice(0, MAX_TABS)
 
-  // Don't render when there's only 0 or 1 session — no point showing a strip
+  // When a session is deleted it disappears from sessions array → auto-removed from strip
+  // When user hits X → added to dismissed → removed from strip without deleting session
+
   if (tabs.length < 2) return null
+
+  function dismiss(e: React.MouseEvent, id: string) {
+    e.stopPropagation()
+    setDismissed(prev => new Set([...prev, id]))
+  }
 
   return (
     <div style={{
       display: 'flex',
-      alignItems: 'stretch',
-      background: 'var(--bg-secondary)',
+      alignItems: 'center',
+      gap: 6,
+      padding: '6px 10px',
+      background: 'var(--bg-primary)',
       borderBottom: '1px solid var(--border)',
       flexShrink: 0,
-      height: 48,
-      overflow: 'hidden',   // never scroll — cards fill available width equally
+      overflow: 'hidden',   // no scroll ever
     }}>
-      {tabs.map((tab, i) => {
+      {tabs.map(tab => {
         const isActive = tab.id === activeSessionId
-        const isLast   = i === tabs.length - 1
-
         return (
           <div
             key={tab.id}
             onClick={() => setActiveSession(tab.id)}
             style={{
-              flex: 1,
-              minWidth: 0,
+              width: CARD_W,
+              flexShrink: 0,
               display: 'flex',
               flexDirection: 'column',
               justifyContent: 'center',
-              padding: '0 12px',
-              borderRight: isLast ? 'none' : '1px solid var(--border)',
-              borderTop: isActive ? '2px solid var(--accent)' : '2px solid transparent',
-              background: isActive ? 'var(--accent-dim)' : 'transparent',
+              padding: '6px 10px 6px 12px',
+              borderRadius: 8,
+              border: `1px solid ${isActive ? 'var(--accent)' : 'var(--border)'}`,
+              background: isActive ? 'var(--accent-dim)' : 'var(--bg-secondary)',
               cursor: 'pointer',
               position: 'relative',
-              transition: 'background 0.12s',
+              transition: 'border-color 0.15s, background 0.15s',
               userSelect: 'none',
             }}
-            onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)' }}
-            onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+            onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.borderColor = 'var(--border-light)' }}
+            onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)' }}
           >
             {/* Title */}
             <span style={{
@@ -62,6 +70,7 @@ export default function TabStrip() {
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
+              paddingRight: 16,
               lineHeight: 1.4,
             }}>
               {tab.title}
@@ -69,15 +78,28 @@ export default function TabStrip() {
             {/* Type */}
             <span style={{
               fontSize: 10,
-              marginTop: 1,
+              marginTop: 2,
               color: isActive ? 'var(--accent)' : 'var(--text-muted)',
               textTransform: 'capitalize',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
             }}>
               {tab.type}
             </span>
+            {/* X — dismiss from strip only, does NOT delete the session */}
+            <button
+              onClick={e => dismiss(e, tab.id)}
+              title="Remove from tab strip"
+              style={{
+                position: 'absolute', top: 6, right: 5,
+                background: 'none', border: 'none', cursor: 'pointer',
+                color: isActive ? 'var(--accent)' : 'var(--text-muted)',
+                display: 'flex', padding: 2, borderRadius: 3,
+                opacity: 0.5,
+              }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '1' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '0.5' }}
+            >
+              <X size={10} />
+            </button>
           </div>
         )
       })}

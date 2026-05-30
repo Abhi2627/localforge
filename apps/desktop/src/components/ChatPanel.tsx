@@ -1,11 +1,15 @@
 import { useRef, useEffect, KeyboardEvent, useState } from 'react'
-import { Send, Bot, Paperclip, Mic, Loader, Copy, Pencil, RefreshCw, Check, X } from 'lucide-react'
+import { Send, Bot, Paperclip, Mic, Loader, Copy, Pencil, RefreshCw, Check, X, Terminal } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useAppStore, type Message, type AgentRole } from '../store/appStore'
 import { api } from '../hooks/useApi'
 import { nanoid } from '../hooks/nanoid'
 import FileEditorPanel from './FileEditorPanel'
+
+interface ChatPanelProps {
+  onOpenTerminal?: (cwd: string) => void
+}
 
 function roleBadgeClass(role?: AgentRole) { return `badge-${role ?? 'fullstack'}` }
 
@@ -52,7 +56,6 @@ function MarkdownContent({ content }: { content: string }) {
   )
 }
 
-// Action bar — shown on hover via parent's onMouseEnter/Leave
 function MsgActions({ content, onEdit, onReload, isUser, visible }: {
   content: string; onEdit?: () => void; onReload?: () => void; isUser: boolean; visible: boolean
 }) {
@@ -70,22 +73,18 @@ function MsgActions({ content, onEdit, onReload, isUser, visible }: {
         {copied ? <Check size={12} style={{ color: 'var(--green)' }} /> : <Copy size={12} />}
       </button>
       {isUser && onEdit && (
-        <button onClick={onEdit} title="Edit message"
+        <button onClick={onEdit} title="Edit"
           style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '3px 4px', borderRadius: 4, display: 'flex' }}
           onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'}
           onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'}
-        >
-          <Pencil size={12} />
-        </button>
+        ><Pencil size={12} /></button>
       )}
       {!isUser && onReload && (
         <button onClick={onReload} title="Regenerate"
           style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '3px 4px', borderRadius: 4, display: 'flex' }}
           onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'}
           onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'}
-        >
-          <RefreshCw size={12} />
-        </button>
+        ><RefreshCw size={12} /></button>
       )}
     </div>
   )
@@ -94,7 +93,6 @@ function MsgActions({ content, onEdit, onReload, isUser, visible }: {
 function MessageBubble({ msg, onEdit, onReload }: {
   msg: Message; onEdit?: (c: string) => void; onReload?: () => void
 }) {
-  // Hover state managed in component, not CSS — avoids !important issues
   const [hovered, setHovered] = useState(false)
 
   if (msg.type === 'system') return (
@@ -114,11 +112,8 @@ function MessageBubble({ msg, onEdit, onReload }: {
   const time   = formatTime(msg.timestamp)
 
   if (isUser) return (
-    <div
-      style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, alignItems: 'flex-end' }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
+    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, alignItems: 'flex-end' }}
+      onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
         <MsgActions content={msg.content} isUser visible={hovered} onEdit={() => onEdit?.(msg.content)} />
         <div className="msg-user">{msg.content}</div>
@@ -128,11 +123,8 @@ function MessageBubble({ msg, onEdit, onReload }: {
   )
 
   return (
-    <div
-      style={{ display: 'flex', flexDirection: 'column', gap: 3 }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}
+      onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
       {msg.agentName && (
         <div className={`agent-badge ${roleBadgeClass(msg.agentRole)}`}
           style={{ display: 'inline-block', fontSize: 10, alignSelf: 'flex-start' }}>
@@ -159,7 +151,7 @@ function ThinkingBubble() {
   )
 }
 
-export default function ChatPanel() {
+export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
   const {
     sessions, activeSessionId,
     addMessage, appendStream, finalizeStream,
@@ -167,16 +159,16 @@ export default function ChatPanel() {
     openFiles, activeFile, setActiveFile, closeFile,
   } = useAppStore()
 
-  const [input, setInput]       = useState('')
-  const [sending, setSending]   = useState(false)
+  const [input,     setInput]     = useState('')
+  const [sending,   setSending]   = useState(false)
   const [streaming, setStreaming] = useState(false)
   const bottomRef   = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  const session    = sessions.find(s => s.id === activeSessionId)
-  const messages   = session?.messages ?? []
-  const isProject  = session?.type === 'project'
-  const isChat     = session?.type === 'chat'
+  const session           = sessions.find(s => s.id === activeSessionId)
+  const messages          = session?.messages ?? []
+  const isProject         = session?.type === 'project'
+  const isChat            = session?.type === 'chat'
   const currentActiveFile = session ? (activeFile[session.id] ?? null) : null
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) },
@@ -212,9 +204,7 @@ export default function ChatPanel() {
 
     addMessage(session.id, { id: msgId, type: 'user', content: text, timestamp: Date.now() })
     api.saveMessage(msgId, session.id, 'user', text).catch(() => {})
-
-    setSending(true)
-    setStreaming(false)
+    setSending(true); setStreaming(false)
 
     try {
       const history = messages
@@ -235,8 +225,7 @@ export default function ChatPanel() {
     } catch (err: any) {
       addMessage(session.id, { id: nanoid(), type: 'system', content: `Error: ${err.message}`, timestamp: Date.now() })
     } finally {
-      setSending(false)
-      setStreaming(false)
+      setSending(false); setStreaming(false)
     }
   }
 
@@ -265,9 +254,27 @@ export default function ChatPanel() {
 
       {/* Session title bar */}
       {session && (
-        <div style={{ flexShrink: 0, padding: '5px 12px', borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{session.title}</span>
-          <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, fontWeight: 600, background: 'var(--accent-dim)', color: 'var(--accent)', flexShrink: 0 }}>{session.type}</span>
+        <div style={{ flexShrink: 0, padding: '0 12px', height: 36, borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {session.title}
+          </span>
+          {/* Terminal button — only for project sessions */}
+          {isProject && session.rootPath && onOpenTerminal && (
+            <button
+              onClick={() => onOpenTerminal(session.rootPath!)}
+              title={`Open terminal at ${session.rootPath}`}
+              style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 8px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text-muted)', cursor: 'pointer', fontSize: 11, flexShrink: 0 }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent)'; (e.currentTarget as HTMLElement).style.color = 'var(--accent)' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)' }}
+            >
+              <Terminal size={12} />
+              <span>Terminal</span>
+            </button>
+          )}
+          {/* Type badge */}
+          <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, fontWeight: 600, background: 'var(--accent-dim)', color: 'var(--accent)', flexShrink: 0 }}>
+            {session.type}
+          </span>
         </div>
       )}
 
@@ -296,7 +303,7 @@ export default function ChatPanel() {
         </div>
       )}
 
-      {/* Main content: file editor or chat */}
+      {/* Main content */}
       {currentActiveFile ? (
         <FileEditorPanel filePath={currentActiveFile} />
       ) : (
@@ -313,14 +320,12 @@ export default function ChatPanel() {
                 </div>
               </div>
             )}
-
             {messages.map((msg, i) => (
               <MessageBubble key={msg.id} msg={msg}
                 onEdit={handleEdit}
                 onReload={i === messages.length - 1 && msg.type === 'agent' ? handleReload : undefined}
               />
             ))}
-
             {sending && !streaming && <ThinkingBubble />}
             <div ref={bottomRef} />
           </div>
@@ -350,7 +355,7 @@ export default function ChatPanel() {
       )}
 
       <style>{`
-        @keyframes spin  { from { transform: rotate(0deg)  } to { transform: rotate(360deg) } }
+        @keyframes spin  { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }
         @keyframes blink { 0%,100% { opacity: 1 } 50% { opacity: 0 } }
       `}</style>
     </div>

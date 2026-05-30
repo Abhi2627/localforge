@@ -23,11 +23,12 @@ function formatDate(iso: string): string {
 
 function SessionItem({ session }: { session: any }) {
   const { activeSessionId, setActiveSession, updateSessionTitle, closeSession } = useAppStore()
-  const isActive  = session.id === activeSessionId
+  const isActive   = session.id === activeSessionId
   const [showMenu, setShowMenu]   = useState(false)
   const [renaming, setRenaming]   = useState(false)
   const [renameVal, setRenameVal] = useState(session.title)
-  const menuRef = useRef<HTMLDivElement>(null)
+  const menuRef    = useRef<HTMLDivElement>(null)
+  const btnRef     = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     if (!showMenu) return
@@ -57,15 +58,17 @@ function SessionItem({ session }: { session: any }) {
 
   return (
     <div style={{ position: 'relative' }}>
-      <div onClick={() => setActiveSession(session.id)} style={{
-        display: 'flex', alignItems: 'center', gap: 6,
-        padding: '5px 8px 5px 20px', borderRadius: 6,
-        background: isActive ? 'var(--accent-dim)' : 'transparent',
-        color: isActive ? 'var(--accent)' : 'var(--text-secondary)',
-        cursor: 'pointer', fontSize: 12,
-        borderLeft: isActive ? '2px solid var(--accent)' : '2px solid transparent',
-        transition: 'background 0.15s',
-      }}
+      <div
+        onClick={() => setActiveSession(session.id)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '5px 8px 5px 20px', borderRadius: 6,
+          background: isActive ? 'var(--accent-dim)' : 'transparent',
+          color: isActive ? 'var(--accent)' : 'var(--text-secondary)',
+          cursor: 'pointer', fontSize: 12,
+          borderLeft: isActive ? '2px solid var(--accent)' : '2px solid transparent',
+          transition: 'background 0.15s',
+        }}
         onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)' }}
         onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
       >
@@ -81,45 +84,65 @@ function SessionItem({ session }: { session: any }) {
             {session.title}
           </span>
         )}
-        <button onClick={e => { e.stopPropagation(); setShowMenu(v => !v) }}
-          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: 0, display: 'flex', opacity: 0.6 }}>
+        <button
+          ref={btnRef}
+          onClick={e => { e.stopPropagation(); setShowMenu(v => !v) }}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: 0, display: 'flex', opacity: 0.6 }}
+        >
           <MoreHorizontal size={12} />
         </button>
       </div>
 
+      {/* Menu — positioned to the RIGHT of the sidebar, never off-screen */}
       {showMenu && (
-        <div ref={menuRef} style={{
-          position: 'absolute', right: 8, top: '100%', zIndex: 100,
-          background: 'var(--bg-secondary)', border: '1px solid var(--border)',
-          borderRadius: 6, padding: 4, minWidth: 170,
-          boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
-        }}>
-          {/* Metadata section */}
-          <div style={{ padding: '5px 10px 6px', borderBottom: '1px solid var(--border)', marginBottom: 3 }}>
+        <div
+          ref={menuRef}
+          style={{
+            position: 'fixed',
+            // Compute left based on sidebar width (220px) + small gap
+            left: 228,
+            // Align vertically with the button
+            top: (() => {
+              if (btnRef.current) {
+                const rect = btnRef.current.getBoundingClientRect()
+                return Math.min(rect.top, window.innerHeight - 180)
+              }
+              return 100
+            })(),
+            zIndex: 200,
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+            padding: 4,
+            minWidth: 200,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+          }}
+        >
+          {/* Metadata */}
+          <div style={{ padding: '6px 10px 8px', borderBottom: '1px solid var(--border)', marginBottom: 3 }}>
             {session.createdAt && (
               <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 2 }}>
                 Created: <span style={{ color: 'var(--text-secondary)' }}>{formatDate(session.createdAt)}</span>
               </div>
             )}
             {session.updatedAt && (
-              <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 2 }}>
                 Updated: <span style={{ color: 'var(--text-secondary)' }}>{formatDate(session.updatedAt)}</span>
               </div>
             )}
             {session.rootPath && (
-              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 Path: <span style={{ color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{session.rootPath}</span>
               </div>
             )}
           </div>
-
           {[
             { label: 'Rename', action: () => { setRenaming(true); setShowMenu(false) }, color: 'var(--text-secondary)' },
             { label: 'Delete', action: handleDelete, color: 'var(--red)' },
           ].map(item => (
             <button key={item.label} onClick={item.action} style={{
               display: 'block', width: '100%', textAlign: 'left',
-              padding: '6px 10px', background: 'none', border: 'none',
+              padding: '7px 10px', background: 'none', border: 'none',
               color: item.color, fontSize: 12, cursor: 'pointer', borderRadius: 4,
             }}
               onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)'}
@@ -174,7 +197,6 @@ function ProjectSection({ sessions, expanded }: { sessions: any[]; expanded: boo
   const [open, setOpen] = useState(true)
   const [showModal, setShowModal] = useState(false)
 
-  // Deduplicate projects by rootPath — keep only the most recently updated per path
   const seen = new Set<string>()
   const filtered = sessions
     .filter(s => s.type === 'project' && s.title && s.title.trim() !== '')

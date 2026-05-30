@@ -98,7 +98,7 @@ export default function App() {
           title:          s.title,
           rootPath:       s.rootPath,
           summary:        s.summary,
-          createdAt:      s.createdAt,   // passed through so menu can show it
+          createdAt:      s.createdAt,
           updatedAt:      s.updatedAt,
           agents:         [],
           messages,
@@ -128,12 +128,18 @@ export default function App() {
       <div style={{ gridColumn: '1 / -1', minWidth: 0 }}><TopBar /></div>
 
       <div style={{ minWidth: 0, overflow: 'hidden' }}>
-        <LeftBar onOpenTerminal={openSystemTerminal} onOpenProjectTerminal={openProjectTerminal} />
+        <LeftBar
+          onOpenTerminal={openSystemTerminal}
+          onOpenProjectTerminal={openProjectTerminal}
+        />
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0, minWidth: 0 }}>
         <TabStrip />
-        {screen === 'welcome' ? <WelcomeScreen /> : <ChatPanel />}
+        {screen === 'welcome'
+          ? <WelcomeScreen />
+          : <ChatPanel onOpenTerminal={openProjectTerminal} />
+        }
       </div>
 
       {showRight && (
