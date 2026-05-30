@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef } from 'react'
+import { useMemo, useState, useCallback, useRef } from 'react'
 
 interface Props {
   files: string[]
@@ -6,14 +6,13 @@ interface Props {
 }
 
 interface Node {
-  id: string
-  label: string
-  x: number
-  y: number
-  vx: number
-  vy: number
-  color: string
+  id:       string
+  label:    string
+  x:        number
+  y:        number
+  color:    string
   isFolder: boolean
+  size:     number
 }
 
 interface Edge {
@@ -21,246 +20,149 @@ interface Edge {
   target: string
 }
 
-function getNodeColor(name: string, isFolder: boolean): string {
-  if (isFolder) return 'var(--accent)' // Folders are brand purple
+const IGNORE = ['node_modules', 'dist', '.git', 'build', '.next', '.tauri']
+
+function fileColor(name: string, isFolder: boolean): string {
+  if (isFolder) return '#8b5cf6'
   const ext = name.split('.').pop()?.toLowerCase() ?? ''
-  if (['tsx', 'jsx'].includes(ext)) return '#3dd68c' // React/Components
-  if (['ts', 'js'].includes(ext)) return '#3b82f6' // Modules/Code
-  if (['css', 'scss'].includes(ext)) return '#eab308' // Styles
-  if (['json', 'yaml', 'toml'].includes(ext)) return '#06b6d4' // Configs
-  if (['md', 'txt'].includes(ext)) return '#8b5cf6' // Markdown/Docs
-  return '#94a3b8' // Default file color
+  if (['tsx', 'jsx'].includes(ext)) return '#3dd68c'
+  if (['ts', 'js'].includes(ext))   return '#3b82f6'
+  if (['css', 'scss'].includes(ext)) return '#eab308'
+  if (['json', 'yaml', 'toml'].includes(ext)) return '#06b6d4'
+  if (['md', 'txt'].includes(ext))  return '#a78bfa'
+  if (['rs'].includes(ext))         return '#f97316'
+  if (['py'].includes(ext))         return '#facc15'
+  return '#94a3b8'
+}
+
+// Deterministic layout using a radial tree — no physics, no jitter
+function buildGraph(files: string[], rootPath: string): { nodes: Node[]; edges: Edge[] } {
+  if (files.length === 0) return { nodes: [], edges: [] }
+
+  const filtered = files
+    .filter(f => {
+      const rel = f.replace(rootPath, '').replace(/^[/\\]/, '')
+      return !IGNORE.some(ig => rel.startsWith(ig)) &&
+        /\.(ts|tsx|js|jsx|css|scss|json|md|yaml|yml|toml|rs|py)$/.test(f)
+    })
+    .slice(0, 60)
+
+  // Build folder/file tree
+  const nodeMap = new Map<string, { id: string; label: string; isFolder: boolean; children: string[]; parent: string | null }>()
+  const rootLabel = rootPath.split('/').pop() ?? 'project'
+  nodeMap.set(rootPath, { id: rootPath, label: rootLabel, isFolder: true, children: [], parent: null })
+
+  filtered.forEach(file => {
+    const rel   = file.replace(rootPath, '').replace(/^[/\\]/, '').replace(/\\/g, '/')
+    const parts = rel.split('/')
+    let   cur   = rootPath
+
+    for (let i = 0; i < parts.length; i++) {
+      const part   = parts[i]
+      const isLast = i === parts.length - 1
+      const next   = `${cur}/${part}`
+      const nodeId = isLast ? file : next
+
+      if (!nodeMap.has(nodeId)) {
+        const parent = nodeMap.get(cur)!
+        nodeMap.set(nodeId, { id: nodeId, label: part, isFolder: !isLast, children: [], parent: cur })
+        parent.children.push(nodeId)
+      }
+      cur = next
+    }
+  })
+
+  // Radial layout: BFS from root, assign angles per level
+  const positions = new Map<string, { x: number; y: number }>()
+  const cx = 380
+  const cy = 260
+  const levelRadius = [0, 80, 150, 210, 265, 310]
+
+  const queue: Array<{ id: string; level: number; angleStart: number; angleEnd: number }> = [
+    { id: rootPath, level: 0, angleStart: 0, angleEnd: Math.PI * 2 }
+  ]
+
+  positions.set(rootPath, { x: cx, y: cy })
+
+  while (queue.length > 0) {
+    const { id, level, angleStart, angleEnd } = queue.shift()!
+    const node     = nodeMap.get(id)
+    if (!node) continue
+    const children = node.children
+    if (children.length === 0) continue
+
+    const r = levelRadius[Math.min(level + 1, levelRadius.length - 1)]
+    const spread = angleEnd - angleStart
+
+    children.forEach((childId, i) => {
+      const angle = angleStart + (spread / children.length) * (i + 0.5)
+      positions.set(childId, {
+        x: cx + Math.cos(angle) * r,
+        y: cy + Math.sin(angle) * r,
+      })
+      const childNode = nodeMap.get(childId)
+      if (childNode && childNode.children.length > 0) {
+        const childAngleStart = angleStart + (spread / children.length) * i
+        const childAngleEnd   = angleStart + (spread / children.length) * (i + 1)
+        queue.push({ id: childId, level: level + 1, angleStart: childAngleStart, angleEnd: childAngleEnd })
+      }
+    })
+  }
+
+  const nodes: Node[] = Array.from(nodeMap.values()).map(n => {
+    const pos = positions.get(n.id) ?? { x: cx, y: cy }
+    return {
+      id:       n.id,
+      label:    n.label,
+      x:        pos.x,
+      y:        pos.y,
+      color:    fileColor(n.label, n.isFolder),
+      isFolder: n.isFolder,
+      size:     n.isFolder ? (n.id === rootPath ? 10 : 7) : 4,
+    }
+  })
+
+  const edges: Edge[] = []
+  nodeMap.forEach(n => {
+    n.children.forEach(childId => {
+      edges.push({ source: n.id, target: childId })
+    })
+  })
+
+  return { nodes, edges }
 }
 
 export default function ProjectGraph({ files, rootPath }: Props) {
-  const [nodes, setNodes] = useState<Node[]>([])
-  const [edges, setEdges] = useState<Edge[]>([])
+  const { nodes, edges } = useMemo(() => buildGraph(files, rootPath), [files.join('|'), rootPath])
 
-  const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null)
-  const [zoom, setZoom] = useState(1)
-  const [pan, setPan] = useState({ x: 0, y: 0 })
-  const [isPanning, setIsPanning] = useState(false)
-  const panStartRef = useRef({ x: 0, y: 0 })
-  
-  const containerRef = useRef<HTMLDivElement>(null)
+  const [zoom, setZoom]   = useState(1)
+  const [pan,  setPan]    = useState({ x: 0, y: 0 })
+  const [panning, setPanning] = useState(false)
+  const [tooltip, setTooltip] = useState<{ label: string; x: number; y: number } | null>(null)
+  const panStart = useRef({ mx: 0, my: 0, px: 0, py: 0 })
+  const svgRef   = useRef<SVGSVGElement>(null)
 
-  // 1. Process files into a folder-file structural graph
-  const rawGraph = useMemo(() => {
-    if (files.length === 0) return { nodes: [], edges: [] }
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    e.preventDefault()
+    const factor = e.deltaY < 0 ? 1.12 : 0.9
+    setZoom(z => Math.min(4, Math.max(0.25, z * factor)))
+  }, [])
 
-    const IGNORE = ['node_modules', 'dist', '.git', 'build', '.next', '.tauri']
-    const filteredFiles = files.filter(f => {
-      const rel = f.replace(rootPath, '').replace(/^[/\\]/, '')
-      return !IGNORE.some(ig => rel.startsWith(ig)) &&
-        /\.(ts|tsx|js|jsx|css|scss|json|md|yaml|yml|toml)$/.test(f)
-    }).slice(0, 100) // cap at 100 nodes for good layout complexity
-
-    const nodeMap = new Map<string, { id: string; label: string; isFolder: boolean }>()
-    const edgeSet = new Set<string>()
-
-    // Add root folder
-    const rootName = rootPath.replace(/\\/g, '/').split('/').pop() ?? 'project'
-    nodeMap.set(rootPath, { id: rootPath, label: rootName, isFolder: true })
-
-    filteredFiles.forEach(file => {
-      const rel = file.replace(rootPath, '').replace(/^[/\\]/, '')
-      const parts = rel.replace(/\\/g, '/').split('/')
-      
-      let currentPath = rootPath
-      
-      for (let i = 0; i < parts.length; i++) {
-        const part = parts[i]
-        const parentPath = currentPath
-        currentPath = currentPath ? `${currentPath}/${part}` : part
-        const isLast = i === parts.length - 1
-
-        if (isLast) {
-          // File node
-          nodeMap.set(file, { id: file, label: part, isFolder: false })
-          edgeSet.add(`${parentPath}||${file}`)
-        } else {
-          // Folder node
-          if (!nodeMap.has(currentPath)) {
-            nodeMap.set(currentPath, { id: currentPath, label: part, isFolder: true })
-          }
-          edgeSet.add(`${parentPath}||${currentPath}`)
-        }
-      }
-    })
-
-    const nodesList = Array.from(nodeMap.values()).map((n, i) => {
-      // Place nodes in a soft random circular spread around center
-      const angle = (i / nodeMap.size) * Math.PI * 2
-      const radius = 100 + Math.random() * 80
-      return {
-        id: n.id,
-        label: n.label,
-        x: 400 + Math.cos(angle) * radius,
-        y: 300 + Math.sin(angle) * radius,
-        vx: 0,
-        vy: 0,
-        color: getNodeColor(n.label, n.isFolder),
-        isFolder: n.isFolder
-      }
-    })
-
-    const edgesList = Array.from(edgeSet).map(key => {
-      const [source, target] = key.split('||')
-      return { source, target }
-    })
-
-    return { nodes: nodesList, edges: edgesList }
-  }, [files, rootPath])
-
-  // Sync raw graph data to animated state
-  useEffect(() => {
-    setNodes(rawGraph.nodes)
-    setEdges(rawGraph.edges)
-  }, [rawGraph])
-
-  // 2. Physics Simulation Loop
-  useEffect(() => {
-    if (nodes.length === 0) return
-
-    let animationFrameId: number
-    const friction = 0.82
-    const springStrength = 0.05
-    const springLength = 55
-    const repulsionStrength = 800
-    const gravity = 0.02
-
-    function tick() {
-      setNodes(prevNodes => {
-        if (prevNodes.length === 0) return prevNodes
-
-        // Deep copy nodes to calculate forces
-        const nextNodes = prevNodes.map(n => ({ ...n }))
-        const nodeIndex = new Map(nextNodes.map(n => [n.id, n]))
-
-        // Repulsion force between ALL pairs
-        for (let i = 0; i < nextNodes.length; i++) {
-          const nodeA = nextNodes[i]
-          for (let j = i + 1; j < nextNodes.length; j++) {
-            const nodeB = nextNodes[j]
-            const dx = nodeB.x - nodeA.x
-            const dy = nodeB.y - nodeA.y
-            const distSq = dx * dx + dy * dy + 0.1
-            const dist = Math.sqrt(distSq)
-
-            if (dist < 280) {
-              const force = repulsionStrength / distSq
-              const forceX = (dx / dist) * force
-              const forceY = (dy / dist) * force
-              
-              if (nodeA.id !== draggedNodeId) {
-                nodeA.vx -= forceX
-                nodeA.vy -= forceY
-              }
-              if (nodeB.id !== draggedNodeId) {
-                nodeB.vx += forceX
-                nodeB.vy += forceY
-              }
-            }
-          }
-        }
-
-        // Attraction forces between connected nodes
-        edges.forEach(edge => {
-          const nodeA = nodeIndex.get(edge.source)
-          const nodeB = nodeIndex.get(edge.target)
-          if (!nodeA || !nodeB) return
-
-          const dx = nodeB.x - nodeA.x
-          const dy = nodeB.y - nodeA.y
-          const dist = Math.sqrt(dx * dx + dy * dy) + 0.1
-          const force = (dist - springLength) * springStrength
-          const forceX = (dx / dist) * force
-          const forceY = (dy / dist) * force
-
-          if (nodeA.id !== draggedNodeId) {
-            nodeA.vx += forceX
-            nodeA.vy += forceY
-          }
-          if (nodeB.id !== draggedNodeId) {
-            nodeB.vx -= forceX
-            nodeB.vy -= forceY
-          }
-        })
-
-        // Gentle gravity towards center (400, 300)
-        nextNodes.forEach(node => {
-          if (node.id === draggedNodeId) return
-          node.vx += (400 - node.x) * gravity
-          node.vy += (300 - node.y) * gravity
-
-          // Apply friction and update coordinates
-          node.vx *= friction
-          node.vy *= friction
-          node.x += node.vx
-          node.y += node.vy
-        })
-
-        return nextNodes
-      })
-
-      animationFrameId = requestAnimationFrame(tick)
-    }
-
-    animationFrameId = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(animationFrameId)
-  }, [edges, draggedNodeId, nodes.length])
-
-  // Mouse Interaction: Drag Node
-  function handleNodeMouseDown(e: React.MouseEvent, node: Node) {
-    e.stopPropagation()
-    setDraggedNodeId(node.id)
+  function onBgDown(e: React.MouseEvent) {
+    setPanning(true)
+    panStart.current = { mx: e.clientX, my: e.clientY, px: pan.x, py: pan.y }
   }
-
-  function handleMouseMove(e: React.MouseEvent) {
-    if (draggedNodeId) {
-      // Calculate coordinates inside scale/panned SVG workspace
-      const rect = containerRef.current?.getBoundingClientRect()
-      if (!rect) return
-      
-      const clientX = e.clientX - rect.left
-      const clientY = e.clientY - rect.top
-      
-      // Reverse zoom & pan transform to match actual node coordinate space
-      const x = (clientX - pan.x) / zoom
-      const y = (clientY - pan.y) / zoom
-
-      setNodes(prev => prev.map(n => n.id === draggedNodeId ? { ...n, x, y, vx: 0, vy: 0 } : n))
-    } else if (isPanning) {
-      const dx = e.clientX - panStartRef.current.x
-      const dy = e.clientY - panStartRef.current.y
-      setPan({ x: panStartRef.current.x + dx, y: panStartRef.current.y + dy })
-    }
+  function onMouseMove(e: React.MouseEvent) {
+    if (!panning) return
+    setPan({ x: panStart.current.px + e.clientX - panStart.current.mx, y: panStart.current.py + e.clientY - panStart.current.my })
   }
+  function onMouseUp() { setPanning(false) }
 
-  function handleMouseUp() {
-    setDraggedNodeId(null)
-    setIsPanning(false)
-  }
-
-  // Panning
-  function handleBgMouseDown(e: React.MouseEvent) {
-    setIsPanning(true)
-    panStartRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y }
-  }
-
-  // Zooming
-  function handleWheel(e: React.WheelEvent) {
-    const delta = e.deltaY < 0 ? 1.1 : 0.9
-    const nextZoom = Math.min(4, Math.max(0.2, zoom * delta))
-    setZoom(nextZoom)
-  }
+  function reset() { setZoom(1); setPan({ x: 0, y: 0 }) }
 
   if (files.length === 0) {
     return (
-      <div style={{
-        flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', padding: 12,
-      }}>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', padding: 12 }}>
         Graph builds after files are scanned
       </div>
     )
@@ -268,126 +170,101 @@ export default function ProjectGraph({ files, rootPath }: Props) {
 
   return (
     <div
-      ref={containerRef}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
+      style={{ flex: 1, position: 'relative', overflow: 'hidden', background: 'var(--bg-primary)', userSelect: 'none', minHeight: 160, cursor: panning ? 'grabbing' : 'grab' }}
+      onMouseMove={onMouseMove}
+      onMouseUp={onMouseUp}
+      onMouseLeave={onMouseUp}
       onWheel={handleWheel}
-      style={{
-        flex: 1, overflow: 'hidden', position: 'relative', outline: 'none',
-        cursor: isPanning ? 'grabbing' : draggedNodeId ? 'grabbing' : 'grab',
-        background: 'var(--bg-primary)', userSelect: 'none', minHeight: 180
-      }}
     >
-      {/* Background Pan Handler */}
-      <div
-        onMouseDown={handleBgMouseDown}
-        style={{ position: 'absolute', inset: 0, zIndex: 1 }}
-      />
+      {/* Panning background */}
+      <div style={{ position: 'absolute', inset: 0, zIndex: 1 }} onMouseDown={onBgDown} />
 
-      <svg
-        style={{
-          width: '100%', height: '100%', position: 'relative', zIndex: 2,
-          pointerEvents: 'none'
-        }}
-      >
-        <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
+      <svg ref={svgRef} style={{ width: '100%', height: '100%', position: 'absolute', inset: 0, zIndex: 2, pointerEvents: 'none' }}>
+        <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
           {/* Edges */}
-          {edges.map((edge, index) => {
-            const sourceNode = nodes.find(n => n.id === edge.source)
-            const targetNode = nodes.find(n => n.id === edge.target)
-            if (!sourceNode || !targetNode) return null
+          {edges.map((e, i) => {
+            const s = nodes.find(n => n.id === e.source)
+            const t = nodes.find(n => n.id === e.target)
+            if (!s || !t) return null
             return (
-              <line
-                key={index}
-                x1={sourceNode.x}
-                y1={sourceNode.y}
-                x2={targetNode.x}
-                y2={targetNode.y}
-                stroke="var(--border-light)"
-                strokeWidth={1.2}
-                opacity={0.35}
-              />
+              <line key={i} x1={s.x} y1={s.y} x2={t.x} y2={t.y}
+                stroke="var(--border-light)" strokeWidth={0.8} opacity={0.5} />
             )
           })}
 
           {/* Nodes */}
           {nodes.map(node => (
-            <g
-              key={node.id}
-              transform={`translate(${node.x}, ${node.y})`}
-              style={{ pointerEvents: 'auto', cursor: 'grab' }}
-              onMouseDown={(e) => handleNodeMouseDown(e, node)}
+            <g key={node.id} transform={`translate(${node.x},${node.y})`}
+              style={{ pointerEvents: 'auto', cursor: 'default' }}
+              onMouseEnter={() => setTooltip({ label: node.label, x: node.x, y: node.y })}
+              onMouseLeave={() => setTooltip(null)}
             >
               <circle
-                r={node.isFolder ? 8 : 5}
+                r={node.size}
                 fill={node.color}
                 stroke="var(--bg-primary)"
-                strokeWidth={1.5}
-                style={{
-                  filter: node.isFolder ? 'drop-shadow(0 0 3px rgba(139,92,246,0.3))' : 'none',
-                  transition: 'r 0.15s'
-                }}
+                strokeWidth={1.2}
+                style={{ filter: node.isFolder ? `drop-shadow(0 0 4px ${node.color}60)` : 'none' }}
               />
-              <text
-                y={node.isFolder ? 16 : 12}
-                textAnchor="middle"
-                fontSize={8}
-                fill={node.isFolder ? 'var(--text-primary)' : 'var(--text-secondary)'}
-                fontWeight={node.isFolder ? 600 : 400}
-                style={{
-                  fontFamily: 'system-ui, sans-serif',
-                  paintOrder: 'stroke',
-                  stroke: 'var(--bg-primary)',
-                  strokeWidth: 2,
-                  strokeLinejoin: 'round'
-                }}
-              >
-                {node.label}
-              </text>
+              {/* Only label folders and top-level files to avoid clutter */}
+              {(node.isFolder || node.size >= 4) && (
+                <text
+                  y={node.size + 8}
+                  textAnchor="middle"
+                  fontSize={7}
+                  fill={node.isFolder ? 'var(--text-primary)' : 'var(--text-muted)'}
+                  fontWeight={node.isFolder ? 600 : 400}
+                  style={{ fontFamily: 'system-ui, sans-serif', paintOrder: 'stroke', stroke: 'var(--bg-primary)', strokeWidth: 2.5, strokeLinejoin: 'round' }}
+                >
+                  {node.label.length > 16 ? node.label.slice(0, 14) + '…' : node.label}
+                </text>
+              )}
             </g>
           ))}
         </g>
       </svg>
 
-      {/* Control Buttons & Legend overlays */}
+      {/* Tooltip */}
+      {tooltip && (
+        <div style={{
+          position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)',
+          background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+          borderRadius: 4, padding: '3px 8px', fontSize: 10, color: 'var(--text-primary)',
+          pointerEvents: 'none', zIndex: 20, whiteSpace: 'nowrap',
+          fontFamily: 'monospace',
+        }}>
+          {tooltip.label}
+        </div>
+      )}
+
+      {/* Legend */}
       <div style={{
         position: 'absolute', bottom: 8, left: 8, zIndex: 10,
         background: 'var(--bg-secondary)', border: '1px solid var(--border)',
-        borderRadius: 6, padding: '6px 10px', display: 'flex', flexDirection: 'column', gap: 4,
-        pointerEvents: 'none', opacity: 0.85
+        borderRadius: 5, padding: '5px 8px', pointerEvents: 'none', opacity: 0.9,
       }}>
-        <div style={{ fontSize: 9, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 2 }}>Legend</div>
         {[
-          { color: 'var(--accent)', label: 'Folders (Hubs)' },
-          { color: '#3dd68c', label: 'React Components' },
-          { color: '#3b82f6', label: 'Code Modules' },
-          { color: '#eab308', label: 'Stylesheets' },
-        ].map(item => (
-          <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div style={{ width: 6, height: 6, borderRadius: '50%', background: item.color }} />
-            <span style={{ fontSize: 9, color: 'var(--text-secondary)' }}>{item.label}</span>
+          { color: '#8b5cf6', label: 'Folder' },
+          { color: '#3dd68c', label: 'Component' },
+          { color: '#3b82f6', label: 'Module' },
+          { color: '#eab308', label: 'Style' },
+          { color: '#06b6d4', label: 'Config' },
+        ].map(l => (
+          <div key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 2 }}>
+            <div style={{ width: 6, height: 6, borderRadius: '50%', background: l.color, flexShrink: 0 }} />
+            <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>{l.label}</span>
           </div>
         ))}
       </div>
 
-      <div style={{
-        position: 'absolute', top: 8, right: 8, zIndex: 10,
-        display: 'flex', gap: 4
-      }}>
-        <button
-          onClick={() => {
-            setZoom(1)
-            setPan({ x: 0, y: 0 })
-          }}
-          style={{
-            background: 'var(--bg-secondary)', border: '1px solid var(--border)',
-            borderRadius: 6, color: 'var(--text-secondary)', padding: '4px 8px',
-            fontSize: 10, cursor: 'pointer', fontWeight: 500
-          }}
-        >
-          Reset View
-        </button>
+      {/* Controls */}
+      <div style={{ position: 'absolute', top: 6, right: 6, zIndex: 10, display: 'flex', gap: 4 }}>
+        <button onClick={() => setZoom(z => Math.min(4, z * 1.25))}
+          style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-secondary)', width: 22, height: 22, cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
+        <button onClick={() => setZoom(z => Math.max(0.25, z * 0.8))}
+          style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-secondary)', width: 22, height: 22, cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>−</button>
+        <button onClick={reset}
+          style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-secondary)', padding: '0 6px', height: 22, cursor: 'pointer', fontSize: 9, display: 'flex', alignItems: 'center' }}>Reset</button>
       </div>
     </div>
   )
