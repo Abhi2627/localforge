@@ -8,8 +8,6 @@ interface RightSidebarProps {
   onOpenTerminal: (cwd: string) => void
 }
 
-// ── File tree ─────────────────────────────────────────────────────────────────
-
 interface TreeNode {
   name: string; path: string; isDir: boolean; children: TreeNode[]; isNew: boolean
 }
@@ -45,9 +43,9 @@ function nodeMatchesFilter(node: TreeNode, filter: string): boolean {
 }
 
 function FileTreeNode({ node, depth = 0, filter }: { node: TreeNode; depth?: number; filter: string }) {
-  const [open, setOpen]     = useState(depth < 2)
-  const activeSessionId     = useAppStore(s => s.activeSessionId)
-  const openFileFn          = useAppStore(s => s.openFile)
+  const [open, setOpen]  = useState(depth < 2)
+  const activeSessionId  = useAppStore(s => s.activeSessionId)
+  const openFileFn       = useAppStore(s => s.openFile)
   if (!nodeMatchesFilter(node, filter)) return null
   const indent = depth * 12
   if (node.isDir) {
@@ -107,25 +105,24 @@ function AgentRow({ agentId, sessionId }: { agentId: string; sessionId: string }
   )
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
-// IMPORTANT: ALL hooks must be called before any conditional return.
-
-const HDR = 28 // section header height px
+const HDR = 28
 
 export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps) {
   const { sessions, activeSessionId, rightExpanded } = useAppStore()
   const session = sessions.find(s => s.id === activeSessionId)
 
-  // ── ALL HOOKS UP HERE — before any early return ───────────────────────────
-  const [fileSearch,      setFileSearch]      = useState('')
-  const [showSearch,      setShowSearch]      = useState(false)
-  const [showAgentModal,  setShowAgentModal]  = useState(false)
-  const [graphFullscreen, setGraphFullscreen] = useState(false)
-  const [open,   setOpen]   = useState({ explorer:true, git:false, agents:true, graph:true })
-  const [maxId,  setMaxId]  = useState<string|null>(null)
+  // ALL hooks before any early return
+  const [fileSearch,     setFileSearch]     = useState('')
+  const [showSearch,     setShowSearch]     = useState(false)
+  const [showAgentModal, setShowAgentModal] = useState(false)
+  const [open,  setOpen]  = useState({ explorer:true, git:false, agents:true, graph:true })
+  const [maxId, setMaxId] = useState<string|null>(null)
 
-  // useMemo MUST be here, not after the early return
-  const allFiles    = session?.allFiles ?? []
+  // graphFullscreen tracks WHEN the fullscreen was opened (number, not bool)
+  // so ProjectGraph receives a new fitTrigger value each time the overlay opens
+  const [graphFullscreenAt, setGraphFullscreenAt] = useState<number | null>(null)
+
+  const allFiles    = session?.allFiles    ?? []
   const written     = session?.writtenFiles ?? []
   const mergedFiles = useMemo(() => [...new Set([...allFiles, ...written])], [allFiles.join(','), written.join(',')])
   const newFileSet  = useMemo(() => new Set(written), [written.join(',')])
@@ -133,9 +130,7 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
     () => session?.rootPath ? buildTree(mergedFiles, session.rootPath, newFileSet) : [],
     [mergedFiles.join(','), session?.rootPath, written.join(',')]
   )
-  // ─────────────────────────────────────────────────────────────────────────
 
-  // NOW the conditional return is safe — all hooks already called above
   if (!rightExpanded) {
     const hasRunning = session?.agents.some(a => a.status === 'running')
     return (
@@ -161,8 +156,6 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
   function isExp(id: string): boolean {
     return maxId ? maxId===id : (open as any)[id]
   }
-
-  // Section container style — explicit objects, no spread, no conditional spread
   function secStyle(id: string): React.CSSProperties {
     const base: React.CSSProperties = { display:'flex', flexDirection:'column', overflow:'hidden', borderBottom:'1px solid var(--border)' }
     if (maxId) {
@@ -240,7 +233,11 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
       id:'graph', Icon:LayoutDashboard, title:'Project Graph',
       extra:(
         <button className="icon-btn" style={{width:16,height:16}} title="Fullscreen"
-          onClick={e=>{e.stopPropagation();setGraphFullscreen(true)}}>⤢</button>
+          onClick={e=>{
+            e.stopPropagation()
+            // Store timestamp so fullscreen ProjectGraph gets a fresh fitTrigger
+            setGraphFullscreenAt(Date.now())
+          }}>⤢</button>
       ),
       body:<ProjectGraph files={mergedFiles} rootPath={session?.rootPath??''}/>,
     },
@@ -249,7 +246,6 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
   return (
     <div style={{background:'var(--bg-secondary)',borderLeft:'1px solid var(--border)',display:'flex',flexDirection:'column',height:'100%',overflow:'hidden'}}>
 
-      {/* Workspace header */}
       <div style={{height:32,flexShrink:0,padding:'0 12px',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',gap:6}}>
         <LayoutDashboard size={12} style={{color:'var(--text-muted)',flexShrink:0}}/>
         <span style={{fontSize:11,fontWeight:600,color:'var(--text-primary)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}}>
@@ -260,44 +256,29 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
         )}
       </div>
 
-      {/* Accordion sections */}
       <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',minHeight:0}}>
         {sections.map(sec => {
           const exp   = isExp(sec.id)
           const isMax = maxId===sec.id
           return (
             <div key={sec.id} style={secStyle(sec.id)}>
-              {/* Header — always exactly HDR px */}
               <div
                 onClick={()=>toggleOpen(sec.id)}
-                style={{
-                  height:HDR, flexShrink:0,
-                  display:'flex', alignItems:'center', gap:5, padding:'0 10px',
-                  cursor:'pointer', userSelect:'none',
-                  borderBottom: exp ? '1px solid var(--border)' : 'none',
-                  background: isMax ? 'var(--accent-dim)' : 'transparent',
-                }}
+                style={{ height:HDR, flexShrink:0, display:'flex', alignItems:'center', gap:5, padding:'0 10px', cursor:'pointer', userSelect:'none', borderBottom: exp ? '1px solid var(--border)' : 'none', background: isMax ? 'var(--accent-dim)' : 'transparent' }}
                 onMouseEnter={e=>{if(!isMax)(e.currentTarget as HTMLElement).style.background='var(--bg-hover)'}}
                 onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.background=isMax?'var(--accent-dim)':'transparent'}}
               >
-                {exp
-                  ? <ChevronDown  size={10} style={{color:'var(--text-muted)',flexShrink:0}}/>
-                  : <ChevronRight size={10} style={{color:'var(--text-muted)',flexShrink:0}}/>
-                }
+                {exp ? <ChevronDown size={10} style={{color:'var(--text-muted)',flexShrink:0}}/> : <ChevronRight size={10} style={{color:'var(--text-muted)',flexShrink:0}}/>}
                 <sec.Icon size={12} style={{color:isMax?'var(--accent)':'var(--text-muted)',flexShrink:0}}/>
                 <span style={{flex:1,fontSize:10,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.06em',color:isMax?'var(--accent)':'var(--text-muted)'}}>
                   {sec.title}
                 </span>
                 {sec.extra&&<div onClick={e=>e.stopPropagation()}>{sec.extra}</div>}
-                <button
-                  onClick={e=>{e.stopPropagation();toggleMax(sec.id)}}
+                <button onClick={e=>{e.stopPropagation();toggleMax(sec.id)}}
                   style={{background:'none',border:'none',cursor:'pointer',color:isMax?'var(--accent)':'var(--text-muted)',padding:'0 2px',display:'flex',fontSize:11,lineHeight:1}}
                   title={isMax?'Restore':'Maximise'}
-                >
-                  {isMax?'▾':'▸'}
-                </button>
+                >{isMax?'▾':'▸'}</button>
               </div>
-              {/* Content */}
               {exp&&(
                 <div style={{flex:1,overflow:'hidden',minHeight:0,display:'flex',flexDirection:'column'}}>
                   {sec.body}
@@ -311,17 +292,31 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
       {showAgentModal&&session&&(
         <AgentModal sessionId={session.id} projectId={session.id} onClose={()=>setShowAgentModal(false)}/>
       )}
-      {graphFullscreen&&session&&(
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.85)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:300}}
-          onClick={()=>setGraphFullscreen(false)}>
-          <div style={{background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:12,padding:16,width:'82vw',height:'82vh',display:'flex',flexDirection:'column',gap:8}}
-            onClick={e=>e.stopPropagation()}>
+
+      {/* Fullscreen graph overlay */}
+      {graphFullscreenAt !== null && session && (
+        <div
+          style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.88)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:300}}
+          onClick={()=>setGraphFullscreenAt(null)}
+        >
+          <div
+            style={{background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:12,padding:16,width:'86vw',height:'86vh',display:'flex',flexDirection:'column',gap:8}}
+            onClick={e=>e.stopPropagation()}
+          >
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexShrink:0}}>
-              <span style={{fontSize:13,fontWeight:600}}>Project graph — {session.title}</span>
-              <button className="icon-btn" onClick={()=>setGraphFullscreen(false)} style={{width:26,height:26}}>✕</button>
+              <span style={{fontSize:13,fontWeight:600,color:'var(--text-primary)'}}>
+                Project graph — {session.title}
+              </span>
+              <button className="icon-btn" onClick={()=>setGraphFullscreenAt(null)} style={{width:26,height:26}}>✕</button>
             </div>
-            <div style={{flex:1,overflow:'hidden',minHeight:0}}>
-              <ProjectGraph files={mergedFiles} rootPath={session.rootPath??''}/>
+            {/* key forces fresh mount; fitTrigger=graphFullscreenAt tells graph to fit after overlay paints */}
+            <div style={{flex:1,overflow:'hidden',minHeight:0,display:'flex',flexDirection:'column'}}>
+              <ProjectGraph
+                key={`fullscreen-${graphFullscreenAt}`}
+                files={mergedFiles}
+                rootPath={session.rootPath ?? ''}
+                fitTrigger={graphFullscreenAt}
+              />
             </div>
           </div>
         </div>

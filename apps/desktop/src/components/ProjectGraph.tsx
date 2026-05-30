@@ -1,6 +1,14 @@
 import { useMemo, useState, useCallback, useRef, useEffect } from 'react'
 
-interface Props { files: string[]; rootPath: string }
+interface Props {
+  files:    string[]
+  rootPath: string
+  // When this increments, the graph re-fits to the container.
+  // The fullscreen overlay passes a new value on each open so the graph
+  // re-measures after the overlay DOM has been painted.
+  fitTrigger?: number
+}
+
 interface Node { id: string; label: string; x: number; y: number; color: string; isFolder: boolean; size: number }
 interface Edge { source: string; target: string }
 
@@ -21,22 +29,34 @@ function fileColor(name: string, isFolder: boolean): string {
 
 function buildGraph(files: string[], rootPath: string): { nodes: Node[]; edges: Edge[] } {
   if (files.length === 0 || !rootPath) return { nodes: [], edges: [] }
-  const filtered = files.filter(f => {
-    const rel = f.replace(rootPath, '').replace(/^[/\\]/, '')
-    return !IGNORE.some(ig => rel.split(/[/\\]/)[0] === ig) &&
-      /\.(ts|tsx|js|jsx|css|scss|json|md|yaml|yml|toml|rs|py)$/.test(f)
-  }).slice(0, 60)
+
+  const rp = rootPath.replace(/\\/g, '/').replace(/\/+$/, '')
+
+  const filtered = files
+    .map(f => f.replace(/\\/g, '/'))
+    .filter(f => {
+      const rel = f.startsWith(rp) ? f.slice(rp.length).replace(/^\/+/, '') : f.replace(/^\/+/, '')
+      const first = rel.split('/')[0]
+      return !IGNORE.includes(first) &&
+        /\.(ts|tsx|js|jsx|css|scss|json|md|yaml|yml|toml|rs|py)$/.test(f)
+    })
+    .slice(0, 60)
+
   if (filtered.length === 0) return { nodes: [], edges: [] }
 
-  const nodeMap = new Map<string, { id: string; label: string; isFolder: boolean; children: string[] }>()
-  nodeMap.set(rootPath, { id: rootPath, label: rootPath.split('/').pop() ?? 'project', isFolder: true, children: [] })
+  type NodeDef = { id: string; label: string; isFolder: boolean; children: string[] }
+  const nodeMap = new Map<string, NodeDef>()
+  const rootLabel = rp.split('/').pop() ?? 'project'
+  nodeMap.set(rp, { id: rp, label: rootLabel, isFolder: true, children: [] })
 
   filtered.forEach(file => {
-    const parts = file.replace(rootPath, '').replace(/^[/\\]/, '').replace(/\\/g, '/').split('/').filter(Boolean)
-    let cur = rootPath
+    const rel   = file.startsWith(rp) ? file.slice(rp.length).replace(/^\/+/, '') : file.replace(/^\/+/, '')
+    const parts = rel.split('/').filter(Boolean)
+    let   cur   = rp
     parts.forEach((part, i) => {
       const isLast = i === parts.length - 1
-      const next = `${cur}/${part}`, nodeId = isLast ? file : next
+      const next   = `${cur}/${part}`
+      const nodeId = isLast ? file : next
       if (!nodeMap.has(nodeId)) {
         nodeMap.get(cur)!.children.push(nodeId)
         nodeMap.set(nodeId, { id: nodeId, label: part, isFolder: !isLast, children: [] })
@@ -48,14 +68,16 @@ function buildGraph(files: string[], rootPath: string): { nodes: Node[]; edges: 
   const positions = new Map<string, { x: number; y: number }>()
   const LR = [0, 100, 185, 260, 325, 380]
   const queue: Array<{ id: string; level: number; aStart: number; aEnd: number }> = [
-    { id: rootPath, level: 0, aStart: 0, aEnd: Math.PI * 2 }
+    { id: rp, level: 0, aStart: 0, aEnd: Math.PI * 2 }
   ]
-  positions.set(rootPath, { x: 0, y: 0 })
+  positions.set(rp, { x: 0, y: 0 })
+
   while (queue.length > 0) {
     const { id, level, aStart, aEnd } = queue.shift()!
     const node = nodeMap.get(id)
     if (!node || node.children.length === 0) continue
-    const r = LR[Math.min(level + 1, LR.length - 1)], spread = aEnd - aStart
+    const r = LR[Math.min(level + 1, LR.length - 1)]
+    const spread = aEnd - aStart
     node.children.forEach((childId, i) => {
       const angle = aStart + (spread / node.children.length) * (i + 0.5)
       positions.set(childId, { x: Math.cos(angle) * r, y: Math.sin(angle) * r })
@@ -71,34 +93,49 @@ function buildGraph(files: string[], rootPath: string): { nodes: Node[]; edges: 
 
   const nodes: Node[] = Array.from(nodeMap.values()).map(n => {
     const pos = positions.get(n.id) ?? { x: 0, y: 0 }
-    return { id: n.id, label: n.label, x: pos.x, y: pos.y, color: fileColor(n.label, n.isFolder), isFolder: n.isFolder, size: n.isFolder ? (n.id === rootPath ? 11 : 7) : 4 }
+    return {
+      id: n.id, label: n.label, x: pos.x, y: pos.y,
+      color: fileColor(n.label, n.isFolder), isFolder: n.isFolder,
+      size: n.isFolder ? (n.id === rp ? 11 : 7) : 4,
+    }
   })
   const edges: Edge[] = []
   nodeMap.forEach(n => n.children.forEach(c => edges.push({ source: n.id, target: c })))
   return { nodes, edges }
 }
 
-export default function ProjectGraph({ files, rootPath }: Props) {
-  const { nodes, edges } = useMemo(() => buildGraph(files, rootPath), [files.join('|'), rootPath])
+export default function ProjectGraph({ files, rootPath, fitTrigger }: Props) {
+  const { nodes, edges } = useMemo(
+    () => buildGraph(files, rootPath),
+    [files.join('|'), rootPath]
+  )
 
   const containerRef = useRef<HTMLDivElement>(null)
   const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 })
-  const [panning, setPanning]     = useState(false)
-  const [tooltip, setTooltip]     = useState<string | null>(null)
+  const [panning,   setPanning]   = useState(false)
+  const [tooltip,   setTooltip]   = useState<string | null>(null)
   const panStart = useRef({ mx: 0, my: 0, tx: 0, ty: 0 })
+  const [fitKey, setFitKey]       = useState(0)
 
-  // Incrementing fitKey is the only way to trigger re-fit from the reset button
-  const [fitKey, setFitKey] = useState(0)
-
+  // Core fit logic — reads actual DOM dimensions
   const doFit = useCallback(() => {
     if (nodes.length === 0 || !containerRef.current) return
     const el = containerRef.current
-    const W = el.clientWidth || 300, H = el.clientHeight || 200
+    const W  = el.clientWidth
+    const H  = el.clientHeight
+    // If container has no size yet, retry shortly
+    if (W === 0 || H === 0) {
+      setTimeout(doFit, 50)
+      return
+    }
     const xs = nodes.map(n => n.x), ys = nodes.map(n => n.y)
     const minX = Math.min(...xs), maxX = Math.max(...xs)
     const minY = Math.min(...ys), maxY = Math.max(...ys)
-    const gW = maxX - minX || 1, gH = maxY - minY || 1
-    const scale = Math.min((W - 96) / gW, (H - 96) / gH, 2.5)
+    const gW   = maxX - minX || 1
+    const gH   = maxY - minY || 1
+    const pad  = 60
+    const scale = Math.min((W - pad * 2) / gW, (H - pad * 2) / gH, 2.5)
+    if (!isFinite(scale) || scale <= 0) return
     setTransform({
       x: W / 2 - ((minX + maxX) / 2) * scale,
       y: H / 2 - ((minY + maxY) / 2) * scale,
@@ -106,10 +143,31 @@ export default function ProjectGraph({ files, rootPath }: Props) {
     })
   }, [nodes])
 
-  // Fit when nodes change or when fitKey increments (reset button)
-  useEffect(() => { doFit() }, [nodes, fitKey, doFit])
-  // Also fit after DOM settles
-  useEffect(() => { const t = setTimeout(doFit, 200); return () => clearTimeout(t) }, [nodes, doFit])
+  // Fit on node changes
+  useEffect(() => {
+    doFit()
+    const t = setTimeout(doFit, 100)
+    return () => clearTimeout(t)
+  }, [nodes, doFit])
+
+  // Fit when reset button pressed (fitKey) or parent triggers fit (fitTrigger)
+  useEffect(() => {
+    doFit()
+    // Multiple retries to handle overlay animation settling
+    const t1 = setTimeout(doFit, 50)
+    const t2 = setTimeout(doFit, 150)
+    const t3 = setTimeout(doFit, 350)
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3) }
+  }, [fitKey, fitTrigger, doFit])
+
+  // ResizeObserver — refit whenever container resizes (sidebar expand, window resize, overlay open)
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => doFit())
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [doFit])
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault()
@@ -118,7 +176,7 @@ export default function ProjectGraph({ files, rootPath }: Props) {
     const mx = e.clientX - rect.left, my = e.clientY - rect.top
     setTransform(t => {
       const ns = Math.min(6, Math.max(0.15, t.scale * (e.deltaY < 0 ? 1.12 : 0.9)))
-      const r = ns / t.scale
+      const r  = ns / t.scale
       return { x: mx - (mx - t.x) * r, y: my - (my - t.y) * r, scale: ns }
     })
   }, [])
@@ -155,7 +213,8 @@ export default function ProjectGraph({ files, rootPath }: Props) {
       <svg style={{ width: '100%', height: '100%', position: 'absolute', inset: 0, zIndex: 2, pointerEvents: 'none' }}>
         <g transform={`translate(${tx},${ty}) scale(${scale})`}>
           {edges.map((e, i) => {
-            const s = nodes.find(n => n.id === e.source), t = nodes.find(n => n.id === e.target)
+            const s = nodes.find(n => n.id === e.source)
+            const t = nodes.find(n => n.id === e.target)
             if (!s || !t) return null
             return <line key={i} x1={s.x} y1={s.y} x2={t.x} y2={t.y}
               stroke="var(--border-light)" strokeWidth={0.8/scale} opacity={0.4} />
@@ -205,7 +264,6 @@ export default function ProjectGraph({ files, rootPath }: Props) {
         ))}
       </div>
 
-      {/* Zoom % */}
       <div style={{ position: 'absolute', top: 6, left: 8, zIndex: 10, fontSize: 9, color: 'var(--text-muted)', fontFamily: 'monospace', pointerEvents: 'none' }}>
         {Math.round(scale * 100)}%
       </div>
