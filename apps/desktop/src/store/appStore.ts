@@ -25,7 +25,7 @@ export interface Session {
   id: string; type: SessionType; title: string; rootPath?: string
   agents: Agent[]; messages: Message[]; allFiles: string[]; writtenFiles: string[]
   summary?: string; lastAccessedAt: number; isActive: boolean
-  createdAt?: string; updatedAt?: string   // ISO strings from DB — used for menu metadata
+  createdAt?: string; updatedAt?: string
 }
 export interface OllamaModel {
   name: string; sizeGb: string; isSelected: boolean; isFallback: boolean
@@ -36,8 +36,8 @@ interface AppState {
   screen: AppScreen; sessions: Session[]; activeSessionId: string | null
   models: OllamaModel[]; selectedModel: string; leftExpanded: boolean
   rightExpanded: boolean; isConnected: boolean; userName: string
-  openFiles:     Record<string, string[]>
-  activeFile:    Record<string, string | null>
+  openFiles:  Record<string, string[]>
+  activeFile: Record<string, string | null>
 
   openFile:           (sessionId: string, filePath: string) => void
   closeFile:          (sessionId: string, filePath: string) => void
@@ -82,23 +82,30 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (nextActive === filePath) nextActive = updated.length > 0 ? updated[updated.length - 1] : null
     return { openFiles: { ...s.openFiles, [sessionId]: updated }, activeFile: { ...s.activeFile, [sessionId]: nextActive } }
   }),
-  setActiveFile: (sessionId, filePath) => set(s => ({ activeFile: { ...s.activeFile, [sessionId]: filePath } })),
+  setActiveFile: (sessionId, filePath) => set(s => ({
+    activeFile: { ...s.activeFile, [sessionId]: filePath }
+  })),
 
   getRecentTabs: () => {
     const { sessions } = get()
-    const now = Date.now()
-    return sessions
-      .filter(s => now - s.lastAccessedAt < 24 * 60 * 60 * 1000)
+    return [...sessions]
       .sort((a, b) => b.lastAccessedAt - a.lastAccessedAt)
-      .slice(0, 5)
+      .slice(0, 4)
+      .filter(s => s.title && s.title.trim() !== '')
   },
 
   setScreen: (screen) => set({ screen }),
 
   loadSession: (session) => set(s => {
+    // Never duplicate by ID
     if (s.sessions.find(x => x.id === session.id)) return s
+    // Never duplicate project sessions by rootPath
+    if (session.type === 'project' && session.rootPath) {
+      if (s.sessions.find(x => x.type === 'project' && x.rootPath === session.rootPath)) return s
+    }
     return { sessions: [...s.sessions, { ...session, title: cleanTitleStr(session.title) }] }
   }),
+
   addSession: (session) => set(s => {
     if (s.sessions.find(x => x.id === session.id)) return s
     return { sessions: [...s.sessions, { ...session, title: cleanTitleStr(session.title) }], screen: 'session' }
@@ -107,13 +114,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   setActiveSession: (id) => set(s => ({
     activeSessionId: id, screen: 'session',
     sessions: s.sessions.map(sess => ({
-      ...sess, isActive: sess.id === id,
+      ...sess,
+      isActive: sess.id === id,
       lastAccessedAt: sess.id === id ? Date.now() : sess.lastAccessedAt,
     })),
   })),
 
   updateSessionTitle: (id, title) => set(s => ({
-    sessions: s.sessions.map(sess => sess.id === id ? { ...sess, title: cleanTitleStr(title) } : sess)
+    sessions: s.sessions.map(sess =>
+      sess.id === id ? { ...sess, title: cleanTitleStr(title) } : sess
+    )
   })),
 
   closeSession: (id) => set(s => ({
@@ -134,24 +144,61 @@ export const useAppStore = create<AppState>((set, get) => ({
     sessions: s.sessions.map(sess => {
       if (sess.id !== sessionId) return sess
       const exists = sess.messages.find(m => m.taskId === taskId && m.type === 'stream')
-      if (exists) return { ...sess, messages: sess.messages.map(m => m.taskId === taskId && m.type === 'stream' ? { ...m, content: m.content + chunk } : m) }
-      return { ...sess, messages: [...sess.messages, { id: `stream-${taskId}-${Date.now()}`, type: 'stream' as MessageType, content: chunk, taskId, timestamp: Date.now() }] }
+      if (exists) {
+        return { ...sess, messages: sess.messages.map(m =>
+          m.taskId === taskId && m.type === 'stream' ? { ...m, content: m.content + chunk } : m
+        )}
+      }
+      return { ...sess, messages: [...sess.messages, {
+        id: `stream-${taskId}-${Date.now()}`,
+        type: 'stream' as MessageType,
+        content: chunk, taskId,
+        timestamp: Date.now(),
+      }]}
     })
   })),
 
   finalizeStream: (sessionId, taskId) => set(s => ({
     sessions: s.sessions.map(sess =>
       sess.id === sessionId
-        ? { ...sess, messages: sess.messages.map(m => m.taskId === taskId && m.type === 'stream' ? { ...m, type: 'agent' as MessageType } : m) }
+        ? { ...sess, messages: sess.messages.map(m =>
+            m.taskId === taskId && m.type === 'stream'
+              ? { ...m, type: 'agent' as MessageType }
+              : m
+          )}
         : sess
     )
   })),
 
-  addAgent:          (sessionId, agent)        => set(s => ({ sessions: s.sessions.map(sess => sess.id === sessionId ? { ...sess, agents: [...sess.agents, agent] } : sess) })),
-  updateAgent:       (sessionId, agentId, upd) => set(s => ({ sessions: s.sessions.map(sess => sess.id === sessionId ? { ...sess, agents: sess.agents.map(a => a.id === agentId ? { ...a, ...upd } : a) } : sess) })),
-  addWrittenFile:    (sessionId, filePath)     => set(s => ({ sessions: s.sessions.map(sess => sess.id === sessionId && !sess.writtenFiles.includes(filePath) ? { ...sess, writtenFiles: [...sess.writtenFiles, filePath] } : sess) })),
-  setAllFiles:       (sessionId, files)        => set(s => ({ sessions: s.sessions.map(sess => sess.id === sessionId ? { ...sess, allFiles: files } : sess) })),
-  setSessionSummary: (sessionId, summary)      => set(s => ({ sessions: s.sessions.map(sess => sess.id === sessionId ? { ...sess, summary } : sess) })),
+  addAgent: (sessionId, agent) => set(s => ({
+    sessions: s.sessions.map(sess =>
+      sess.id === sessionId ? { ...sess, agents: [...sess.agents, agent] } : sess
+    )
+  })),
+  updateAgent: (sessionId, agentId, upd) => set(s => ({
+    sessions: s.sessions.map(sess =>
+      sess.id === sessionId
+        ? { ...sess, agents: sess.agents.map(a => a.id === agentId ? { ...a, ...upd } : a) }
+        : sess
+    )
+  })),
+  addWrittenFile: (sessionId, filePath) => set(s => ({
+    sessions: s.sessions.map(sess =>
+      sess.id === sessionId && !sess.writtenFiles.includes(filePath)
+        ? { ...sess, writtenFiles: [...sess.writtenFiles, filePath] }
+        : sess
+    )
+  })),
+  setAllFiles: (sessionId, files) => set(s => ({
+    sessions: s.sessions.map(sess =>
+      sess.id === sessionId ? { ...sess, allFiles: files } : sess
+    )
+  })),
+  setSessionSummary: (sessionId, summary) => set(s => ({
+    sessions: s.sessions.map(sess =>
+      sess.id === sessionId ? { ...sess, summary } : sess
+    )
+  })),
 
   setModels:        (models)        => set({ models }),
   setSelectedModel: (selectedModel) => set({ selectedModel }),
