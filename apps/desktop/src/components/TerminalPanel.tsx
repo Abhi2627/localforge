@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { X, Plus, Terminal as TerminalIcon, AlertCircle, Bug, Radio } from 'lucide-react'
 
 interface Props {
-  cwd?:    string
+  cwd?:    string   // current cwd — when this changes, a NEW tab is added
   onClose: () => void
 }
 
@@ -12,12 +12,6 @@ type PanelType = 'terminal' | 'output' | 'problems' | 'debug' | 'ports'
 let _counter = 1
 
 // ── Single xterm instance ─────────────────────────────────────────────────────
-// Key design decisions:
-//   1. Container is always position:absolute inset:0 so xterm always has real dimensions
-//   2. Hidden tabs use opacity:0 + pointerEvents:none (NOT visibility/display:none)
-//      This keeps the DOM painted so xterm can measure col/row counts correctly
-//   3. WebSocket connects to ws://localhost:3001/terminal (absolute URL, works in Tauri)
-//   4. ResizeObserver calls fitAddon.fit() whenever the panel resizes
 
 function XTermInstance({ cwd, active }: { cwd?: string; active: boolean }) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -25,7 +19,6 @@ function XTermInstance({ cwd, active }: { cwd?: string; active: boolean }) {
   const wsRef        = useRef<WebSocket | null>(null)
   const fitAddonRef  = useRef<any>(null)
   const roRef        = useRef<ResizeObserver | null>(null)
-  const readyRef     = useRef(false)  // true once term + ws are both ready
 
   const doFit = useCallback(() => {
     if (!fitAddonRef.current || !termRef.current) return
@@ -42,7 +35,6 @@ function XTermInstance({ cwd, active }: { cwd?: string; active: boolean }) {
     let mounted = true
 
     async function init() {
-      // Dynamic imports so xterm doesn't block initial render
       const { Terminal } = await import('@xterm/xterm')
       const { FitAddon } = await import('@xterm/addon-fit')
       await import('@xterm/xterm/css/xterm.css')
@@ -50,26 +42,21 @@ function XTermInstance({ cwd, active }: { cwd?: string; active: boolean }) {
       if (!mounted || !containerRef.current) return
 
       const term = new Terminal({
-        cursorBlink:      true,
-        fontSize:         13,
-        fontFamily:       "'SF Mono','Fira Code','Cascadia Code',Menlo,monospace",
-        scrollback:       5000,
-        convertEol:       true,
-        allowProposedApi: true,
+        cursorBlink: true, fontSize: 13,
+        fontFamily: "'SF Mono','Fira Code','Cascadia Code',Menlo,monospace",
+        scrollback: 5000, convertEol: true, allowProposedApi: true,
         theme: {
-          background:          '#0d0d0d',
-          foreground:          '#e8e8e8',
-          cursor:              '#7c6af7',
-          cursorAccent:        '#0d0d0d',
+          background: '#0d0d0d', foreground: '#e8e8e8',
+          cursor: '#7c6af7', cursorAccent: '#0d0d0d',
           selectionBackground: '#7c6af730',
-          black:   '#1a1a1a', brightBlack:   '#555',
-          red:     '#f56565', brightRed:     '#fc8181',
-          green:   '#3dd68c', brightGreen:   '#68d391',
-          yellow:  '#f5a623', brightYellow:  '#f6ad55',
-          blue:    '#7c6af7', brightBlue:    '#a78bfa',
-          magenta: '#c084fc', brightMagenta: '#d8b4fe',
-          cyan:    '#22d3ee', brightCyan:    '#67e8f9',
-          white:   '#e8e8e8', brightWhite:   '#fff',
+          black:'#1a1a1a', brightBlack:'#555',
+          red:'#f56565',   brightRed:'#fc8181',
+          green:'#3dd68c', brightGreen:'#68d391',
+          yellow:'#f5a623',brightYellow:'#f6ad55',
+          blue:'#7c6af7',  brightBlue:'#a78bfa',
+          magenta:'#c084fc',brightMagenta:'#d8b4fe',
+          cyan:'#22d3ee',  brightCyan:'#67e8f9',
+          white:'#e8e8e8', brightWhite:'#fff',
         },
       })
 
@@ -77,50 +64,28 @@ function XTermInstance({ cwd, active }: { cwd?: string; active: boolean }) {
       term.loadAddon(fitAddon)
       termRef.current     = term
       fitAddonRef.current = fitAddon
-
       term.open(containerRef.current)
-
-      // Initial fit — container already has real dimensions because it's always rendered
       setTimeout(() => { if (mounted) doFit() }, 30)
 
-      // WebSocket — absolute URL required for Tauri webview
       const cwdParam = cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''
       const ws = new WebSocket(`ws://localhost:3001/terminal${cwdParam}`)
       wsRef.current = ws
 
-      ws.onopen = () => {
-        if (!mounted) return
-        readyRef.current = true
-        doFit()  // Send initial size to PTY
-      }
-
-      ws.onmessage = (e) => {
-        if (!mounted) return
-        try { term.write(e.data) } catch { }
-      }
-
-      ws.onclose = () => {
-        if (!mounted) return
-        try { term.writeln('\r\n\x1b[90m[shell exited — open a new tab to continue]\x1b[0m') } catch { }
-      }
-
-      ws.onerror = () => {
+      ws.onopen    = () => { if (!mounted) return; doFit() }
+      ws.onmessage = (e) => { if (!mounted) return; try { term.write(e.data) } catch { } }
+      ws.onclose   = () => { if (!mounted) return; try { term.writeln('\r\n\x1b[90m[shell exited — open a new tab to continue]\x1b[0m') } catch { } }
+      ws.onerror   = () => {
         if (!mounted) return
         try {
           term.writeln('\r\n\x1b[31m[Cannot connect to terminal server]\x1b[0m')
-          term.writeln('\x1b[90m  Make sure the agent server is running:\x1b[0m')
           term.writeln('\x1b[90m  cd packages/agent-core && npm run dev\x1b[0m\r\n')
         } catch { }
       }
 
-      // Keystrokes → PTY
       term.onData((data: string) => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'input', data }))
-        }
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'input', data }))
       })
 
-      // Resize observer — refit when panel dimensions change
       roRef.current = new ResizeObserver(() => { if (mounted) doFit() })
       roRef.current.observe(containerRef.current)
     }
@@ -132,42 +97,28 @@ function XTermInstance({ cwd, active }: { cwd?: string; active: boolean }) {
       roRef.current?.disconnect()
       wsRef.current?.close()
       termRef.current?.dispose()
-      termRef.current     = null
-      fitAddonRef.current = null
-      wsRef.current       = null
-      readyRef.current    = false
+      termRef.current = null; fitAddonRef.current = null; wsRef.current = null
     }
   }, [cwd]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Focus and refit when this tab becomes active
+  // Focus + refit when tab becomes active
   useEffect(() => {
     if (!active) return
-    // Small delay to let CSS transition finish before measuring
-    const t = setTimeout(() => {
-      doFit()
-      termRef.current?.focus()
-    }, 60)
+    const t = setTimeout(() => { doFit(); termRef.current?.focus() }, 60)
     return () => clearTimeout(t)
   }, [active, doFit])
 
   return (
-    <div
-      ref={containerRef}
-      style={{
-        position:      'absolute',
-        inset:         0,
-        // Use opacity instead of visibility/display so xterm always has real dimensions.
-        // display:none would make clientWidth=0, breaking fitAddon.
-        opacity:       active ? 1 : 0,
-        pointerEvents: active ? 'auto' : 'none',
-        // Layer active terminal on top
-        zIndex:        active ? 1 : 0,
-      }}
-    />
+    <div ref={containerRef} style={{
+      position: 'absolute', inset: 0,
+      opacity:       active ? 1 : 0,
+      pointerEvents: active ? 'auto' : 'none',
+      zIndex:        active ? 1 : 0,
+    }} />
   )
 }
 
-// ── Panel tabs ───────────────────────────────────────────────────────────────
+// ── Panel tab definitions ─────────────────────────────────────────────────────
 
 const PANEL_TABS: Array<{ id: PanelType; label: string; Icon: any }> = [
   { id: 'terminal', label: 'Terminal',      Icon: TerminalIcon },
@@ -185,6 +136,23 @@ export default function TerminalPanel({ cwd, onClose }: Props) {
     { id: 'term-1', label: cwd ? (cwd.split('/').pop() ?? 'shell') : 'shell', cwd },
   ])
   const [activeTermId, setActiveTermId] = useState('term-1')
+
+  // Bug fix 1: when cwd prop changes (e.g. user opens a project terminal while
+  // the panel is already open), add a NEW tab instead of replacing the existing one.
+  const prevCwdRef = useRef<string | undefined>(cwd)
+  useEffect(() => {
+    // Skip the initial mount (prevCwd === cwd on first render)
+    if (prevCwdRef.current === cwd) return
+    prevCwdRef.current = cwd
+
+    // Add a new terminal tab for the new cwd
+    _counter++
+    const id    = `term-${_counter}`
+    const label = cwd ? (cwd.split('/').pop() ?? 'shell') : 'shell'
+    setTerminals(prev => [...prev, { id, label, cwd }])
+    setActiveTermId(id)
+    setPanel('terminal')  // switch to terminal panel to show the new tab
+  }, [cwd])
 
   function addTerminal() {
     _counter++
@@ -214,10 +182,10 @@ export default function TerminalPanel({ cwd, onClose }: Props) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0d0d0d', overflow: 'hidden' }}>
 
-      {/* ── Header bar ─────────────────────────────────────────────── */}
+      {/* ── Header ─────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'stretch', background: '#141414', borderBottom: '1px solid #252525', flexShrink: 0, height: 32 }}>
 
-        {/* Panel type tabs */}
+        {/* Panel type tabs (Terminal / Output / Problems / Debug / Ports) */}
         <div style={{ display: 'flex', alignItems: 'stretch', borderRight: '1px solid #252525', flexShrink: 0 }}>
           {PANEL_TABS.map(({ id, label, Icon }) => {
             const isActive = panel === id
@@ -233,45 +201,50 @@ export default function TerminalPanel({ cwd, onClose }: Props) {
           })}
         </div>
 
-        {/* Terminal instance tabs */}
-        {panel === 'terminal' && (
-          <div style={{ display: 'flex', alignItems: 'stretch', flex: 1, overflow: 'hidden' }}>
-            {terminals.map(term => {
-              const isActive = term.id === activeTermId
-              return (
-                <div key={term.id}
-                  onClick={() => setActiveTermId(term.id)}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 6,
-                    padding: '0 8px 0 12px', cursor: 'pointer', flexShrink: 0,
-                    borderRight: '1px solid #252525',
-                    background: isActive ? '#1e1e1e' : 'transparent',
-                    color: isActive ? '#e8e8e8' : '#555',
-                    fontSize: 11, whiteSpace: 'nowrap',
-                    borderBottom: isActive ? '2px solid #3dd68c' : '2px solid transparent',
-                    transition: 'background 0.1s',
-                  }}
-                  onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = '#1a1a1a' }}
-                  onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
-                >
-                  <TerminalIcon size={11} style={{ flexShrink: 0 }} />
-                  <span style={{ maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }}>{term.label}</span>
-                  <button
-                    onClick={e => { e.stopPropagation(); closeTerminal(term.id) }}
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', display: 'flex', padding: 2, borderRadius: 3, opacity: 0.4, flexShrink: 0 }}
-                    onMouseEnter={e => (e.currentTarget as HTMLElement).style.opacity = '1'}
-                    onMouseLeave={e => (e.currentTarget as HTMLElement).style.opacity = '0.4'}
-                  ><X size={10} /></button>
-                </div>
-              )
-            })}
-            <button onClick={addTerminal} title="New terminal"
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, border: 'none', background: 'transparent', color: '#555', cursor: 'pointer', flexShrink: 0, borderBottom: '2px solid transparent' }}
-              onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = '#aaa'}
-              onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = '#555'}
-            ><Plus size={13} /></button>
-          </div>
-        )}
+        {/*
+          Bug fix 2: Terminal instance tabs are ALWAYS rendered regardless of which
+          panel is active. Previously they were only shown when panel === 'terminal',
+          so switching to Output/Problems made them disappear.
+          Now they're always visible — clicking them also switches back to terminal panel.
+        */}
+        <div style={{ display: 'flex', alignItems: 'stretch', flex: 1, overflow: 'hidden' }}>
+          {terminals.map(term => {
+            const isActive = term.id === activeTermId && panel === 'terminal'
+            return (
+              <div key={term.id}
+                onClick={() => { setActiveTermId(term.id); setPanel('terminal') }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '0 8px 0 12px', cursor: 'pointer', flexShrink: 0,
+                  borderRight: '1px solid #252525',
+                  background: isActive ? '#1e1e1e' : 'transparent',
+                  color: isActive ? '#e8e8e8' : '#555',
+                  fontSize: 11, whiteSpace: 'nowrap',
+                  borderBottom: isActive ? '2px solid #3dd68c' : '2px solid transparent',
+                  transition: 'background 0.1s',
+                }}
+                onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = '#1a1a1a' }}
+                onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+              >
+                <TerminalIcon size={11} style={{ flexShrink: 0 }} />
+                <span style={{ maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }}>{term.label}</span>
+                <button
+                  onClick={e => { e.stopPropagation(); closeTerminal(term.id) }}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', display: 'flex', padding: 2, borderRadius: 3, opacity: 0.4, flexShrink: 0 }}
+                  onMouseEnter={e => (e.currentTarget as HTMLElement).style.opacity = '1'}
+                  onMouseLeave={e => (e.currentTarget as HTMLElement).style.opacity = '0.4'}
+                ><X size={10} /></button>
+              </div>
+            )
+          })}
+
+          {/* New terminal button */}
+          <button onClick={addTerminal} title="New terminal"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, border: 'none', background: 'transparent', color: '#555', cursor: 'pointer', flexShrink: 0, borderBottom: '2px solid transparent' }}
+            onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = '#aaa'}
+            onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = '#555'}
+          ><Plus size={13} /></button>
+        </div>
 
         {/* Close button */}
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', paddingRight: 8, flexShrink: 0 }}>
@@ -283,10 +256,10 @@ export default function TerminalPanel({ cwd, onClose }: Props) {
         </div>
       </div>
 
-      {/* ── Content area ───────────────────────────────────────────── */}
+      {/* ── Content ────────────────────────────────────────────────── */}
       <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
 
-        {/* All XTerm instances — always in DOM, only active one is visible */}
+        {/* All xterm instances — always mounted, active one is opaque */}
         {terminals.map(term => (
           <XTermInstance
             key={term.id}
@@ -295,9 +268,9 @@ export default function TerminalPanel({ cwd, onClose }: Props) {
           />
         ))}
 
-        {/* Static info panels */}
+        {/* Static panels overlay */}
         {panel !== 'terminal' && (
-          <div style={{ position: 'absolute', inset: 0, padding: '12px 16px', fontSize: 12, color: '#555', fontFamily: 'monospace', lineHeight: 1.6, overflowY: 'auto', zIndex: 2 }}>
+          <div style={{ position: 'absolute', inset: 0, padding: '12px 16px', fontSize: 12, color: '#555', fontFamily: 'monospace', lineHeight: 1.6, overflowY: 'auto', zIndex: 2, background: '#0d0d0d' }}>
             {panel === 'output'   && <><div style={{ color:'#444', marginBottom:8, fontSize:11 }}>— Output —</div><div>No output.</div></>}
             {panel === 'problems' && <><div style={{ color:'#444', marginBottom:8, fontSize:11 }}>— Problems —</div><div style={{display:'flex',alignItems:'center',gap:8,color:'#3dd68c'}}><AlertCircle size={13}/><span>No problems detected.</span></div></>}
             {panel === 'debug'    && <><div style={{ color:'#444', marginBottom:8, fontSize:11 }}>— Debug Console —</div><div>Start a debug session to see output here.</div></>}
