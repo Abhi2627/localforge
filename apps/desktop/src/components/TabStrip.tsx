@@ -1,91 +1,105 @@
-import { useState, useRef } from 'react'
+import { useRef } from 'react'
 import { X } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 
 export default function TabStrip() {
-  const { getRecentTabs, activeSessionId, setActiveSession } = useAppStore()
-  const [dismissed, setDismissed] = useState<Set<string>>(new Set())
-  const tabOrderRef = useRef<string[]>([])
+  const { sessions, activeSessionId, setActiveSession, getRecentTabs } = useAppStore()
 
-  const allTabs = getRecentTabs()
+  // Stable insertion-order list — only IDs that still exist in sessions
+  const orderRef = useRef<string[]>([])
 
-  // Stable order — append new tabs, never reorder
-  allTabs.forEach(t => {
-    if (!tabOrderRef.current.includes(t.id) && !dismissed.has(t.id)) {
-      tabOrderRef.current.push(t.id)
-    }
+  const recentIds = new Set(getRecentTabs().map(t => t.id))
+  const sessionIds = new Set(sessions.map(s => s.id))
+
+  // Add new recent IDs in order — never reorder existing
+  getRecentTabs().forEach(t => {
+    if (!orderRef.current.includes(t.id)) orderRef.current.push(t.id)
   })
+  // Remove IDs that no longer exist in the sessions array (deleted)
+  orderRef.current = orderRef.current.filter(id => sessionIds.has(id))
 
-  const tabMap = Object.fromEntries(allTabs.map(t => [t.id, t]))
-  const tabs   = tabOrderRef.current
-    .filter(id => !dismissed.has(id) && tabMap[id])
-    .map(id => tabMap[id])
-    .slice(0, 5)  // max 5 tabs
+  // Only show IDs that are recent AND still exist
+  const tabIds = orderRef.current.filter(id => recentIds.has(id))
+  const tabMap  = Object.fromEntries(sessions.map(s => [s.id, s]))
+  const tabs    = tabIds.map(id => tabMap[id]).filter(Boolean)
 
+  // Don't render if fewer than 2 tabs
   if (tabs.length < 2) return null
 
-  function dismiss(id: string, e: React.MouseEvent) {
-    e.stopPropagation()
-    setDismissed(prev => new Set([...prev, id]))
-    tabOrderRef.current = tabOrderRef.current.filter(x => x !== id)
+  function removeFromStrip(id: string) {
+    orderRef.current = orderRef.current.filter(x => x !== id)
   }
 
   return (
     <div style={{
       display: 'flex',
-      alignItems: 'center',
-      gap: 6,
-      padding: '6px 12px',         // padding so first/last cards are not cut off
+      alignItems: 'stretch',
       background: 'var(--bg-primary)',
       borderBottom: '1px solid var(--border)',
       flexShrink: 0,
-      overflowX: 'auto',
-      overflowY: 'hidden',
-      scrollbarWidth: 'none',      // hide scrollbar — still scrollable
+      height: 52,
+      // No overflow — tabs share the available width equally
+      overflow: 'hidden',
     }}>
-      {tabs.map(tab => {
+      {tabs.map((tab, i) => {
         const isActive = tab.id === activeSessionId
+        const isLast   = i === tabs.length - 1
         return (
           <div
             key={tab.id}
             onClick={() => setActiveSession(tab.id)}
             style={{
-              display: 'flex', flexDirection: 'column', justifyContent: 'center',
-              minWidth: 100, maxWidth: 160,
-              padding: '6px 10px 6px 12px',
-              borderRadius: 8,
-              border: `1px solid ${isActive ? 'var(--accent)' : 'var(--border)'}`,
-              background: isActive ? 'var(--accent-dim)' : 'var(--bg-secondary)',
-              cursor: 'pointer', flexShrink: 0, position: 'relative',
-              transition: 'border-color 0.15s, background 0.15s',
+              flex: 1,                    // equal width sharing
+              minWidth: 0,               // allow shrinking below content size
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'center',
+              padding: '0 10px 0 12px',
+              borderRight: isLast ? 'none' : '1px solid var(--border)',
+              borderBottom: isActive ? `2px solid var(--accent)` : '2px solid transparent',
+              background: isActive ? 'var(--accent-dim)' : 'transparent',
+              cursor: 'pointer',
+              position: 'relative',
+              transition: 'background 0.15s',
+              userSelect: 'none',
             }}
-            onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.borderColor = 'var(--border-light)' }}
-            onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)' }}
+            onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)' }}
+            onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
           >
+            {/* Title */}
             <span style={{
-              fontSize: 12, fontWeight: isActive ? 500 : 400,
+              fontSize: 12,
+              fontWeight: isActive ? 500 : 400,
               color: isActive ? 'var(--accent)' : 'var(--text-primary)',
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              paddingRight: 14, lineHeight: 1.4,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              paddingRight: 16,
+              lineHeight: 1.4,
             }}>
               {tab.title}
             </span>
+            {/* Type badge */}
             <span style={{
-              fontSize: 10, marginTop: 2,
+              fontSize: 10,
+              marginTop: 2,
               color: isActive ? 'var(--accent)' : 'var(--text-muted)',
               textTransform: 'capitalize',
             }}>
               {tab.type}
             </span>
+            {/* Remove from strip — does NOT delete the session */}
             <button
-              onClick={e => dismiss(tab.id, e)}
+              onClick={e => { e.stopPropagation(); removeFromStrip(tab.id) }}
               title="Remove from tab strip"
               style={{
-                position: 'absolute', top: 6, right: 5,
+                position: 'absolute', top: 8, right: 6,
                 background: 'none', border: 'none', cursor: 'pointer',
                 color: isActive ? 'var(--accent)' : 'var(--text-muted)',
-                display: 'flex', padding: 2, borderRadius: 3, opacity: 0.7,
+                display: 'flex', padding: 2, borderRadius: 3, opacity: 0,
               }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '1' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '0' }}
             >
               <X size={10} />
             </button>

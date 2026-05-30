@@ -30,15 +30,14 @@ function buildTree(files: string[], rootPath: string, newFiles: Set<string>): Tr
       if (!isLast) node = child
     }
   }
-  function sort(nodes: TreeNode[]) {
-    nodes.sort((a, b) => a.isDir !== b.isDir ? (a.isDir ? -1 : 1) : a.name.localeCompare(b.name))
-    nodes.forEach(n => sort(n.children))
+  function sort(ns: TreeNode[]) {
+    ns.sort((a, b) => a.isDir !== b.isDir ? (a.isDir ? -1 : 1) : a.name.localeCompare(b.name))
+    ns.forEach(n => sort(n.children))
   }
   sort(root.children)
   return root.children
 }
 
-// Recursive match — returns true if THIS node or ANY descendant matches the filter
 function nodeMatchesFilter(node: TreeNode, filter: string): boolean {
   if (!filter) return true
   if (node.name.toLowerCase().includes(filter.toLowerCase())) return true
@@ -46,7 +45,6 @@ function nodeMatchesFilter(node: TreeNode, filter: string): boolean {
 }
 
 function FileTreeNode({ node, depth = 0, filter }: { node: TreeNode; depth?: number; filter: string }) {
-  // Auto-expand when filter active, otherwise default (expand first 2 levels)
   const [open, setOpen] = useState(depth < 2)
   const activeSessionId = useAppStore(s => s.activeSessionId)
   const openFile        = useAppStore(s => s.openFile)
@@ -54,10 +52,9 @@ function FileTreeNode({ node, depth = 0, filter }: { node: TreeNode; depth?: num
   if (!nodeMatchesFilter(node, filter)) return null
 
   const indent = depth * 12
-  const forceOpen = !!filter && open
 
   if (node.isDir) {
-    const isOpen = filter ? true : open   // always expand dirs when filtering
+    const isOpen = filter ? true : open
     return (
       <div>
         <div onClick={() => setOpen(!open)}
@@ -76,9 +73,9 @@ function FileTreeNode({ node, depth = 0, filter }: { node: TreeNode; depth?: num
     )
   }
 
-  const ext = node.name.split('.').pop() ?? ''
-  const col = fileColor(ext)
-  const highlighted = filter && node.name.toLowerCase().includes(filter.toLowerCase())
+  const ext         = node.name.split('.').pop() ?? ''
+  const col         = fileColor(ext)
+  const highlighted = !!(filter && node.name.toLowerCase().includes(filter.toLowerCase()))
   return (
     <div
       style={{ display: 'flex', alignItems: 'center', gap: 5, padding: `2px 8px 2px ${20 + indent}px`, cursor: 'pointer', fontSize: 12, color: highlighted ? 'var(--accent)' : node.isNew ? 'var(--green)' : 'var(--text-secondary)', background: highlighted ? 'var(--accent-dim)' : 'transparent' }}
@@ -143,38 +140,42 @@ function AgentRow({ agentId, sessionId }: { agentId: string; sessionId: string }
   )
 }
 
-// ── Section with accordion expand behaviour ───────────────────────────────────
-// expanded = fills available space; collapsed = shows header only (24px)
-// Only one section can be "maximised" at a time via the expand icon
-// Normal click on header toggles open/closed within current sizing
+// ── Section header ────────────────────────────────────────────────────────────
+
+const HEADER_H = 28  // guaranteed height for every section header
 
 type SectionId = 'explorer' | 'git' | 'agents' | 'graph'
 
-function SectionHeader({
-  Icon, title, isOpen, isMaximised, onToggle, onMaximise, extra,
-}: {
+function SectionHeader({ Icon, title, isOpen, isMaximised, onToggle, onMaximise, extra }: {
   Icon: LucideIcon; title: string; isOpen: boolean; isMaximised: boolean
   onToggle: () => void; onMaximise: () => void; extra?: React.ReactNode
 }) {
   return (
     <div
       onClick={onToggle}
-      style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 10px', borderBottom: isOpen ? '1px solid var(--border)' : 'none', flexShrink: 0, cursor: 'pointer', userSelect: 'none', background: isMaximised ? 'var(--accent-dim)' : 'transparent' }}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 5,
+        padding: '0 10px', height: HEADER_H, flexShrink: 0,
+        borderBottom: isOpen ? '1px solid var(--border)' : 'none',
+        cursor: 'pointer', userSelect: 'none',
+        background: isMaximised ? 'var(--accent-dim)' : 'transparent',
+      }}
       onMouseEnter={e => { if (!isMaximised) (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)' }}
-      onMouseLeave={e => { if (!isMaximised) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = isMaximised ? 'var(--accent-dim)' : 'transparent' }}
     >
       {isOpen
         ? <ChevronDown  size={10} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
         : <ChevronRight size={10} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
       }
       <Icon size={12} style={{ color: isMaximised ? 'var(--accent)' : 'var(--text-muted)', flexShrink: 0 }} />
-      <span style={{ flex: 1, fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: isMaximised ? 'var(--accent)' : 'var(--text-muted)' }}>{title}</span>
+      <span style={{ flex: 1, fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: isMaximised ? 'var(--accent)' : 'var(--text-muted)' }}>
+        {title}
+      </span>
       {extra && <div onClick={e => e.stopPropagation()}>{extra}</div>}
-      {/* Maximise/restore toggle */}
       <button
         onClick={e => { e.stopPropagation(); onMaximise() }}
-        title={isMaximised ? 'Restore sections' : 'Expand this section'}
-        style={{ background: 'none', border: 'none', cursor: 'pointer', color: isMaximised ? 'var(--accent)' : 'var(--text-muted)', padding: '0 2px', display: 'flex', fontSize: 11 }}
+        title={isMaximised ? 'Restore' : 'Expand'}
+        style={{ background: 'none', border: 'none', cursor: 'pointer', color: isMaximised ? 'var(--accent)' : 'var(--text-muted)', padding: '0 2px', display: 'flex', fontSize: 11, lineHeight: 1 }}
       >
         {isMaximised ? '▾' : '▸'}
       </button>
@@ -192,15 +193,14 @@ export default function RightSidebar({ onOpenTerminal: _onOpenTerminal }: RightS
   const [showSearch,      setShowSearch]      = useState(false)
   const [showAgentModal,  setShowAgentModal]  = useState(false)
   const [graphFullscreen, setGraphFullscreen] = useState(false)
-
-  // Which section is open (collapsed = header only)
   const [openSections, setOpenSections] = useState<Record<SectionId, boolean>>({
     explorer: true, git: false, agents: true, graph: true,
   })
-  // Which section is maximised (takes all available space, others shrink to header)
   const [maximised, setMaximised] = useState<SectionId | null>(null)
 
   function toggleSection(id: SectionId) {
+    // If a section is maximised, toggling it via header collapses to normal
+    if (maximised === id) { setMaximised(null); return }
     setOpenSections(prev => ({ ...prev, [id]: !prev[id] }))
   }
   function toggleMaximise(id: SectionId) {
@@ -220,18 +220,9 @@ export default function RightSidebar({ onOpenTerminal: _onOpenTerminal }: RightS
     [mergedFiles.join(','), session?.rootPath, writtenFiles.join(',')]
   )
 
-  // flex values: maximised section gets flex:1, others get flex:0 (header only)
-  function sectionFlex(id: SectionId): number {
-    if (maximised) return maximised === id ? 1 : 0
-    // No maximised: open sections share space proportionally
-    if (!openSections[id]) return 0
-    const weights: Record<SectionId, number> = { explorer: 2, git: 0.4, agents: 1, graph: 1 }
-    return weights[id]
-  }
+  const FLEX_WEIGHTS: Record<SectionId, number> = { explorer: 3, git: 0, agents: 1, graph: 1 }
 
-  const sections: Array<{
-    id: SectionId; Icon: LucideIcon; title: string; extra?: React.ReactNode; content: React.ReactNode
-  }> = [
+  const sections: Array<{ id: SectionId; Icon: LucideIcon; title: string; extra?: React.ReactNode; content: React.ReactNode }> = [
     {
       id: 'explorer',
       Icon: FolderOpen,
@@ -251,17 +242,14 @@ export default function RightSidebar({ onOpenTerminal: _onOpenTerminal }: RightS
             />
           )}
           <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingBottom: 4 }}>
-            {tree.length === 0
-              ? <EmptyNote text="No files yet" />
-              : tree.map(node => <FileTreeNode key={node.path} node={node} depth={0} filter={fileSearch} />)
-            }
+            {tree.length === 0 ? <EmptyNote text="No files yet" /> : tree.map(node => <FileTreeNode key={node.path} node={node} depth={0} filter={fileSearch} />)}
           </div>
         </>
       ),
     },
     {
       id: 'git', Icon: GitBranch, title: 'Source Control',
-      content: <div style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text-muted)' }}>Git integration — Phase 3</div>,
+      content: <EmptyNote text="Git integration — Phase 3" />,
     },
     {
       id: 'agents',
@@ -315,7 +303,7 @@ export default function RightSidebar({ onOpenTerminal: _onOpenTerminal }: RightS
     <div style={{ background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border)', display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
 
       {/* Workspace header */}
-      <div style={{ flexShrink: 0, padding: '6px 12px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div style={{ height: 32, flexShrink: 0, padding: '0 12px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 6 }}>
         <LayoutDashboard size={12} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
         <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
           {session?.rootPath?.split('/').pop() ?? session?.title ?? 'No project open'}
@@ -325,26 +313,42 @@ export default function RightSidebar({ onOpenTerminal: _onOpenTerminal }: RightS
         )}
       </div>
 
+      {/* Sections container */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
         {sections.map(sec => {
-          const flex    = sectionFlex(sec.id)
-          const isOpen  = maximised ? maximised === sec.id : openSections[sec.id]
-          const isSectionVisible = flex > 0 || !maximised  // always show header
+          const isOpen     = maximised ? maximised === sec.id : openSections[sec.id]
+          const isMaximised = maximised === sec.id
+
+          // Layout logic:
+          // - Maximised section: flex: 1 (takes all remaining space)
+          // - Other sections when something is maximised: height = HEADER_H exactly
+          // - No maximised, section open: flex proportional to weight
+          // - No maximised, section closed: height = HEADER_H exactly
+
+          let sectionStyle: React.CSSProperties
+          if (maximised) {
+            if (isMaximised) {
+              sectionStyle = { display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: 1, minHeight: 0, borderBottom: '1px solid var(--border)' }
+            } else {
+              // Header only — fixed height, never collapses to 0
+              sectionStyle = { display: 'flex', flexDirection: 'column', overflow: 'hidden', flexShrink: 0, height: HEADER_H, borderBottom: '1px solid var(--border)' }
+            }
+          } else {
+            if (isOpen) {
+              const w = FLEX_WEIGHTS[sec.id] || 1
+              sectionStyle = { display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: w, minHeight: HEADER_H + 40, borderBottom: '1px solid var(--border)' }
+            } else {
+              sectionStyle = { display: 'flex', flexDirection: 'column', overflow: 'hidden', flexShrink: 0, height: HEADER_H, borderBottom: '1px solid var(--border)' }
+            }
+          }
 
           return (
-            <div key={sec.id} style={{
-              display: 'flex', flexDirection: 'column', overflow: 'hidden',
-              borderBottom: '1px solid var(--border)',
-              flex: maximised ? (maximised === sec.id ? 1 : 0) : (openSections[sec.id] ? flex : 0),
-              minHeight: 0, flexShrink: 0,
-              // Always show at least the header row (28px)
-              ...((!maximised || maximised === sec.id) ? {} : { minHeight: 28, flexShrink: 0, flex: 'none' }),
-            }}>
+            <div key={sec.id} style={sectionStyle}>
               <SectionHeader
                 Icon={sec.Icon}
                 title={sec.title}
                 isOpen={isOpen}
-                isMaximised={maximised === sec.id}
+                isMaximised={isMaximised}
                 onToggle={() => toggleSection(sec.id)}
                 onMaximise={() => toggleMaximise(sec.id)}
                 extra={sec.extra}
@@ -359,7 +363,6 @@ export default function RightSidebar({ onOpenTerminal: _onOpenTerminal }: RightS
         })}
       </div>
 
-      {/* Modals */}
       {showAgentModal && session && (
         <AgentModal sessionId={session.id} projectId={session.id} onClose={() => setShowAgentModal(false)} />
       )}
