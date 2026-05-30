@@ -14,6 +14,12 @@ import './index.css'
 const BP_LEFT_COLLAPSE  = 700
 const BP_RIGHT_COLLAPSE = 900
 
+function safeTs(val: any): number {
+  if (!val) return Date.now()
+  const t = new Date(val).getTime()
+  return isNaN(t) ? Date.now() : t
+}
+
 export default function App() {
   useWebSocket()
   const {
@@ -31,47 +37,23 @@ export default function App() {
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [terminalCwd,  setTerminalCwd]  = useState<string | undefined>(undefined)
 
-  const openSystemTerminal = useCallback(() => {
-    setTerminalCwd(undefined)
-    setTerminalOpen(true)
-  }, [])
+  const openSystemTerminal  = useCallback(() => { setTerminalCwd(undefined); setTerminalOpen(true) }, [])
+  const openProjectTerminal = useCallback((cwd: string) => { setTerminalCwd(cwd); setTerminalOpen(true) }, [])
 
-  const openProjectTerminal = useCallback((cwd: string) => {
-    setTerminalCwd(cwd)
-    setTerminalOpen(true)
-  }, [])
-
-  // Track which project sessions have already had their files loaded
-  // to avoid re-scanning on every re-render
   const scannedProjects = useRef<Set<string>>(new Set())
 
-  // When a project session becomes active, scan its files if not done yet
   useEffect(() => {
     if (!activeSession || activeSession.type !== 'project' || !activeSession.rootPath) return
     if (scannedProjects.current.has(activeSession.id)) return
-
-    // Mark as scanned immediately to prevent duplicate calls
     scannedProjects.current.add(activeSession.id)
-
-    // Update terminal cwd
     setTerminalCwd(activeSession.rootPath)
-
-    // If files already loaded (e.g. just opened via NewProjectModal), skip scan
     if (activeSession.allFiles.length > 0) return
-
-    // Scan project files — this populates the explorer, graph, and summary
     api.openProject(activeSession.id, activeSession.rootPath)
       .then(result => {
-        if (result.fileList?.length) {
-          setAllFiles(activeSession.id, result.fileList)
-        }
-        // Summary comes via WebSocket broadcast (project_summary event)
-        // but also try fetching it directly in case WS missed it
+        if (result.fileList?.length) setAllFiles(activeSession.id, result.fileList)
         return api.getProjectSummary(activeSession.id)
       })
-      .then(({ summary }) => {
-        if (summary) setSessionSummary(activeSession.id, summary)
-      })
+      .then(({ summary }) => { if (summary) setSessionSummary(activeSession.id, summary) })
       .catch(console.error)
   }, [activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -94,49 +76,71 @@ export default function App() {
     if (loadedRef.current) return
     loadedRef.current = true
 
-    api.getModels().then(({ models }) => {
-      setModels(models)
-      const selected = models.find((m: any) => m.isSelected)
-      if (selected) setSelectedModel(selected.name)
-    }).catch(console.error)
+    api.getModels()
+      .then(({ models }) => {
+        setModels(models)
+        const selected = models.find((m: any) => m.isSelected)
+        if (selected) setSelectedModel(selected.name)
+      })
+      .catch(err => console.error('[App] getModels failed:', err))
 
-    api.getSessions().then(async ({ sessions: saved }) => {
-      const clean = saved.filter((s: any) =>
-        s.title && s.title.trim() !== '' && s.title !== 'Chat' && !s.id.includes('titlegentmp')
-      )
-      for (const s of clean) {
-        let messages: Message[] = []
-        try {
-          const result = await api.getSession(s.id)
-          const seen = new Set<string>()
-          messages = (result.messages ?? [])
-            .filter((m: any) => { if (seen.has(m.id)) return false; seen.add(m.id); return true })
-            .map((m: any) => ({
-              id:        m.id,
-              type:      (m.role === 'user' ? 'user' : 'agent') as Message['type'],
-              content:   m.content,
-              agentName: m.agentName ?? undefined,
-              timestamp: new Date(m.createdAt).getTime(),
-            }))
-        } catch { }
+    api.getSessions()
+      .then(async ({ sessions: saved }) => {
+        // Filter out junk sessions
+        const clean = (saved ?? []).filter((s: any) =>
+          s?.id && s?.title &&
+          s.title.trim() !== '' &&
+          s.title !== 'Chat' &&
+          !s.id.includes('titlegentmp')
+        )
 
-        loadSession({
-          id:             s.id,
-          type:           s.type,
-          title:          s.title,
-          rootPath:       s.rootPath,
-          summary:        s.summary,
-          createdAt:      s.createdAt,
-          updatedAt:      s.updatedAt,
-          agents:         [],
-          messages,
-          allFiles:       [],
-          writtenFiles:   [],
-          lastAccessedAt: new Date(s.updatedAt).getTime(),
-          isActive:       false,
-        })
-      }
-    }).catch(console.error)
+        for (const s of clean) {
+          let messages: Message[] = []
+          try {
+            const result = await api.getSession(s.id)
+            const seen   = new Set<string>()
+            messages = (result.messages ?? [])
+              .filter((m: any) => {
+                if (!m?.id) return false
+                if (seen.has(m.id)) return false
+                seen.add(m.id)
+                return true
+              })
+              .map((m: any): Message => ({
+                id:        m.id,
+                type:      (m.role === 'user' ? 'user' : 'agent') as Message['type'],
+                content:   m.content ?? '',
+                agentName: m.agentName ?? undefined,
+                timestamp: safeTs(m.createdAt),
+              }))
+          } catch (e) {
+            // Individual session load failure — skip it, don't crash the whole loop
+            console.warn(`[App] Failed to load session ${s.id}:`, e)
+          }
+
+          try {
+            loadSession({
+              id:             s.id,
+              type:           s.type ?? 'chat',
+              title:          s.title,
+              rootPath:       s.rootPath,
+              summary:        s.summary,
+              createdAt:      s.createdAt,
+              updatedAt:      s.updatedAt,
+              agents:         [],
+              messages,
+              allFiles:       [],
+              writtenFiles:   [],
+              lastAccessedAt: safeTs(s.updatedAt),
+              isActive:       false,
+            })
+          } catch (e) {
+            console.warn(`[App] Failed to load session into store ${s.id}:`, e)
+          }
+        }
+      })
+      .catch(err => console.error('[App] getSessions failed:', err))
+
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const isNarrow = winW < BP_LEFT_COLLAPSE
@@ -156,10 +160,7 @@ export default function App() {
       <div style={{ gridColumn: '1 / -1', minWidth: 0 }}><TopBar /></div>
 
       <div style={{ minWidth: 0, overflow: 'hidden' }}>
-        <LeftBar
-          onOpenTerminal={openSystemTerminal}
-          onOpenProjectTerminal={openProjectTerminal}
-        />
+        <LeftBar onOpenTerminal={openSystemTerminal} onOpenProjectTerminal={openProjectTerminal} />
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0, minWidth: 0 }}>
