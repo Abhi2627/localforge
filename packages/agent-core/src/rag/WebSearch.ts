@@ -1,6 +1,6 @@
 /**
  * WebSearch.ts — DuckDuckGo search + page fetch + text extraction
- * No API key required. Falls back silently on any failure.
+ * Accepts an AbortSignal so the caller can cancel the entire operation.
  */
 
 export interface SearchResult {
@@ -10,109 +10,91 @@ export interface SearchResult {
   content: string
 }
 
-// ── DuckDuckGo HTML search ────────────────────────────────────────────────────
-
-export async function search(query: string, maxResults = 3): Promise<SearchResult[]> {
+export async function search(
+  query:      string,
+  maxResults = 3,
+  signal?:    AbortSignal
+): Promise<SearchResult[]> {
   try {
     const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`
-
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 8000)
 
     const res = await fetch(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml',
+        'Accept':          'text/html,application/xhtml+xml',
         'Accept-Language': 'en-US,en;q=0.9',
       },
-      signal: controller.signal,
-    }).finally(() => clearTimeout(timer))
+      signal,
+    })
 
-    if (!res.ok) throw new Error(`DDG returned ${res.status}`)
+    if (!res.ok) return []
 
-    const html    = await res.text()
-    const parsed  = parseDDGHtml(html).slice(0, maxResults)
-
+    const html   = await res.text()
+    const parsed = parseDDGHtml(html).slice(0, maxResults)
     if (parsed.length === 0) return []
 
-    // Fetch page content for top results in parallel, with individual timeouts
+    // Fetch page content in parallel — each fetch respects the same abort signal
     const withContent = await Promise.all(
       parsed.map(async r => ({
         ...r,
-        content: await fetchPageText(r.url),
+        content: await fetchPageText(r.url, signal),
       }))
     )
 
     return withContent.filter(r => r.title || r.snippet)
   } catch (err: any) {
-    if (err?.name !== 'AbortError') {
-      console.warn('[WebSearch] Search failed:', err?.message ?? err)
-    }
+    // AbortError = timeout fired — not a real error, just return empty
+    if (err?.name === 'AbortError') return []
+    console.warn('[WebSearch] failed:', err?.message ?? err)
     return []
   }
 }
 
-// ── Parse DDG HTML ────────────────────────────────────────────────────────────
-
 function parseDDGHtml(html: string): Omit<SearchResult, 'content'>[] {
   const results: Omit<SearchResult, 'content'>[] = []
-
   const linkRe    = /<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g
   const snippetRe = /<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g
-
-  const links:    Array<[string, string]> = []
-  const snippets: string[]                = []
+  const links:    [string, string][] = []
+  const snippets: string[]           = []
   let m: RegExpExecArray | null
 
   while ((m = linkRe.exec(html)) !== null) {
-    const raw   = m[1]
-    // DDG wraps URLs — extract the actual destination
-    let href = raw
+    let href = m[1]
     try {
-      const uddg = raw.match(/uddg=([^&]+)/)
+      const uddg = href.match(/uddg=([^&]+)/)
       if (uddg) href = decodeURIComponent(uddg[1])
     } catch { }
     const title = stripTags(m[2]).trim()
     if (href.startsWith('http') && title) links.push([href, title])
   }
-
   while ((m = snippetRe.exec(html)) !== null) {
     snippets.push(stripTags(m[1]).trim())
   }
-
   for (let i = 0; i < Math.min(links.length, 5); i++) {
     results.push({ url: links[i][0], title: links[i][1], snippet: snippets[i] ?? '' })
   }
   return results
 }
 
-// ── Fetch + extract page text ─────────────────────────────────────────────────
-
-export async function fetchPageText(url: string, maxChars = 2500): Promise<string> {
+async function fetchPageText(
+  url:     string,
+  signal?: AbortSignal,
+  maxChars = 2000
+): Promise<string> {
   try {
     if (/\.(pdf|zip|png|jpg|jpeg|gif|svg|mp4|mp3|exe|dmg|woff|ttf)$/i.test(url)) return ''
-
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 6000)
-
     const res = await fetch(url, {
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; LocalForge/1.0)' },
-      signal: controller.signal,
-    }).finally(() => clearTimeout(timer))
-
+      signal,
+    })
     if (!res.ok) return ''
-
     const ct = res.headers.get('content-type') ?? ''
     if (!ct.includes('text/html') && !ct.includes('text/plain')) return ''
-
-    const html = await res.text()
-    return extractReadableText(html, maxChars)
+    return extractReadableText(await res.text(), maxChars)
   } catch {
     return ''
   }
 }
-
-// ── Text extraction ───────────────────────────────────────────────────────────
 
 function extractReadableText(html: string, maxChars: number): string {
   let text = html
@@ -124,21 +106,13 @@ function extractReadableText(html: string, maxChars: number): string {
     .replace(/<aside[\s\S]*?<\/aside>/gi, '')
     .replace(/<\/(p|div|li|h[1-6]|tr)>/gi, '\n')
     .replace(/<br\s*\/?>/gi, '\n')
-
   text = stripTags(text)
-
-  return text
-    .split('\n')
-    .map(l => l.trim())
-    .filter(l => l.length > 30)
-    .filter(l => !/^[\s\W]{3,}$/.test(l))
-    .join('\n')
-    .slice(0, maxChars)
+  return text.split('\n').map(l => l.trim()).filter(l => l.length > 30)
+    .filter(l => !/^[\s\W]{3,}$/.test(l)).join('\n').slice(0, maxChars)
 }
 
 function stripTags(html: string): string {
-  return html
-    .replace(/<[^>]+>/g, ' ')
+  return html.replace(/<[^>]+>/g, ' ')
     .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ')
     .replace(/\s+/g, ' ')

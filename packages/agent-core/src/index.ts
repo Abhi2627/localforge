@@ -15,11 +15,10 @@ import { chat } from './ollama/OllamaClient.js'
 import { getInstalledModels, selectModel, setFallbackModels, loadConfig, saveConfig } from './ollama/ModelManager.js'
 import { scanProjectFiles, generateProjectSummary } from './mcp/ProjectScanner.js'
 import { connectMCP } from './mcp/MCPClient.js'
-import { runRAG, injectRAGContext } from './rag/RAGPipeline.js'
 
 type ChatRole = 'system' | 'user' | 'assistant'
 
-const server    = Fastify({ logger: false })
+const server = Fastify({ logger: false, connectionTimeout: 0, keepAliveTimeout: 0 })
 let taskQueue: TaskQueue
 const wsClients = new Set<any>()
 
@@ -62,7 +61,16 @@ function mapHistory(h: Array<{ role: string; content: string }>) {
 }
 
 async function bootstrap() {
-  await server.register(cors, { origin: true })
+  // @fastify/cors handles OPTIONS preflight automatically — do NOT add a manual options route
+  await server.register(cors, {
+    origin: (origin, cb) => cb(null, true),  // allow all origins
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    credentials: true,
+    preflight: true,  // let the plugin handle OPTIONS
+    strictPreflight: false,
+  })
+
   await server.register(websocket)
 
   const profile     = await profileSystem()
@@ -185,68 +193,54 @@ async function bootstrap() {
     try { fs.writeFileSync(p, content ?? '', 'utf8'); return { success: true } } catch (e: any) { reply.status(500).send({ error: e.message }) }
   })
 
-  // ── Chat streaming — with automatic RAG ───────────────────────────────────
-  server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>('/chat/stream', async (req, reply) => {
-    const { message, sessionId, history = [] } = req.body
-    if (!message) { reply.status(400).send('No message'); return }
+  // ── Chat streaming — SSE ───────────────────────────────────────────────────
+  server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>(
+    '/chat/stream',
+    async (req, reply) => {
+      const { message, sessionId, history = [] } = req.body
+      if (!message) { reply.status(400).send('No message'); return }
 
-    const { selectedModel } = loadConfig()
-    if (!getSession(sessionId)) upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: selectedModel })
-    const session = getSession(sessionId)
+      reply.raw.setTimeout(0)
+      // Set CORS header directly — @fastify/cors does not inject headers into raw streams
+      reply.raw.setHeader('Access-Control-Allow-Origin', '*')
+      reply.raw.setHeader('Content-Type',      'text/event-stream')
+      reply.raw.setHeader('Cache-Control',     'no-cache')
+      reply.raw.setHeader('Connection',        'keep-alive')
+      reply.raw.setHeader('X-Accel-Buffering', 'no')
+      reply.raw.flushHeaders()
 
-    reply.raw.setHeader('Content-Type', 'text/event-stream')
-    reply.raw.setHeader('Cache-Control', 'no-cache')
-    reply.raw.setHeader('Connection', 'keep-alive')
-    reply.raw.flushHeaders()
-
-    // Helper to send SSE events
-    const sendEvent = (data: object) => {
-      try { reply.raw.write(`data: ${JSON.stringify(data)}\n\n`) } catch { }
-    }
-
-    // ── Step 1: Run RAG (automatic — heuristic decides if web search needed) ──
-    let systemPrompt = buildSystemPrompt(selectedModel, session?.summary)
-
-    try {
-      const rag = await runRAG(message, (status) => {
-        // Stream RAG status to client so UI can show "Searching web…"
-        sendEvent({ type: 'rag_status', status })
-      })
-
-      if (rag.didSearch) {
-        // Inject web context into system prompt
-        systemPrompt = injectRAGContext(systemPrompt, rag)
-        // Tell client which sources were found
-        sendEvent({ type: 'rag_sources', sources: rag.sources.map(s => ({ title: s.title, url: s.url })) })
-        console.log(`[RAG] Searched for: "${rag.query}" — ${rag.sources.length} sources`)
+      const send = (data: object) => {
+        try { reply.raw.write(`data: ${JSON.stringify(data)}\n\n`) } catch { }
       }
-    } catch (err) {
-      console.warn('[RAG] Pipeline failed, continuing without web context:', (err as Error).message)
+
+      try {
+        const { selectedModel } = loadConfig()
+        if (!getSession(sessionId)) upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: selectedModel })
+        const session = getSession(sessionId)
+
+        const messages = [
+          { role: 'system' as ChatRole, content: buildSystemPrompt(selectedModel, session?.summary) },
+          ...mapHistory(history),
+          { role: 'user' as ChatRole, content: message },
+        ]
+
+        let fullReply = ''
+        await chat(selectedModel, messages, (chunk) => {
+          fullReply += chunk.content
+          send({ chunk: chunk.content })
+        })
+
+        reply.raw.write('data: [DONE]\n\n')
+        reply.raw.end()
+        try { saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: fullReply }) } catch { }
+
+      } catch (err: any) {
+        try { send({ chunk: `\n\nError: ${err.message}` }); reply.raw.write('data: [DONE]\n\n'); reply.raw.end() } catch { }
+      }
     }
+  )
 
-    // ── Step 2: Call the model with (possibly enriched) context ───────────────
-    const messages = [
-      { role: 'system' as ChatRole, content: systemPrompt },
-      ...mapHistory(history),
-      { role: 'user' as ChatRole, content: message },
-    ]
-
-    let fullReply = ''
-    try {
-      await chat(selectedModel, messages, (chunk) => {
-        fullReply += chunk.content
-        sendEvent({ chunk: chunk.content })
-      })
-    } catch (err: any) {
-      sendEvent({ chunk: `\n\nError: ${err.message}` })
-    }
-
-    reply.raw.write('data: [DONE]\n\n')
-    reply.raw.end()
-    saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: fullReply })
-  })
-
-  // ── Chat non-streaming (title gen) ────────────────────────────────────────
+  // ── Chat non-streaming (title gen only) ───────────────────────────────────
   server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>('/chat', async (req) => {
     const { message, sessionId, history = [] } = req.body
     if (!message) return { success: false, reply: 'No message' }
@@ -291,9 +285,7 @@ async function bootstrap() {
   const PORT = Number(process.env.PORT ?? 3001)
   await server.listen({ port: PORT, host: '0.0.0.0' })
   console.log(`\n🔨 LocalForge  :${PORT}  |  Model: ${loadConfig().selectedModel}`)
-  console.log(`   Shell: ${DEFAULT_SHELL}`)
-  console.log(`   RAG:   DuckDuckGo (automatic)`)
-  console.log(`   Terminal ws://localhost:${PORT}/terminal\n`)
+  console.log(`   Shell: ${DEFAULT_SHELL}\n`)
 }
 
 process.on('SIGINT', async () => { await server.close(); closeDb(); process.exit(0) })

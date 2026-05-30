@@ -13,19 +13,11 @@ async function req<T>(method: string, path: string, body?: object): Promise<T> {
   return res.json()
 }
 
-export interface RAGSource { title: string; url: string }
-
-export interface StreamCallbacks {
-  onChunk:      (chunk: string) => void
-  onRagStatus?: (status: string) => void
-  onRagSources?:(sources: RAGSource[]) => void
-}
-
 export async function streamChatRequest(
   message:   string,
   sessionId: string,
   history:   Array<{ role: string; content: string }>,
-  callbacks: StreamCallbacks
+  onChunk:   (chunk: string) => void
 ): Promise<void> {
   const res = await fetch(`${BASE}/chat/stream`, {
     method: 'POST',
@@ -44,19 +36,13 @@ export async function streamChatRequest(
   while (true) {
     const { done, value } = await reader.read()
     if (done) break
-    const text  = decoder.decode(value, { stream: true })
-    const lines = text.split('\n').filter(l => l.startsWith('data: '))
+    const lines = decoder.decode(value, { stream: true }).split('\n').filter(l => l.startsWith('data: '))
     for (const line of lines) {
       const data = line.slice(6).trim()
       if (data === '[DONE]') return
       try {
         const parsed = JSON.parse(data)
-        // Token chunk
-        if (parsed.chunk !== undefined) callbacks.onChunk(parsed.chunk)
-        // RAG status update (e.g. "Searching web…")
-        if (parsed.type === 'rag_status')  callbacks.onRagStatus?.(parsed.status)
-        // RAG sources found
-        if (parsed.type === 'rag_sources') callbacks.onRagSources?.(parsed.sources)
+        if (parsed.chunk !== undefined) onChunk(parsed.chunk)
       } catch { }
     }
   }
@@ -90,16 +76,13 @@ export const api = {
   sendChat: (message: string, sessionId: string, history: any[] = []) =>
     req<{ success: boolean; reply: string }>('POST', '/chat', { message, sessionId, history }),
 
-  // Updated: accepts full callbacks object including RAG handlers
   streamChat: (
-    message:    string,
-    sessionId:  string,
-    history:    Array<{ role: string; content: string }>,
-    _taskId:    string,
-    onChunk:    (chunk: string) => void,
-    onRagStatus?:  (status: string) => void,
-    onRagSources?: (sources: RAGSource[]) => void
-  ) => streamChatRequest(message, sessionId, history, { onChunk, onRagStatus, onRagSources }),
+    message:   string,
+    sessionId: string,
+    history:   Array<{ role: string; content: string }>,
+    _taskId:   string,
+    onChunk:   (chunk: string) => void
+  ) => streamChatRequest(message, sessionId, history, onChunk),
 
   createProject: (name: string, rootPath: string) =>
     req<any>('POST', '/projects', { name, rootPath }),

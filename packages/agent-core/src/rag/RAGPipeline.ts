@@ -1,55 +1,70 @@
 /**
- * RAGPipeline.ts — Automatic web context injection
+ * RAGPipeline.ts
  *
- * Key behaviours:
- * - If internet is unreachable → returns ragFailed=true, caller injects a
- *   "not connected to internet" message into the prompt so the model says so
- * - If search returns 0 results → falls back silently, no context injected
- * - If search succeeds → injects [WEB CONTEXT] block into system prompt
+ * Hard rules:
+ * 1. RAG only fires for queries that genuinely need LIVE data
+ *    (prices, weather, scores, breaking news, package versions)
+ * 2. Conceptual questions ("what is X", "explain X") never trigger RAG
+ *    — the model already knows these from training data
+ * 3. Total RAG phase is capped at MAX_RAG_MS; if it exceeds that,
+ *    the search is aborted and the model answers from training data
+ * 4. Any unhandled error in RAG is caught — never crashes the stream
  */
 
 import { search, type SearchResult } from './WebSearch.js'
 
+const MAX_RAG_MS = 3000
+
 export interface RAGResult {
   didSearch:    boolean
-  ragFailed:    boolean   // true = internet unreachable
+  ragFailed:    boolean
   query:        string
   sources:      SearchResult[]
   contextBlock: string
 }
 
-// ── Heuristic classifier ──────────────────────────────────────────────────────
+// ── Signals that require LIVE data — narrow and specific ─────────────────────
 
-const WEB_SIGNALS = [
-  /\b(latest|recent|current|today|this week|this year|2024|2025|2026)\b/i,
-  /\b(how to|how do I|how does|tutorial|example|docs|documentation)\b/i,
-  /\b(version|release|changelog|update|upgrade|install|npm|pip|brew)\b/i,
-  /\b(error|exception|bug|issue|fix|workaround|stackoverflow)\b/i,
-  /\b(api|endpoint|sdk|library|package|module|framework)\b/i,
-  /\b(search|look up|find|google|what is|who is|when was|where is)\b/i,
-  // Stock / financial data
-  /\b(price|stock|share|market|nse|bse|nasdaq|nyse|closing|trading|sensex|nifty)\b/i,
-  /\b(reliance|tcs|infosys|hdfc|infy|tatamotors|wipro|aapl|googl|msft|tsla)\b/i,
+// These patterns need real-time web data to answer correctly
+const LIVE_DATA_SIGNALS = [
+  // Stock prices, market data
+  /\b(stock price|share price|closing price|current price|market cap|trading at)\b/i,
+  /\b(nse|bse|nasdaq|nyse|sensex|nifty).{0,20}(price|today|current|open|close|high|low)\b/i,
+  /\b(price|stock|shares).{0,20}(reliance|tcs|infosys|hdfc|wipro|aapl|googl|msft|tsla|amzn)\b/i,
   // Weather
-  /\b(weather|forecast|temperature|rain|humidity)\b/i,
-  // Sports / news
-  /\b(score|match|result|news|headline|won|lost|winner)\b/i,
+  /\b(weather|forecast|temperature|will it rain|humidity).{0,30}(today|tomorrow|this week)\b/i,
+  // Sports scores
+  /\b(score|result|winner|won|lost).{0,20}(match|game|today|yesterday|last night)\b/i,
+  // Breaking news  
+  /\b(latest news|breaking news|what happened|news today)\b/i,
+  // Package/library versions
+  /\b(latest version|current version|stable version|release).{0,20}(of|for)\s+\w+/i,
 ]
 
-const LOCAL_SIGNALS = [
-  /\b(refactor|rewrite|this code|my code|this file|this project|the function|above|below)\b/i,
-  /\b(explain this|what does this|review|check this|analyse this)\b/i,
+// These patterns look like web queries but the model already knows the answer
+const TRAINING_DATA_PATTERNS = [
+  /^(what is|explain|define|describe|tell me about|how does|what are)\s+/i,
+  /\b(rag|llm|gpt|bert|transformer|neural network|machine learning|deep learning)\b/i,
+  /\b(algorithm|data structure|design pattern|programming|coding|syntax)\b/i,
+  /\b(history|invented|discovered|founded|created|developed)\b/i,
 ]
 
 export function needsWebSearch(message: string): boolean {
-  if (message.trim().split(/\s+/).length < 3) return false
-  if (LOCAL_SIGNALS.some(r => r.test(message))) return false
-  return WEB_SIGNALS.some(r => r.test(message))
+  const msg = message.trim()
+
+  // Too short
+  if (msg.split(/\s+/).length < 4) return false
+
+  // Explicitly a conceptual/definitional question — model knows this
+  if (TRAINING_DATA_PATTERNS.some(r => r.test(msg))) return false
+
+  // Only trigger for queries that genuinely need live data
+  return LIVE_DATA_SIGNALS.some(r => r.test(msg))
 }
 
 export function extractSearchQuery(message: string): string {
   return message
-    .replace(/^(can you|could you|please|hey|hi|tell me|show me|explain|what is|how to|how do I)\s+/i, '')
+    .replace(/^(can you|could you|please|tell me|show me|what is|what's)\s+/i, '')
     .replace(/\?+$/, '')
     .trim()
     .slice(0, 120)
@@ -62,26 +77,11 @@ function buildContextBlock(results: SearchResult[], query: string): string {
     lines.push(`## ${r.title}`)
     lines.push(`Source: ${r.url}`)
     if (r.snippet) lines.push(`Summary: ${r.snippet}`)
-    if (r.content)  lines.push(`Content:\n${r.content.slice(0, 800)}`)
+    if (r.content) lines.push(`Content:\n${r.content.slice(0, 800)}`)
     lines.push('')
   }
   lines.push('[END WEB CONTEXT]')
   return lines.join('\n')
-}
-
-// ── Connectivity check ────────────────────────────────────────────────────────
-
-async function isOnline(): Promise<boolean> {
-  try {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 3000)
-    const res = await fetch('https://www.google.com/generate_204', {
-      method: 'HEAD', signal: controller.signal,
-    }).finally(() => clearTimeout(timer))
-    return res.status === 204 || res.ok
-  } catch {
-    return false
-  }
 }
 
 // ── Main RAG function ─────────────────────────────────────────────────────────
@@ -90,57 +90,66 @@ export async function runRAG(
   message:  string,
   onStatus: (msg: string) => void = () => {}
 ): Promise<RAGResult> {
-  const empty: RAGResult = { didSearch: false, ragFailed: false, query: '', sources: [], contextBlock: '' }
-
-  if (!needsWebSearch(message)) return empty
-
-  const query = extractSearchQuery(message)
-  if (!query) return empty
-
-  onStatus('Checking connection…')
-
-  // Check internet before attempting search
-  const online = await isOnline()
-  if (!online) {
-    return { ...empty, didSearch: true, ragFailed: true, query }
+  const empty: RAGResult = {
+    didSearch: false, ragFailed: false,
+    query: '', sources: [], contextBlock: '',
   }
 
-  onStatus('Searching web…')
-
   try {
-    const results = await search(query, 3)
+    if (!needsWebSearch(message)) return empty
 
-    if (results.length === 0) {
-      // Search ran but got no results — not a connectivity issue
-      return { ...empty, didSearch: true, ragFailed: false, query }
+    const query = extractSearchQuery(message)
+    if (!query) return empty
+
+    // Shared abort controller — both timeout and early return use this
+    const controller = new AbortController()
+    let timedOut = false
+
+    const timer = setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, MAX_RAG_MS)
+
+    onStatus('Searching web…')
+
+    try {
+      const results = await search(query, 3, controller.signal)
+      clearTimeout(timer)
+
+      if (timedOut || results.length === 0) {
+        return { ...empty, didSearch: true, ragFailed: true, query }
+      }
+
+      onStatus(`Found ${results.length} source${results.length > 1 ? 's' : ''}`)
+      return {
+        didSearch: true, ragFailed: false, query,
+        sources: results,
+        contextBlock: buildContextBlock(results, query),
+      }
+    } catch {
+      clearTimeout(timer)
+      return { ...empty, didSearch: true, ragFailed: true, query }
     }
-
-    onStatus(`Found ${results.length} source${results.length > 1 ? 's' : ''}`)
-
-    const contextBlock = buildContextBlock(results, query)
-    return { didSearch: true, ragFailed: false, query, sources: results, contextBlock }
   } catch {
-    return { ...empty, didSearch: true, ragFailed: false, query }
+    // Outer catch — never let RAG crash the caller
+    return empty
   }
 }
 
-// ── Context injection ─────────────────────────────────────────────────────────
+// ── Inject RAG context into system prompt ─────────────────────────────────────
 
-export function injectRAGContext(systemPrompt: string, ragResult: RAGResult): string {
-  if (!ragResult.didSearch) return systemPrompt
+export function injectRAGContext(systemPrompt: string, rag: RAGResult): string {
+  if (!rag.didSearch) return systemPrompt
 
-  // No internet — tell the model explicitly so it gives a clear answer
-  if (ragResult.ragFailed) {
-    return systemPrompt + `\n\n[SYSTEM NOTE: Internet search was attempted for this query but the device is not connected to the internet. You MUST tell the user clearly that you are not connected to the internet and therefore cannot fetch live data like stock prices, weather, or current news. Do NOT make up data or give a generic "here's how to find it" answer — just say you are offline and cannot access real-time information.]`
+  if (rag.ragFailed) {
+    return systemPrompt + '\n\n[SYSTEM NOTE: A live web search was attempted for this query but failed — the device may be offline or the search timed out. Inform the user briefly that you cannot access real-time data for this query. Do NOT fabricate numbers or prices.]'
   }
 
-  // Search ran but no results — tell model to be honest about it
-  if (ragResult.contextBlock === '') {
-    return systemPrompt + `\n\n[SYSTEM NOTE: A web search was attempted for "${ragResult.query}" but returned no usable results. Be honest that you don't have current data for this query rather than making up information.]`
-  }
+  if (!rag.contextBlock) return systemPrompt
 
-  // We have web context — inject it and instruct the model to use it directly
-  return systemPrompt +
-    '\n\n' + ragResult.contextBlock +
-    '\n\nIMPORTANT: Use the web context above to answer the question directly with specific data (prices, numbers, facts). Do NOT tell the user how to find the information themselves. If the context contains the answer, state it clearly. Cite the source URL at the end.'
+  return (
+    systemPrompt +
+    '\n\n' + rag.contextBlock +
+    '\n\nUse the web context above to answer directly with specific facts. Cite the source URL.'
+  )
 }
