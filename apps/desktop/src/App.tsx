@@ -20,6 +20,18 @@ function safeTs(val: any): number {
   return isNaN(t) ? Date.now() : t
 }
 
+// Wait for the server to be reachable — retries every 800ms, up to 15 attempts
+async function waitForServer(maxAttempts = 15): Promise<boolean> {
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const res = await fetch('http://localhost:3001/health', { signal: AbortSignal.timeout ? AbortSignal.timeout(1500) : undefined })
+      if (res.ok) return true
+    } catch { }
+    await new Promise(r => setTimeout(r, 800))
+  }
+  return false
+}
+
 export default function App() {
   useWebSocket()
   const {
@@ -36,6 +48,8 @@ export default function App() {
 
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [terminalCwd,  setTerminalCwd]  = useState<string | undefined>(undefined)
+  const [serverReady,  setServerReady]  = useState(false)
+  const [serverError,  setServerError]  = useState(false)
 
   const openSystemTerminal  = useCallback(() => { setTerminalCwd(undefined); setTerminalOpen(true) }, [])
   const openProjectTerminal = useCallback((cwd: string) => { setTerminalCwd(cwd); setTerminalOpen(true) }, [])
@@ -76,71 +90,79 @@ export default function App() {
     if (loadedRef.current) return
     loadedRef.current = true
 
-    api.getModels()
-      .then(({ models }) => {
-        setModels(models)
-        const selected = models.find((m: any) => m.isSelected)
-        if (selected) setSelectedModel(selected.name)
-      })
-      .catch(err => console.error('[App] getModels failed:', err))
+    // Wait for server before loading anything
+    waitForServer().then(async (online) => {
+      if (!online) {
+        setServerError(true)
+        return
+      }
+      setServerReady(true)
 
-    api.getSessions()
-      .then(async ({ sessions: saved }) => {
-        // Filter out junk sessions
-        const clean = (saved ?? []).filter((s: any) =>
-          s?.id && s?.title &&
-          s.title.trim() !== '' &&
-          s.title !== 'Chat' &&
-          !s.id.includes('titlegentmp')
-        )
+      // Load models
+      api.getModels()
+        .then(({ models }) => {
+          setModels(models)
+          const selected = models.find((m: any) => m.isSelected)
+          if (selected) setSelectedModel(selected.name)
+        })
+        .catch(err => console.error('[App] getModels failed:', err))
 
-        for (const s of clean) {
-          let messages: Message[] = []
-          try {
-            const result = await api.getSession(s.id)
-            const seen   = new Set<string>()
-            messages = (result.messages ?? [])
-              .filter((m: any) => {
-                if (!m?.id) return false
-                if (seen.has(m.id)) return false
-                seen.add(m.id)
-                return true
+      // Load sessions
+      api.getSessions()
+        .then(async ({ sessions: saved }) => {
+          const clean = (saved ?? []).filter((s: any) =>
+            s?.id && s?.title &&
+            s.title.trim() !== '' &&
+            s.title !== 'Chat' &&
+            !s.id.includes('titlegentmp')
+          )
+
+          for (const s of clean) {
+            let messages: Message[] = []
+            try {
+              const result = await api.getSession(s.id)
+              const seen   = new Set<string>()
+              messages = (result.messages ?? [])
+                .filter((m: any) => {
+                  if (!m?.id) return false
+                  if (seen.has(m.id)) return false
+                  seen.add(m.id)
+                  return true
+                })
+                .map((m: any): Message => ({
+                  id:        m.id,
+                  type:      (m.role === 'user' ? 'user' : 'agent') as Message['type'],
+                  content:   m.content ?? '',
+                  agentName: m.agentName ?? undefined,
+                  timestamp: safeTs(m.createdAt),
+                }))
+            } catch (e) {
+              console.warn(`[App] Failed to load session ${s.id}:`, e)
+            }
+
+            try {
+              loadSession({
+                id:             s.id,
+                type:           s.type ?? 'chat',
+                title:          s.title,
+                rootPath:       s.rootPath,
+                summary:        s.summary,
+                createdAt:      s.createdAt,
+                updatedAt:      s.updatedAt,
+                agents:         [],
+                messages,
+                allFiles:       [],
+                writtenFiles:   [],
+                lastAccessedAt: safeTs(s.updatedAt),
+                isActive:       false,
               })
-              .map((m: any): Message => ({
-                id:        m.id,
-                type:      (m.role === 'user' ? 'user' : 'agent') as Message['type'],
-                content:   m.content ?? '',
-                agentName: m.agentName ?? undefined,
-                timestamp: safeTs(m.createdAt),
-              }))
-          } catch (e) {
-            // Individual session load failure — skip it, don't crash the whole loop
-            console.warn(`[App] Failed to load session ${s.id}:`, e)
+            } catch (e) {
+              console.warn(`[App] Failed to load session into store ${s.id}:`, e)
+            }
           }
-
-          try {
-            loadSession({
-              id:             s.id,
-              type:           s.type ?? 'chat',
-              title:          s.title,
-              rootPath:       s.rootPath,
-              summary:        s.summary,
-              createdAt:      s.createdAt,
-              updatedAt:      s.updatedAt,
-              agents:         [],
-              messages,
-              allFiles:       [],
-              writtenFiles:   [],
-              lastAccessedAt: safeTs(s.updatedAt),
-              isActive:       false,
-            })
-          } catch (e) {
-            console.warn(`[App] Failed to load session into store ${s.id}:`, e)
-          }
-        }
-      })
-      .catch(err => console.error('[App] getSessions failed:', err))
-
+        })
+        .catch(err => console.error('[App] getSessions failed:', err))
+    })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const isNarrow = winW < BP_LEFT_COLLAPSE
@@ -148,6 +170,44 @@ export default function App() {
   const rightW   = showRight ? (rightExpanded && winW >= BP_RIGHT_COLLAPSE ? '280px' : '40px') : '0px'
   const cols     = showRight ? `${leftW} 1fr ${rightW}` : `${leftW} 1fr`
   const TERM_H   = 260
+
+  // Show loading screen while waiting for server
+  if (!serverReady && !serverError) {
+    return (
+      <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-primary)', gap: 16 }}>
+        <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-primary)' }}>LocalForge</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--text-muted)', fontSize: 13 }}>
+          <div style={{ width: 16, height: 16, border: '2px solid var(--accent)', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+          Starting agent server…
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', opacity: 0.6 }}>
+          Make sure <code style={{ fontFamily: 'monospace', color: 'var(--accent)' }}>npm run dev</code> is running in packages/agent-core
+        </div>
+        <style>{`@keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }`}</style>
+      </div>
+    )
+  }
+
+  if (serverError) {
+    return (
+      <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-primary)', gap: 16 }}>
+        <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-primary)' }}>LocalForge</div>
+        <div style={{ color: 'var(--red)', fontSize: 13 }}>⚠ Cannot connect to agent server</div>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', maxWidth: 360, lineHeight: 1.7 }}>
+          Start the server first:<br />
+          <code style={{ fontFamily: 'monospace', color: 'var(--accent)', fontSize: 11 }}>
+            cd packages/agent-core && npm run dev
+          </code>
+        </div>
+        <button
+          onClick={() => { loadedRef.current = false; setServerError(false); setServerReady(false) }}
+          style={{ padding: '8px 20px', background: 'var(--accent)', border: 'none', borderRadius: 8, color: 'white', fontSize: 13, cursor: 'pointer', marginTop: 8 }}
+        >
+          Retry
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div style={{
