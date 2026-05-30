@@ -13,6 +13,14 @@ interface LeftBarProps {
   onOpenProjectTerminal: (cwd: string) => void
 }
 
+function formatDate(iso: string): string {
+  try {
+    const d = new Date(iso)
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) +
+      ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  } catch { return iso }
+}
+
 function SessionItem({ session }: { session: any }) {
   const { activeSessionId, setActiveSession, updateSessionTitle, closeSession } = useAppStore()
   const isActive  = session.id === activeSessionId
@@ -69,7 +77,9 @@ function SessionItem({ session }: { session: any }) {
             style={{ flex: 1, background: 'var(--bg-tertiary)', border: '1px solid var(--accent)', borderRadius: 4, padding: '1px 6px', color: 'var(--text-primary)', fontSize: 12, outline: 'none' }}
           />
         ) : (
-          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{session.title}</span>
+          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {session.title}
+          </span>
         )}
         <button onClick={e => { e.stopPropagation(); setShowMenu(v => !v) }}
           style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: 0, display: 'flex', opacity: 0.6 }}>
@@ -81,9 +91,28 @@ function SessionItem({ session }: { session: any }) {
         <div ref={menuRef} style={{
           position: 'absolute', right: 8, top: '100%', zIndex: 100,
           background: 'var(--bg-secondary)', border: '1px solid var(--border)',
-          borderRadius: 6, padding: 4, minWidth: 110,
-          boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+          borderRadius: 6, padding: 4, minWidth: 170,
+          boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
         }}>
+          {/* Metadata section */}
+          <div style={{ padding: '5px 10px 6px', borderBottom: '1px solid var(--border)', marginBottom: 3 }}>
+            {session.createdAt && (
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 2 }}>
+                Created: <span style={{ color: 'var(--text-secondary)' }}>{formatDate(session.createdAt)}</span>
+              </div>
+            )}
+            {session.updatedAt && (
+              <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                Updated: <span style={{ color: 'var(--text-secondary)' }}>{formatDate(session.updatedAt)}</span>
+              </div>
+            )}
+            {session.rootPath && (
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                Path: <span style={{ color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{session.rootPath}</span>
+              </div>
+            )}
+          </div>
+
           {[
             { label: 'Rename', action: () => { setRenaming(true); setShowMenu(false) }, color: 'var(--text-secondary)' },
             { label: 'Delete', action: handleDelete, color: 'var(--red)' },
@@ -144,7 +173,17 @@ function ChatSection({ sessions, expanded }: { sessions: any[]; expanded: boolea
 function ProjectSection({ sessions, expanded }: { sessions: any[]; expanded: boolean }) {
   const [open, setOpen] = useState(true)
   const [showModal, setShowModal] = useState(false)
-  const filtered = sessions.filter(s => s.type === 'project' && s.title && s.title.trim() !== '')
+
+  // Deduplicate projects by rootPath — keep only the most recently updated per path
+  const seen = new Set<string>()
+  const filtered = sessions
+    .filter(s => s.type === 'project' && s.title && s.title.trim() !== '')
+    .filter(s => {
+      const key = s.rootPath ?? s.id
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
 
   if (!expanded) return (
     <button title="Projects" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', padding: '9px 0', border: 'none', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer' }}>
@@ -184,7 +223,6 @@ export default function LeftBar({ onOpenTerminal, onOpenProjectTerminal }: LeftB
   }, [])
 
   function handleTerminalClick() {
-    // If active session is a project with rootPath, open project terminal
     if (activeSession?.type === 'project' && activeSession.rootPath) {
       onOpenProjectTerminal(activeSession.rootPath)
     } else {
@@ -193,9 +231,9 @@ export default function LeftBar({ onOpenTerminal, onOpenProjectTerminal }: LeftB
   }
 
   const bottomButtons = [
-    { icon: Terminal,  label: 'Terminal', action: handleTerminalClick },
-    { icon: User,      label: 'Account',  action: () => setShowAccount(true) },
-    { icon: Settings,  label: 'Settings', action: () => {} },
+    { Icon: Terminal, label: 'Terminal', action: handleTerminalClick },
+    { Icon: User,     label: 'Account',  action: () => setShowAccount(true) },
+    { Icon: Settings, label: 'Settings', action: () => {} },
   ]
 
   return (
@@ -215,11 +253,8 @@ export default function LeftBar({ onOpenTerminal, onOpenProjectTerminal }: LeftB
       </div>
 
       <div style={{ borderTop: '1px solid var(--border)', padding: '4px 0' }}>
-        {bottomButtons.map(({ icon: Icon, label, action }) => (
-          <button
-            key={label}
-            onClick={action}
-            title={!expanded ? label : undefined}
+        {bottomButtons.map(({ Icon, label, action }) => (
+          <button key={label} onClick={action} title={!expanded ? label : undefined}
             style={{ display: 'flex', alignItems: 'center', gap: expanded ? 8 : 0, justifyContent: expanded ? 'flex-start' : 'center', width: '100%', padding: expanded ? '7px 10px' : '9px 0', border: 'none', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12 }}
             onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'}
             onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'}

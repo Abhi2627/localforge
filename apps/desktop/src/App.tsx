@@ -28,28 +28,24 @@ export default function App() {
   const isProjectSession = screen === 'session' && activeSession?.type === 'project'
   const showRight        = isProjectSession
 
-  // Terminal state — lives at App level so it spans full width below the editor
-  const [terminalOpen, setTerminalOpen]   = useState(false)
-  const [terminalCwd,  setTerminalCwd]    = useState<string | undefined>(undefined)
+  const [terminalOpen, setTerminalOpen] = useState(false)
+  const [terminalCwd,  setTerminalCwd]  = useState<string | undefined>(undefined)
 
-  // Called from LeftBar terminal button — opens system root terminal
   const openSystemTerminal = useCallback(() => {
-    setTerminalCwd(undefined)   // undefined = home dir on server
+    setTerminalCwd(undefined)
     setTerminalOpen(true)
   }, [])
 
-  // Called when a project session opens the terminal
   const openProjectTerminal = useCallback((cwd: string) => {
     setTerminalCwd(cwd)
     setTerminalOpen(true)
   }, [])
 
-  // When active session changes, update terminal cwd if it's a project
   useEffect(() => {
     if (activeSession?.type === 'project' && activeSession.rootPath) {
       setTerminalCwd(activeSession.rootPath)
     }
-  }, [activeSessionId])
+  }, [activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const [winW, setWinW] = useState(window.innerWidth)
   const handleResize = useCallback(() => {
@@ -88,19 +84,28 @@ export default function App() {
           messages = (result.messages ?? [])
             .filter((m: any) => { if (seen.has(m.id)) return false; seen.add(m.id); return true })
             .map((m: any) => ({
-              id: m.id,
-              type: (m.role === 'user' ? 'user' : 'agent') as Message['type'],
-              content: m.content,
+              id:        m.id,
+              type:      (m.role === 'user' ? 'user' : 'agent') as Message['type'],
+              content:   m.content,
               agentName: m.agentName ?? undefined,
               timestamp: new Date(m.createdAt).getTime(),
             }))
         } catch { }
+
         loadSession({
-          id: s.id, type: s.type, title: s.title,
-          rootPath: s.rootPath, summary: s.summary,
-          agents: [], messages, allFiles: [], writtenFiles: [],
+          id:             s.id,
+          type:           s.type,
+          title:          s.title,
+          rootPath:       s.rootPath,
+          summary:        s.summary,
+          createdAt:      s.createdAt,   // passed through so menu can show it
+          updatedAt:      s.updatedAt,
+          agents:         [],
+          messages,
+          allFiles:       [],
+          writtenFiles:   [],
           lastAccessedAt: new Date(s.updatedAt).getTime(),
-          isActive: false,
+          isActive:       false,
         })
       }
     }).catch(console.error)
@@ -110,57 +115,36 @@ export default function App() {
   const leftW    = leftExpanded && !isNarrow ? '220px' : '48px'
   const rightW   = showRight ? (rightExpanded && winW >= BP_RIGHT_COLLAPSE ? '280px' : '40px') : '0px'
   const cols     = showRight ? `${leftW} 1fr ${rightW}` : `${leftW} 1fr`
-
-  // Terminal height
-  const TERMINAL_H = 260
+  const TERM_H   = 260
 
   return (
     <div style={{
       display: 'grid',
       gridTemplateColumns: cols,
-      gridTemplateRows: `40px 1fr${terminalOpen ? ` ${TERMINAL_H}px` : ''}`,
+      gridTemplateRows: `40px 1fr${terminalOpen ? ` ${TERM_H}px` : ''}`,
       height: '100vh', width: '100vw', overflow: 'hidden',
       transition: 'grid-template-columns 0.2s ease, grid-template-rows 0.2s ease',
     }}>
-      {/* Top bar — spans all columns */}
-      <div style={{ gridColumn: '1 / -1', minWidth: 0 }}>
-        <TopBar />
+      <div style={{ gridColumn: '1 / -1', minWidth: 0 }}><TopBar /></div>
+
+      <div style={{ minWidth: 0, overflow: 'hidden' }}>
+        <LeftBar onOpenTerminal={openSystemTerminal} onOpenProjectTerminal={openProjectTerminal} />
       </div>
 
-      {/* Left sidebar */}
-      <div style={{ minWidth: 0, overflow: 'hidden', gridRow: terminalOpen ? '2 / 3' : '2' }}>
-        <LeftBar
-          onOpenTerminal={openSystemTerminal}
-          onOpenProjectTerminal={openProjectTerminal}
-        />
-      </div>
-
-      {/* Main content */}
       <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0, minWidth: 0 }}>
         <TabStrip />
         {screen === 'welcome' ? <WelcomeScreen /> : <ChatPanel />}
       </div>
 
-      {/* Right sidebar */}
       {showRight && (
         <div style={{ minWidth: 0, overflow: 'hidden' }}>
           <RightSidebar onOpenTerminal={openProjectTerminal} />
         </div>
       )}
 
-      {/* Terminal — spans all columns at the bottom, VSCode-style */}
       {terminalOpen && (
-        <div style={{
-          gridColumn: '1 / -1',
-          borderTop: '2px solid var(--accent)',
-          background: '#0a0a0a',
-          minHeight: 0, overflow: 'hidden',
-          display: 'flex', flexDirection: 'column',
-        }}>
-          <TerminalPanel
-            cwd={terminalCwd}
-            onClose={() => setTerminalOpen(false)}
-          />
+        <div style={{ gridColumn: '1 / -1', borderTop: '2px solid var(--accent)', minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <TerminalPanel cwd={terminalCwd} onClose={() => setTerminalOpen(false)} />
         </div>
       )}
     </div>

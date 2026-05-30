@@ -4,7 +4,6 @@ export type AgentRole    = 'frontend' | 'backend' | 'fullstack' | 'test' | 'revi
 export type MessageType  = 'user' | 'agent' | 'system' | 'stream'
 export type SessionType  = 'chat' | 'project' | 'terminal'
 
-// Strip markdown from titles at the store boundary
 function cleanTitleStr(raw: string): string {
   return raw
     .replace(/\*\*/g, '').replace(/\*/g, '').replace(/`/g, '')
@@ -26,6 +25,7 @@ export interface Session {
   id: string; type: SessionType; title: string; rootPath?: string
   agents: Agent[]; messages: Message[]; allFiles: string[]; writtenFiles: string[]
   summary?: string; lastAccessedAt: number; isActive: boolean
+  createdAt?: string; updatedAt?: string   // ISO strings from DB — used for menu metadata
 }
 export interface OllamaModel {
   name: string; sizeGb: string; isSelected: boolean; isFallback: boolean
@@ -36,13 +36,12 @@ interface AppState {
   screen: AppScreen; sessions: Session[]; activeSessionId: string | null
   models: OllamaModel[]; selectedModel: string; leftExpanded: boolean
   rightExpanded: boolean; isConnected: boolean; userName: string
+  openFiles:     Record<string, string[]>
+  activeFile:    Record<string, string | null>
 
-  openFiles:          Record<string, string[]>      // sessionId -> open files paths
-  activeFile:         Record<string, string | null> // sessionId -> active file path (null = chat)
   openFile:           (sessionId: string, filePath: string) => void
   closeFile:          (sessionId: string, filePath: string) => void
   setActiveFile:      (sessionId: string, filePath: string | null) => void
-
   getRecentTabs:      () => Session[]
   setScreen:          (s: AppScreen) => void
   loadSession:        (session: Session) => void
@@ -70,34 +69,20 @@ export const useAppStore = create<AppState>((set, get) => ({
   screen: 'welcome', sessions: [], activeSessionId: null,
   models: [], selectedModel: '', leftExpanded: true,
   rightExpanded: true, isConnected: false, userName: '',
-
   openFiles: {}, activeFile: {},
 
   openFile: (sessionId, filePath) => set(s => {
-    const sessionFiles = s.openFiles[sessionId] ?? []
-    const updated = sessionFiles.includes(filePath) ? sessionFiles : [...sessionFiles, filePath]
-    return {
-      openFiles: { ...s.openFiles, [sessionId]: updated },
-      activeFile: { ...s.activeFile, [sessionId]: filePath }
-    }
+    const cur     = s.openFiles[sessionId] ?? []
+    const updated = cur.includes(filePath) ? cur : [...cur, filePath]
+    return { openFiles: { ...s.openFiles, [sessionId]: updated }, activeFile: { ...s.activeFile, [sessionId]: filePath } }
   }),
-
   closeFile: (sessionId, filePath) => set(s => {
-    const sessionFiles = s.openFiles[sessionId] ?? []
-    const updated = sessionFiles.filter(f => f !== filePath)
-    let nextActive = s.activeFile[sessionId] ?? null
-    if (nextActive === filePath) {
-      nextActive = updated.length > 0 ? updated[updated.length - 1] : null
-    }
-    return {
-      openFiles: { ...s.openFiles, [sessionId]: updated },
-      activeFile: { ...s.activeFile, [sessionId]: nextActive }
-    }
+    const updated    = (s.openFiles[sessionId] ?? []).filter(f => f !== filePath)
+    let   nextActive = s.activeFile[sessionId] ?? null
+    if (nextActive === filePath) nextActive = updated.length > 0 ? updated[updated.length - 1] : null
+    return { openFiles: { ...s.openFiles, [sessionId]: updated }, activeFile: { ...s.activeFile, [sessionId]: nextActive } }
   }),
-
-  setActiveFile: (sessionId, filePath) => set(s => ({
-    activeFile: { ...s.activeFile, [sessionId]: filePath }
-  })),
+  setActiveFile: (sessionId, filePath) => set(s => ({ activeFile: { ...s.activeFile, [sessionId]: filePath } })),
 
   getRecentTabs: () => {
     const { sessions } = get()
@@ -114,7 +99,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (s.sessions.find(x => x.id === session.id)) return s
     return { sessions: [...s.sessions, { ...session, title: cleanTitleStr(session.title) }] }
   }),
-
   addSession: (session) => set(s => {
     if (s.sessions.find(x => x.id === session.id)) return s
     return { sessions: [...s.sessions, { ...session, title: cleanTitleStr(session.title) }], screen: 'session' }
@@ -128,17 +112,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     })),
   })),
 
-  // Always strip markdown when saving a title
   updateSessionTitle: (id, title) => set(s => ({
-    sessions: s.sessions.map(sess =>
-      sess.id === id ? { ...sess, title: cleanTitleStr(title) } : sess
-    )
+    sessions: s.sessions.map(sess => sess.id === id ? { ...sess, title: cleanTitleStr(title) } : sess)
   })),
 
-  closeSession: (id) => set(s => {
-    const remaining = s.sessions.filter(sess => sess.id !== id)
-    return { sessions: remaining, activeSessionId: null, screen: 'welcome' }
-  }),
+  closeSession: (id) => set(s => ({
+    sessions: s.sessions.filter(sess => sess.id !== id),
+    activeSessionId: null,
+    screen: 'welcome',
+  })),
 
   addMessage: (sessionId, msg) => set(s => ({
     sessions: s.sessions.map(sess => {
@@ -152,31 +134,24 @@ export const useAppStore = create<AppState>((set, get) => ({
     sessions: s.sessions.map(sess => {
       if (sess.id !== sessionId) return sess
       const exists = sess.messages.find(m => m.taskId === taskId && m.type === 'stream')
-      if (exists) {
-        return { ...sess, messages: sess.messages.map(m =>
-          m.taskId === taskId && m.type === 'stream' ? { ...m, content: m.content + chunk } : m
-        )}
-      }
-      return { ...sess, messages: [...sess.messages, {
-        id: `stream-${taskId}-${Date.now()}`, type: 'stream' as MessageType,
-        content: chunk, taskId, timestamp: Date.now()
-      }]}
+      if (exists) return { ...sess, messages: sess.messages.map(m => m.taskId === taskId && m.type === 'stream' ? { ...m, content: m.content + chunk } : m) }
+      return { ...sess, messages: [...sess.messages, { id: `stream-${taskId}-${Date.now()}`, type: 'stream' as MessageType, content: chunk, taskId, timestamp: Date.now() }] }
     })
   })),
 
   finalizeStream: (sessionId, taskId) => set(s => ({
     sessions: s.sessions.map(sess =>
-      sess.id === sessionId ? { ...sess, messages: sess.messages.map(m =>
-        m.taskId === taskId && m.type === 'stream' ? { ...m, type: 'agent' as MessageType } : m
-      )} : sess
+      sess.id === sessionId
+        ? { ...sess, messages: sess.messages.map(m => m.taskId === taskId && m.type === 'stream' ? { ...m, type: 'agent' as MessageType } : m) }
+        : sess
     )
   })),
 
-  addAgent:       (sessionId, agent)         => set(s => ({ sessions: s.sessions.map(sess => sess.id === sessionId ? { ...sess, agents: [...sess.agents, agent] } : sess) })),
-  updateAgent:    (sessionId, agentId, upd)  => set(s => ({ sessions: s.sessions.map(sess => sess.id === sessionId ? { ...sess, agents: sess.agents.map(a => a.id === agentId ? { ...a, ...upd } : a) } : sess) })),
-  addWrittenFile: (sessionId, filePath)      => set(s => ({ sessions: s.sessions.map(sess => sess.id === sessionId && !sess.writtenFiles.includes(filePath) ? { ...sess, writtenFiles: [...sess.writtenFiles, filePath] } : sess) })),
-  setAllFiles:    (sessionId, files)         => set(s => ({ sessions: s.sessions.map(sess => sess.id === sessionId ? { ...sess, allFiles: files } : sess) })),
-  setSessionSummary: (sessionId, summary)    => set(s => ({ sessions: s.sessions.map(sess => sess.id === sessionId ? { ...sess, summary } : sess) })),
+  addAgent:          (sessionId, agent)        => set(s => ({ sessions: s.sessions.map(sess => sess.id === sessionId ? { ...sess, agents: [...sess.agents, agent] } : sess) })),
+  updateAgent:       (sessionId, agentId, upd) => set(s => ({ sessions: s.sessions.map(sess => sess.id === sessionId ? { ...sess, agents: sess.agents.map(a => a.id === agentId ? { ...a, ...upd } : a) } : sess) })),
+  addWrittenFile:    (sessionId, filePath)     => set(s => ({ sessions: s.sessions.map(sess => sess.id === sessionId && !sess.writtenFiles.includes(filePath) ? { ...sess, writtenFiles: [...sess.writtenFiles, filePath] } : sess) })),
+  setAllFiles:       (sessionId, files)        => set(s => ({ sessions: s.sessions.map(sess => sess.id === sessionId ? { ...sess, allFiles: files } : sess) })),
+  setSessionSummary: (sessionId, summary)      => set(s => ({ sessions: s.sessions.map(sess => sess.id === sessionId ? { ...sess, summary } : sess) })),
 
   setModels:        (models)        => set({ models }),
   setSelectedModel: (selectedModel) => set({ selectedModel }),

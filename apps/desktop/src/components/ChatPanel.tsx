@@ -52,27 +52,38 @@ function MarkdownContent({ content }: { content: string }) {
   )
 }
 
-function MsgActions({ content, onEdit, onReload, isUser }: {
-  content: string; onEdit?: () => void; onReload?: () => void; isUser: boolean
+// Action bar — shown on hover via parent's onMouseEnter/Leave
+function MsgActions({ content, onEdit, onReload, isUser, visible }: {
+  content: string; onEdit?: () => void; onReload?: () => void; isUser: boolean; visible: boolean
 }) {
   const [copied, setCopied] = useState(false)
   function copy() {
-    navigator.clipboard.writeText(content).then(() => {
-      setCopied(true); setTimeout(() => setCopied(false), 1500)
-    })
+    navigator.clipboard.writeText(content).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
   }
   return (
-    <div className="msg-actions" style={{ display: 'flex', gap: 2, opacity: 0, transition: 'opacity 0.15s', alignItems: 'center' }}>
-      <button onClick={copy} title="Copy" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '3px 4px', borderRadius: 4, display: 'flex' }}>
-        {copied ? <Check size={12} /> : <Copy size={12} />}
+    <div style={{ display: 'flex', gap: 2, opacity: visible ? 1 : 0, transition: 'opacity 0.15s', alignItems: 'center', pointerEvents: visible ? 'auto' : 'none' }}>
+      <button onClick={copy} title="Copy"
+        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '3px 4px', borderRadius: 4, display: 'flex' }}
+        onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'}
+        onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'}
+      >
+        {copied ? <Check size={12} style={{ color: 'var(--green)' }} /> : <Copy size={12} />}
       </button>
       {isUser && onEdit && (
-        <button onClick={onEdit} title="Edit" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '3px 4px', borderRadius: 4, display: 'flex' }}>
+        <button onClick={onEdit} title="Edit message"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '3px 4px', borderRadius: 4, display: 'flex' }}
+          onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'}
+          onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'}
+        >
           <Pencil size={12} />
         </button>
       )}
       {!isUser && onReload && (
-        <button onClick={onReload} title="Regenerate" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '3px 4px', borderRadius: 4, display: 'flex' }}>
+        <button onClick={onReload} title="Regenerate"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '3px 4px', borderRadius: 4, display: 'flex' }}
+          onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'}
+          onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'}
+        >
           <RefreshCw size={12} />
         </button>
       )}
@@ -83,6 +94,9 @@ function MsgActions({ content, onEdit, onReload, isUser }: {
 function MessageBubble({ msg, onEdit, onReload }: {
   msg: Message; onEdit?: (c: string) => void; onReload?: () => void
 }) {
+  // Hover state managed in component, not CSS — avoids !important issues
+  const [hovered, setHovered] = useState(false)
+
   if (msg.type === 'system') return (
     <div className="msg-system"><span>●</span><span>{msg.content}</span></div>
   )
@@ -95,26 +109,29 @@ function MessageBubble({ msg, onEdit, onReload }: {
       </div>
     </div>
   )
+
   const isUser = msg.type === 'user'
   const time   = formatTime(msg.timestamp)
+
   if (isUser) return (
     <div
       style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, alignItems: 'flex-end' }}
-      onMouseEnter={e => { const el = e.currentTarget.querySelector('.msg-actions') as HTMLElement; if (el) el.style.opacity = '1' }}
-      onMouseLeave={e => { const el = e.currentTarget.querySelector('.msg-actions') as HTMLElement; if (el) el.style.opacity = '0' }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
-        <MsgActions content={msg.content} isUser onEdit={() => onEdit?.(msg.content)} />
+        <MsgActions content={msg.content} isUser visible={hovered} onEdit={() => onEdit?.(msg.content)} />
         <div className="msg-user">{msg.content}</div>
         <span style={{ fontSize: 10, color: 'var(--text-muted)', paddingRight: 2 }}>{time}</span>
       </div>
     </div>
   )
+
   return (
     <div
       style={{ display: 'flex', flexDirection: 'column', gap: 3 }}
-      onMouseEnter={e => { const el = e.currentTarget.querySelector('.msg-actions') as HTMLElement; if (el) el.style.opacity = '1' }}
-      onMouseLeave={e => { const el = e.currentTarget.querySelector('.msg-actions') as HTMLElement; if (el) el.style.opacity = '0' }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
       {msg.agentName && (
         <div className={`agent-badge ${roleBadgeClass(msg.agentRole)}`}
@@ -125,25 +142,18 @@ function MessageBubble({ msg, onEdit, onReload }: {
       <div className="msg-agent"><MarkdownContent content={msg.content} /></div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ fontSize: 10, color: 'var(--text-muted)', paddingLeft: 2 }}>{time}</span>
-        <MsgActions content={msg.content} isUser={false} onReload={onReload} />
+        <MsgActions content={msg.content} isUser={false} visible={hovered} onReload={onReload} />
       </div>
     </div>
   )
 }
 
-// Thinking bubble — shown while waiting for first token
-function ThinkingBubble({ mode }: { mode: 'thinking' | 'streaming' }) {
+function ThinkingBubble() {
   return (
     <div style={{ display: 'flex', alignItems: 'center' }}>
-      <div style={{
-        background: 'var(--bg-tertiary)', border: '1px solid var(--border)',
-        borderRadius: '3px 12px 12px 12px', padding: '10px 14px',
-        display: 'flex', alignItems: 'center', gap: 8,
-      }}>
+      <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: '3px 12px 12px 12px', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
         <Loader size={13} style={{ color: 'var(--accent)', animation: 'spin 1s linear infinite', flexShrink: 0 }} />
-        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-          {mode === 'thinking' ? 'Thinking…' : 'Generating…'}
-        </span>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Thinking…</span>
       </div>
     </div>
   )
@@ -158,8 +168,8 @@ export default function ChatPanel() {
   } = useAppStore()
 
   const [input, setInput]       = useState('')
-  const [sending, setSending]   = useState(false)   // true = waiting for first token (show ThinkingBubble)
-  const [streaming, setStreaming] = useState(false)  // true = tokens arriving (hide ThinkingBubble)
+  const [sending, setSending]   = useState(false)
+  const [streaming, setStreaming] = useState(false)
   const bottomRef   = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -167,12 +177,10 @@ export default function ChatPanel() {
   const messages   = session?.messages ?? []
   const isProject  = session?.type === 'project'
   const isChat     = session?.type === 'chat'
-  
   const currentActiveFile = session ? (activeFile[session.id] ?? null) : null
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages.length, messages[messages.length - 1]?.content])
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) },
+    [messages.length, messages[messages.length - 1]?.content])
 
   useEffect(() => {
     const ta = textareaRef.current
@@ -205,72 +213,34 @@ export default function ChatPanel() {
     addMessage(session.id, { id: msgId, type: 'user', content: text, timestamp: Date.now() })
     api.saveMessage(msgId, session.id, 'user', text).catch(() => {})
 
-    // Show ThinkingBubble immediately
     setSending(true)
     setStreaming(false)
 
     try {
-      if (isProject) {
-        // Project mode: use /chat/stream with project session context
-        // (agent instructions go through orchestrator but chat fallback is plain stream)
-        const history = messages
-          .filter(m => m.type === 'user' || m.type === 'agent')
-          .map(m => ({ role: m.type === 'user' ? 'user' : 'assistant', content: m.content }))
+      const history = messages
+        .filter(m => m.type === 'user' || m.type === 'agent')
+        .map(m => ({ role: m.type === 'user' ? 'user' : 'assistant', content: m.content }))
 
-        const streamTaskId = nanoid()
-        let firstChunk = true
+      const streamTaskId = nanoid()
+      let firstChunk = true
 
-        await api.streamChat(text, session.id, history, streamTaskId, (chunk) => {
-          if (firstChunk) {
-            // First token arrived — hide ThinkingBubble, show stream
-            setSending(false)
-            setStreaming(true)
-            firstChunk = false
-          }
-          appendStream(session.id, streamTaskId, chunk)
-        })
-        finalizeStream(session.id, streamTaskId)
-        setStreaming(false)
-
-      } else if (isChat) {
-        const history = messages
-          .filter(m => m.type === 'user' || m.type === 'agent')
-          .map(m => ({ role: m.type === 'user' ? 'user' : 'assistant', content: m.content }))
-
-        const streamTaskId = nanoid()
-        let firstChunk = true
-
-        await api.streamChat(text, session.id, history, streamTaskId, (chunk) => {
-          if (firstChunk) {
-            setSending(false)
-            setStreaming(true)
-            firstChunk = false
-          }
-          appendStream(session.id, streamTaskId, chunk)
-        })
-        finalizeStream(session.id, streamTaskId)
-        setStreaming(false)
-
-        if (isFirstMsg && session.title === 'New chat') {
-          generateTitle(session.id, text)
-        }
-      }
-    } catch (err: any) {
-      addMessage(session.id, {
-        id: nanoid(), type: 'system',
-        content: `Error: ${err.message}`,
-        timestamp: Date.now(),
+      await api.streamChat(text, session.id, history, streamTaskId, (chunk) => {
+        if (firstChunk) { setSending(false); setStreaming(true); firstChunk = false }
+        appendStream(session.id, streamTaskId, chunk)
       })
+      finalizeStream(session.id, streamTaskId)
+      setStreaming(false)
+
+      if (isChat && isFirstMsg && session.title === 'New chat') generateTitle(session.id, text)
+    } catch (err: any) {
+      addMessage(session.id, { id: nanoid(), type: 'system', content: `Error: ${err.message}`, timestamp: Date.now() })
     } finally {
       setSending(false)
       setStreaming(false)
     }
   }
 
-  function handleEdit(content: string) {
-    setInput(content)
-    textareaRef.current?.focus()
-  }
+  function handleEdit(content: string) { setInput(content); textareaRef.current?.focus() }
 
   async function handleReload() {
     if (!session || sending || streaming) return
@@ -286,8 +256,8 @@ export default function ChatPanel() {
   const isBusy         = sending || streaming
   const canSend        = !!input.trim() && !!session && !isBusy
   const modelShortName = selectedModel ? selectedModel.split(':')[0] : 'the AI'
-  const placeholder    = !session   ? 'Open a chat or project…'
-    : isChat           ? 'Ask anything…'
+  const placeholder    = !session ? 'Open a chat or project…'
+    : isChat    ? 'Ask anything…'
     : 'Ask anything about this project…'
 
   return (
@@ -295,93 +265,42 @@ export default function ChatPanel() {
 
       {/* Session title bar */}
       {session && (
-        <div style={{
-          flexShrink: 0, padding: '5px 12px',
-          borderBottom: '1px solid var(--border)',
-          background: 'var(--bg-secondary)',
-          display: 'flex', alignItems: 'center', gap: 8,
-        }}>
-          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {session.title}
-          </span>
-          <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, fontWeight: 600, background: 'var(--accent-dim)', color: 'var(--accent)', flexShrink: 0 }}>
-            {session.type}
-          </span>
+        <div style={{ flexShrink: 0, padding: '5px 12px', borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{session.title}</span>
+          <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, fontWeight: 600, background: 'var(--accent-dim)', color: 'var(--accent)', flexShrink: 0 }}>{session.type}</span>
         </div>
       )}
 
-      {/* Project Open File Tabs */}
+      {/* File tabs for project sessions */}
       {session && isProject && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 6,
-          padding: '4px 8px', background: 'var(--bg-secondary)',
-          borderBottom: '1px solid var(--border)', flexShrink: 0,
-          overflowX: 'auto', scrollbarWidth: 'none',
-          whiteSpace: 'nowrap'
-        }}>
-          {/* Leftmost Chat Tab */}
-          <div
-            onClick={() => setActiveFile(session.id, null)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '4px 10px', borderRadius: 4,
-              background: !currentActiveFile ? 'var(--bg-primary)' : 'transparent',
-              border: `1px solid ${!currentActiveFile ? 'var(--border)' : 'transparent'}`,
-              color: !currentActiveFile ? 'var(--accent)' : 'var(--text-secondary)',
-              cursor: 'pointer', fontSize: 11, fontWeight: 500, userSelect: 'none',
-              transition: 'all 0.15s'
-            }}
-          >
-            <Bot size={12} />
-            <span>Project Chat</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 8px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)', flexShrink: 0, overflowX: 'auto', scrollbarWidth: 'none' }}>
+          <div onClick={() => setActiveFile(session.id, null)}
+            style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 4, background: !currentActiveFile ? 'var(--bg-primary)' : 'transparent', border: `1px solid ${!currentActiveFile ? 'var(--border)' : 'transparent'}`, color: !currentActiveFile ? 'var(--accent)' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 11, fontWeight: 500, userSelect: 'none', flexShrink: 0 }}>
+            <Bot size={11} /><span>Chat</span>
           </div>
-
-          {/* File Tabs */}
           {(openFiles[session.id] ?? []).map(file => {
             const isActive = currentActiveFile === file
             const name = file.replace(/\\/g, '/').split('/').pop() ?? 'file'
             return (
-              <div
-                key={file}
-                onClick={() => setActiveFile(session.id, file)}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 6,
-                  padding: '4px 8px 4px 10px', borderRadius: 4,
-                  background: isActive ? 'var(--bg-primary)' : 'transparent',
-                  border: `1px solid ${isActive ? 'var(--border)' : 'transparent'}`,
-                  color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
-                  cursor: 'pointer', fontSize: 11, userSelect: 'none',
-                  transition: 'all 0.15s', flexShrink: 0
-                }}
-              >
+              <div key={file} onClick={() => setActiveFile(session.id, file)}
+                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 8px 3px 10px', borderRadius: 4, background: isActive ? 'var(--bg-primary)' : 'transparent', border: `1px solid ${isActive ? 'var(--border)' : 'transparent'}`, color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 11, userSelect: 'none', flexShrink: 0 }}>
                 <span>{name}</span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    closeFile(session.id, file)
-                  }}
-                  style={{
-                    background: 'none', border: 'none', cursor: 'pointer',
-                    color: 'var(--text-muted)', display: 'flex', padding: 1,
-                    borderRadius: 3, opacity: 0.7
-                  }}
-                  onMouseEnter={e => e.currentTarget.style.color = 'var(--text-primary)'}
-                  onMouseLeave={e => e.currentTarget.style.color = 'var(--text-muted)'}
-                >
-                  <X size={10} />
-                </button>
+                <button onClick={e => { e.stopPropagation(); closeFile(session.id, file) }}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', padding: 1, borderRadius: 3 }}
+                  onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'}
+                  onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'}
+                ><X size={10} /></button>
               </div>
             )
           })}
         </div>
       )}
 
-      {/* Main Workspace Area: Conditionally render Editor or Chat */}
+      {/* Main content: file editor or chat */}
       {currentActiveFile ? (
         <FileEditorPanel filePath={currentActiveFile} />
       ) : (
         <>
-          {/* Messages */}
           <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
             {messages.length === 0 && !isBusy && (
               <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--text-muted)' }}>
@@ -390,70 +309,35 @@ export default function ChatPanel() {
                   {isChat ? 'Ask me anything' : 'Project assistant'}
                 </div>
                 <div style={{ fontSize: 12 }}>
-                  {isChat
-                    ? 'I can explain concepts, review code, or answer questions'
-                    : 'Ask about the codebase, request changes, or instruct agents'}
+                  {isChat ? 'I can explain concepts, review code, or answer questions' : 'Ask about the codebase, request changes, or instruct agents'}
                 </div>
               </div>
             )}
 
             {messages.map((msg, i) => (
-              <MessageBubble
-                key={msg.id}
-                msg={msg}
+              <MessageBubble key={msg.id} msg={msg}
                 onEdit={handleEdit}
                 onReload={i === messages.length - 1 && msg.type === 'agent' ? handleReload : undefined}
               />
             ))}
 
-            {/* ThinkingBubble: shown while waiting for first token */}
-            {sending && !streaming && <ThinkingBubble mode="thinking" />}
-
+            {sending && !streaming && <ThinkingBubble />}
             <div ref={bottomRef} />
           </div>
 
-          {/* Input */}
           <div style={{ flexShrink: 0, padding: '10px 16px 14px', background: 'var(--bg-primary)' }}>
             <div style={{ maxWidth: 680, margin: '0 auto' }}>
-              <div style={{
-                display: 'flex', alignItems: 'flex-end', gap: 6,
-                background: 'var(--bg-tertiary)', border: `1px solid ${isBusy ? 'var(--accent)' : 'var(--border)'}`,
-                borderRadius: 12, padding: '6px 8px 6px 12px',
-                transition: 'border-color 0.2s',
-              }}>
-                <button className="icon-btn" title="Attach file" style={{ width: 28, height: 28, flexShrink: 0, marginBottom: 1 }}>
-                  <Paperclip size={14} />
-                </button>
-                <textarea
-                  ref={textareaRef}
-                  value={input}
-                  onChange={e => setInput(e.target.value)}
-                  onKeyDown={onKeyDown}
-                  placeholder={placeholder}
-                  disabled={!session || isBusy}
-                  rows={1}
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, background: 'var(--bg-tertiary)', border: `1px solid ${isBusy ? 'var(--accent)' : 'var(--border)'}`, borderRadius: 12, padding: '6px 8px 6px 12px', transition: 'border-color 0.2s' }}>
+                <button className="icon-btn" title="Attach file" style={{ width: 28, height: 28, flexShrink: 0, marginBottom: 1 }}><Paperclip size={14} /></button>
+                <textarea ref={textareaRef} value={input} onChange={e => setInput(e.target.value)}
+                  onKeyDown={onKeyDown} placeholder={placeholder} disabled={!session || isBusy} rows={1}
                   style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', resize: 'none', color: 'var(--text-primary)', fontSize: 13, lineHeight: 1.6, fontFamily: 'inherit', padding: '2px 0', maxHeight: 140, overflowY: 'auto' }}
                 />
                 <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0, marginBottom: 1 }}>
-                  <button className="icon-btn" title="Voice" style={{ width: 28, height: 28 }}>
-                    <Mic size={14} />
-                  </button>
-                  <button
-                    onClick={() => send()}
-                    disabled={!canSend}
-                    style={{
-                      width: 30, height: 30, borderRadius: 8, border: 'none',
-                      background: canSend ? 'var(--accent)' : 'var(--bg-hover)',
-                      color: canSend ? 'white' : 'var(--text-muted)',
-                      cursor: canSend ? 'pointer' : 'not-allowed',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      transition: 'background 0.15s', flexShrink: 0,
-                    }}
-                  >
-                    {isBusy
-                      ? <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} />
-                      : <Send size={13} />
-                    }
+                  <button className="icon-btn" title="Voice" style={{ width: 28, height: 28 }}><Mic size={14} /></button>
+                  <button onClick={() => send()} disabled={!canSend}
+                    style={{ width: 30, height: 30, borderRadius: 8, border: 'none', background: canSend ? 'var(--accent)' : 'var(--bg-hover)', color: canSend ? 'white' : 'var(--text-muted)', cursor: canSend ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.15s', flexShrink: 0 }}>
+                    {isBusy ? <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={13} />}
                   </button>
                 </div>
               </div>
@@ -466,9 +350,8 @@ export default function ChatPanel() {
       )}
 
       <style>{`
-        @keyframes spin  { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }
-        @keyframes blink { 0%,100% { opacity:1 } 50% { opacity:0 } }
-        .msg-actions { opacity: 0 !important; transition: opacity 0.15s; }
+        @keyframes spin  { from { transform: rotate(0deg)  } to { transform: rotate(360deg) } }
+        @keyframes blink { 0%,100% { opacity: 1 } 50% { opacity: 0 } }
       `}</style>
     </div>
   )
