@@ -24,10 +24,7 @@ export async function streamChatRequest(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message, sessionId, history }),
   })
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`Stream failed (${res.status}): ${err}`)
-  }
+  if (!res.ok) throw new Error(`Stream failed (${res.status}): ${await res.text()}`)
 
   const reader  = res.body?.getReader()
   const decoder = new TextDecoder()
@@ -49,9 +46,11 @@ export async function streamChatRequest(
 }
 
 export const api = {
-  getModels:   () => req<{ models: any[] }>('GET', '/models'),
-  selectModel: (model: string) => req<any>('POST', '/models/select', { model }),
-  getSystem:   () => req<any>('GET', '/system'),
+  getModels:       () => req<{ models: any[] }>('GET', '/models'),
+  getModelStats:   () => req<any>('GET', '/models/stats'),
+  selectModel:     (model: string) => req<any>('POST', '/models/select', { model }),
+  setFallbacks:    (models: string[]) => req<any>('POST', '/models/fallback', { models }),
+  getSystem:       () => req<any>('GET', '/system'),
 
   getSessions:   () => req<{ sessions: any[] }>('GET', '/sessions'),
   getSession:    (id: string) => req<{ session: any; messages: any[] }>('GET', `/sessions/${id}`),
@@ -67,10 +66,9 @@ export const api = {
     ),
   getProjectSummary: (sessionId: string) =>
     req<{ summary: string | null }>('GET', `/project/${sessionId}/summary`),
-
-  readFile:  (filePath: string) =>
+  readFile:          (filePath: string) =>
     req<{ content: string }>('GET', `/project/file?path=${encodeURIComponent(filePath)}`),
-  writeFile: (filePath: string, content: string) =>
+  writeFile:         (filePath: string, content: string) =>
     req<{ success: boolean }>('POST', '/project/file', { path: filePath, content }),
 
   sendChat: (message: string, sessionId: string, history: any[] = []) =>
@@ -86,8 +84,8 @@ export const api = {
 
   createProject: (name: string, rootPath: string) =>
     req<any>('POST', '/projects', { name, rootPath }),
-  createAgent: (projectId: string, name: string, role: string, allowedPaths: string[] = []) =>
+  createAgent:   (projectId: string, name: string, role: string, allowedPaths: string[] = []) =>
     req<any>('POST', `/projects/${projectId}/agents`, { name, role, allowedPaths }),
-  instruct: (projectId: string, agentId: string, instruction: string) =>
+  instruct:      (projectId: string, agentId: string, instruction: string) =>
     req<any>('POST', `/projects/${projectId}/agents/${agentId}/instruct`, { instruction, queue: true }),
 }

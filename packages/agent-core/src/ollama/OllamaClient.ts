@@ -1,5 +1,3 @@
-import https from 'http'
-
 const OLLAMA_BASE = process.env.OLLAMA_HOST ?? 'http://localhost:11434'
 
 export interface ChatMessage {
@@ -11,11 +9,12 @@ export interface OllamaModel {
   name: string
   size: number
   modified_at: string
+  details?: { parameter_size?: string; quantization_level?: string; family?: string }
 }
 
 export interface StreamChunk {
   content: string
-  done: boolean
+  done:    boolean
 }
 
 export async function listModels(): Promise<OllamaModel[]> {
@@ -35,57 +34,68 @@ export async function chat(
   messages: ChatMessage[],
   onChunk?: (chunk: StreamChunk) => void
 ): Promise<string> {
-  const body = JSON.stringify({
-    model,
-    messages,
-    stream: !!onChunk
-  })
+  // Lazy import metrics to avoid circular deps
+  const { recordSuccess, recordError } = await import('./ModelMetrics.js')
+
+  const body = JSON.stringify({ model, messages, stream: !!onChunk })
+  const start = Date.now()
 
   const res = await fetch(`${OLLAMA_BASE}/v1/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body
+    body,
   })
 
   if (!res.ok) {
     const err = await res.text()
+    recordError(model, `HTTP ${res.status}: ${err}`)
     throw new Error(`Ollama chat failed (${res.status}): ${err}`)
   }
 
   if (!onChunk) {
     const data = await res.json() as {
       choices: Array<{ message: { content: string } }>
+      usage?:  { completion_tokens?: number }
     }
-    return data.choices[0]?.message?.content ?? ''
+    const content = data.choices[0]?.message?.content ?? ''
+    const tokens  = data.usage?.completion_tokens ?? Math.round(content.length / 4)
+    recordSuccess(model, tokens, Date.now() - start)
+    return content
   }
 
-  // Streaming path
+  // Streaming path — accumulate and record at end
   const reader = res.body?.getReader()
   if (!reader) throw new Error('No response body for streaming')
 
   const decoder = new TextDecoder()
   let fullContent = ''
+  let tokenCount  = 0
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-
-    const lines = decoder.decode(value).split('\n').filter(l => l.startsWith('data: '))
-    for (const line of lines) {
-      const json = line.slice(6).trim()
-      if (json === '[DONE]') continue
-      try {
-        const chunk = JSON.parse(json) as {
-          choices: Array<{ delta: { content?: string }; finish_reason?: string }>
-        }
-        const content = chunk.choices[0]?.delta?.content ?? ''
-        const isDone  = chunk.choices[0]?.finish_reason === 'stop'
-        fullContent += content
-        onChunk({ content, done: isDone })
-      } catch {
-        // Incomplete chunk, skip
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      const lines = decoder.decode(value).split('\n').filter(l => l.startsWith('data: '))
+      for (const line of lines) {
+        const json = line.slice(6).trim()
+        if (json === '[DONE]') continue
+        try {
+          const chunk = JSON.parse(json) as {
+            choices: Array<{ delta: { content?: string }; finish_reason?: string }>
+          }
+          const content = chunk.choices[0]?.delta?.content ?? ''
+          const isDone  = chunk.choices[0]?.finish_reason === 'stop'
+          fullContent  += content
+          tokenCount   += content.length > 0 ? 1 : 0
+          onChunk({ content, done: isDone })
+        } catch { }
       }
     }
+    const tokens = Math.max(tokenCount, Math.round(fullContent.length / 4))
+    recordSuccess(model, tokens, Date.now() - start)
+  } catch (err: any) {
+    recordError(model, err.message ?? 'Stream error')
+    throw err
   }
 
   return fullContent
@@ -98,20 +108,17 @@ export async function chatWithFallback(
   onChunk?: (chunk: StreamChunk) => void
 ): Promise<{ content: string; modelUsed: string }> {
   const chain = [preferredModel, ...fallbackModels]
-
   for (const model of chain) {
-    const available = await isModelAvailable(model)
-    if (!available) {
-      console.warn(`[OllamaClient] Model ${model} not available, trying next`)
+    if (!await isModelAvailable(model)) {
+      console.warn(`[OllamaClient] ${model} not available, trying next`)
       continue
     }
     try {
       const content = await chat(model, messages, onChunk)
       return { content, modelUsed: model }
     } catch (err) {
-      console.error(`[OllamaClient] Model ${model} failed:`, err)
+      console.error(`[OllamaClient] ${model} failed:`, err)
     }
   }
-
   throw new Error(`All models failed: ${chain.join(', ')}`)
 }

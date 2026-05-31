@@ -12,7 +12,7 @@ import { profileSystem } from './orchestrator/SystemProfiler.js'
 import { TaskQueue } from './orchestrator/TaskQueue.js'
 import { orchestrator } from './orchestrator/Orchestrator.js'
 import { chat } from './ollama/OllamaClient.js'
-import { getInstalledModels, selectModel, setFallbackModels, loadConfig, saveConfig } from './ollama/ModelManager.js'
+import { getInstalledModels, getModelStats, selectModel, setFallbackModels, loadConfig, saveConfig } from './ollama/ModelManager.js'
 import { scanProjectFiles, generateProjectSummary } from './mcp/ProjectScanner.js'
 import { connectMCP } from './mcp/MCPClient.js'
 
@@ -61,16 +61,14 @@ function mapHistory(h: Array<{ role: string; content: string }>) {
 }
 
 async function bootstrap() {
-  // @fastify/cors handles OPTIONS preflight automatically — do NOT add a manual options route
   await server.register(cors, {
-    origin: (origin, cb) => cb(null, true),  // allow all origins
+    origin: (origin, cb) => cb(null, true),
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
     credentials: true,
-    preflight: true,  // let the plugin handle OPTIONS
+    preflight: true,
     strictPreflight: false,
   })
-
   await server.register(websocket)
 
   const profile     = await profileSystem()
@@ -83,14 +81,14 @@ async function bootstrap() {
   initSessionTables()
   orchestrator.onEvent((projectId, event) => broadcast({ type: 'agent_event', projectId, event }))
 
-  // ── Agent events WebSocket ─────────────────────────────────────────────────
+  // ── WebSocket: agent events ────────────────────────────────────────────────
   server.get('/ws', { websocket: true }, (socket) => {
     wsClients.add(socket)
     socket.send(JSON.stringify({ type: 'connected' }))
     socket.on('close', () => wsClients.delete(socket))
   })
 
-  // ── PTY Terminal WebSocket ─────────────────────────────────────────────────
+  // ── WebSocket: PTY terminal ────────────────────────────────────────────────
   server.get<{ Querystring: { cwd?: string } }>('/terminal', { websocket: true }, (socket, req) => {
     const rawCwd = req.query.cwd ?? os.homedir()
     const cwd    = fs.existsSync(rawCwd) ? rawCwd : os.homedir()
@@ -141,7 +139,13 @@ async function bootstrap() {
   })
 
   // ── Models ─────────────────────────────────────────────────────────────────
-  server.get('/models', async () => { try { return { models: await getInstalledModels() } } catch { return { error: 'Ollama not reachable' } } })
+  server.get('/models', async () => {
+    try { return { models: await getInstalledModels() } } catch { return { error: 'Ollama not reachable', models: [] } }
+  })
+  // Full stats for Model Advisor panel
+  server.get('/models/stats', async () => {
+    try { return await getModelStats() } catch (e: any) { return { error: e.message } }
+  })
   server.get('/models/config', async () => loadConfig())
   server.post<{ Body: { model: string } }>('/models/select', async (req) => {
     if (!req.body.model) return { success: false }
@@ -193,7 +197,7 @@ async function bootstrap() {
     try { fs.writeFileSync(p, content ?? '', 'utf8'); return { success: true } } catch (e: any) { reply.status(500).send({ error: e.message }) }
   })
 
-  // ── Chat streaming — SSE ───────────────────────────────────────────────────
+  // ── Chat streaming ─────────────────────────────────────────────────────────
   server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>(
     '/chat/stream',
     async (req, reply) => {
@@ -201,7 +205,6 @@ async function bootstrap() {
       if (!message) { reply.status(400).send('No message'); return }
 
       reply.raw.setTimeout(0)
-      // Set CORS header directly — @fastify/cors does not inject headers into raw streams
       reply.raw.setHeader('Access-Control-Allow-Origin', '*')
       reply.raw.setHeader('Content-Type',      'text/event-stream')
       reply.raw.setHeader('Cache-Control',     'no-cache')
@@ -209,9 +212,7 @@ async function bootstrap() {
       reply.raw.setHeader('X-Accel-Buffering', 'no')
       reply.raw.flushHeaders()
 
-      const send = (data: object) => {
-        try { reply.raw.write(`data: ${JSON.stringify(data)}\n\n`) } catch { }
-      }
+      const send = (data: object) => { try { reply.raw.write(`data: ${JSON.stringify(data)}\n\n`) } catch { } }
 
       try {
         const { selectedModel } = loadConfig()
@@ -233,14 +234,13 @@ async function bootstrap() {
         reply.raw.write('data: [DONE]\n\n')
         reply.raw.end()
         try { saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: fullReply }) } catch { }
-
       } catch (err: any) {
         try { send({ chunk: `\n\nError: ${err.message}` }); reply.raw.write('data: [DONE]\n\n'); reply.raw.end() } catch { }
       }
     }
   )
 
-  // ── Chat non-streaming (title gen only) ───────────────────────────────────
+  // ── Chat non-streaming ────────────────────────────────────────────────────
   server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>('/chat', async (req) => {
     const { message, sessionId, history = [] } = req.body
     if (!message) return { success: false, reply: 'No message' }
