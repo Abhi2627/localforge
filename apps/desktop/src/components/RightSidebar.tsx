@@ -1,14 +1,15 @@
 import { useState, useMemo, useEffect, useCallback } from 'react'
-import { ChevronRight, ChevronDown, Bot, GitBranch, LayoutDashboard, Plus, Loader, File, Folder, FolderOpen, Search, LucideIcon, Network, AlertTriangle, RefreshCw, CheckCircle, XCircle, AlertCircle } from 'lucide-react'
+import { ChevronRight, ChevronDown, Bot, GitBranch, LayoutDashboard, Plus, Loader, File, Folder, FolderOpen, Search, LucideIcon, Network, AlertTriangle, RefreshCw, CheckCircle, XCircle, AlertCircle, GitMerge } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import AgentModal from './AgentModal'
 import ProjectGraph from './ProjectGraph'
+import GitPanel from './GitPanel'
 
 interface RightSidebarProps {
   onOpenTerminal: (cwd: string) => void
 }
 
-// ── File tree (unchanged) ─────────────────────────────────────────────────────
+// ── File tree ─────────────────────────────────────────────────────────────────
 
 interface TreeNode { name: string; path: string; isDir: boolean; children: TreeNode[]; isNew: boolean }
 
@@ -94,7 +95,7 @@ function AgentRow({ agentId, sessionId }: { agentId: string; sessionId: string }
   )
 }
 
-// ── Knowledge Graph panel (symbols) ──────────────────────────────────────────
+// ── Knowledge Graph panel ─────────────────────────────────────────────────────
 
 type SymbolKind = 'function'|'class'|'interface'|'type'|'enum'|'constant'|'component'|'route'
 interface SymbolNode { name: string; kind: SymbolKind; line: number; exported: boolean; file: string }
@@ -127,12 +128,6 @@ function SymbolsPanel({ sessionId }: { sessionId: string }) {
 
   useEffect(() => { load() }, [load])
 
-  async function rescan() {
-    setLoading(true)
-    try { await fetch(`http://localhost:3001/project/${sessionId}/symbols/rescan`, { method:'POST' }); await load() }
-    catch { setLoading(false) }
-  }
-
   const filtered = symbols.filter(s => (kindFilter==='all' || s.kind===kindFilter) && (!search || s.name.toLowerCase().includes(search.toLowerCase())))
   const kinds    = summary ? Object.keys(summary.byKind).filter(k => summary.byKind[k] > 0) : []
 
@@ -142,10 +137,7 @@ function SymbolsPanel({ sessionId }: { sessionId: string }) {
         <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',borderBottom:'1px solid var(--border)',flexShrink:0}}>
           <span style={{fontSize:11,color:'var(--text-primary)',fontWeight:500}}>{summary.totalSymbols} symbols</span>
           {summary.conflicts.length>0&&<span style={{display:'flex',alignItems:'center',gap:3,fontSize:10,color:'#f59e0b'}}><AlertTriangle size={10}/>{summary.conflicts.length} conflict{summary.conflicts.length>1?'s':''}</span>}
-          <button onClick={rescan} style={{marginLeft:'auto',background:'none',border:'none',cursor:'pointer',color:'var(--text-muted)',display:'flex',padding:2}}
-            onMouseEnter={e=>(e.currentTarget as HTMLElement).style.color='var(--text-primary)'}
-            onMouseLeave={e=>(e.currentTarget as HTMLElement).style.color='var(--text-muted)'}
-          ><RefreshCw size={11} style={{animation:loading?'spin 1s linear infinite':'none'}}/></button>
+          <button onClick={load} style={{marginLeft:'auto',background:'none',border:'none',cursor:'pointer',color:'var(--text-muted)',display:'flex',padding:2}}><RefreshCw size={11} style={{animation:loading?'spin 1s linear infinite':'none'}}/></button>
         </div>
       )}
       <div style={{display:'flex',borderBottom:'1px solid var(--border)',flexShrink:0}}>
@@ -184,13 +176,13 @@ function SymbolsPanel({ sessionId }: { sessionId: string }) {
                 </div>
               )
             })}
-            {filtered.length>200&&<div style={{padding:'4px 10px',fontSize:10,color:'var(--text-muted)'}}>Showing 200 of {filtered.length} — refine search</div>}
+            {filtered.length>200&&<div style={{padding:'4px 10px',fontSize:10,color:'var(--text-muted)'}}>Showing 200 of {filtered.length}</div>}
           </div>
         </>
       ):(
         <div style={{flex:1,overflowY:'auto'}}>
           {!summary||summary.conflicts.length===0
-            ?<div style={{padding:'12px',fontSize:11,color:'var(--green)',display:'flex',alignItems:'center',gap:6}}>✓ No conflicts</div>
+            ?<div style={{padding:'12px',fontSize:11,color:'var(--green)'}}>✓ No conflicts</div>
             :summary.conflicts.map((c,i)=>(
               <div key={i} style={{padding:'8px 10px',borderBottom:'1px solid var(--border)'}}>
                 <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:4}}>
@@ -210,14 +202,13 @@ function SymbolsPanel({ sessionId }: { sessionId: string }) {
   )
 }
 
-// ── API Contract Enforcer panel ───────────────────────────────────────────────
+// ── API Contracts panel ───────────────────────────────────────────────────────
 
 interface ApiCall    { method:string; path:string; file:string; line:number }
 interface ApiRoute   { method:string; path:string; file:string; line:number }
 interface Violation  { kind:'missing_route'|'method_mismatch'; call:ApiCall; similar:ApiRoute[] }
 interface ContractSummary { totalCalls:number; totalRoutes:number; matched:number; violations:number; orphans:number; health:'good'|'warn'|'bad' }
 interface ContractReport  { calls:ApiCall[]; routes:ApiRoute[]; violations:Violation[]; orphans:{route:ApiRoute}[]; summary:ContractSummary }
-
 const METHOD_COLOR: Record<string,string> = { GET:'#3dd68c',POST:'#3b82f6',PUT:'#f59e0b',DELETE:'#ef4444',PATCH:'#a78bfa',ANY:'#94a3b8' }
 
 function ContractsPanel({ sessionId }: { sessionId: string }) {
@@ -227,44 +218,25 @@ function ContractsPanel({ sessionId }: { sessionId: string }) {
 
   const load = useCallback(async () => {
     setLoading(true)
-    try {
-      const res = await fetch(`http://localhost:3001/project/${sessionId}/contracts`)
-      setReport(await res.json())
-    } catch { }
+    try { const res = await fetch(`http://localhost:3001/project/${sessionId}/contracts`); setReport(await res.json()) } catch { }
     setLoading(false)
   }, [sessionId])
 
-  async function rescan() {
-    setLoading(true)
-    try { await fetch(`http://localhost:3001/project/${sessionId}/contracts/rescan`, { method:'POST' }); await load() }
-    catch { setLoading(false) }
-  }
-
   useEffect(() => { load() }, [load])
 
-  const health     = report?.summary?.health
-  const healthIcon = health==='good' ? <CheckCircle size={11} style={{color:'var(--green)'}}/>
-    : health==='warn' ? <AlertCircle size={11} style={{color:'#f59e0b'}}/>
-    : <XCircle size={11} style={{color:'var(--red)'}}/>
+  const health = report?.summary?.health
+  const healthIcon = health==='good'?<CheckCircle size={11} style={{color:'var(--green)'}}/>:health==='warn'?<AlertCircle size={11} style={{color:'#f59e0b'}}/>:<XCircle size={11} style={{color:'var(--red)'}}/>
 
   return (
     <div style={{display:'flex',flexDirection:'column',flex:1,overflow:'hidden',minHeight:0}}>
-      {/* Summary bar */}
       {report?.summary&&(
         <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',borderBottom:'1px solid var(--border)',flexShrink:0,flexWrap:'wrap'}}>
           {healthIcon}
-          <span style={{fontSize:11,color:'var(--text-primary)',fontWeight:500}}>
-            {report.summary.violations===0?'No violations':`${report.summary.violations} violation${report.summary.violations>1?'s':''}`}
-          </span>
+          <span style={{fontSize:11,color:'var(--text-primary)',fontWeight:500}}>{report.summary.violations===0?'No violations':`${report.summary.violations} violation${report.summary.violations>1?'s':''}`}</span>
           <span style={{fontSize:10,color:'var(--text-muted)'}}>{report.summary.totalCalls} calls · {report.summary.totalRoutes} routes</span>
-          <button onClick={rescan} style={{marginLeft:'auto',background:'none',border:'none',cursor:'pointer',color:'var(--text-muted)',display:'flex',padding:2}}
-            onMouseEnter={e=>(e.currentTarget as HTMLElement).style.color='var(--text-primary)'}
-            onMouseLeave={e=>(e.currentTarget as HTMLElement).style.color='var(--text-muted)'}
-          ><RefreshCw size={11} style={{animation:loading?'spin 1s linear infinite':'none'}}/></button>
+          <button onClick={load} style={{marginLeft:'auto',background:'none',border:'none',cursor:'pointer',color:'var(--text-muted)',display:'flex',padding:2}}><RefreshCw size={11} style={{animation:loading?'spin 1s linear infinite':'none'}}/></button>
         </div>
       )}
-
-      {/* Tabs */}
       <div style={{display:'flex',borderBottom:'1px solid var(--border)',flexShrink:0}}>
         {(['violations','routes','calls'] as const).map(t=>(
           <button key={t} onClick={()=>setTab(t)} style={{padding:'4px 10px',border:'none',background:'transparent',cursor:'pointer',fontSize:10,fontWeight:tab===t?600:400,color:tab===t?'var(--accent)':'var(--text-muted)',borderBottom:tab===t?'2px solid var(--accent)':'2px solid transparent',textTransform:'capitalize'}}>
@@ -272,57 +244,42 @@ function ContractsPanel({ sessionId }: { sessionId: string }) {
           </button>
         ))}
       </div>
-
-      {/* Content */}
       <div style={{flex:1,overflowY:'auto'}}>
-        {loading&&!report?<div style={{padding:'12px',fontSize:11,color:'var(--text-muted)',display:'flex',alignItems:'center',gap:6}}><Loader size={11} style={{animation:'spin 1s linear infinite'}}/>Scanning contracts…</div>
+        {loading&&!report?<div style={{padding:'12px',fontSize:11,color:'var(--text-muted)',display:'flex',alignItems:'center',gap:6}}><Loader size={11} style={{animation:'spin 1s linear infinite'}}/>Scanning…</div>
         :tab==='violations'?(
           !report||report.violations.length===0
-            ?<div style={{padding:'12px',fontSize:11,color:'var(--green)',display:'flex',alignItems:'center',gap:6}}><CheckCircle size={13}/>All frontend calls have matching backend routes</div>
-            :report.violations.map((v,i)=>{
-              const isMissing = v.kind==='missing_route'
-              return (
-                <div key={i} style={{padding:'8px 10px',borderBottom:'1px solid var(--border)'}}>
-                  <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:3}}>
-                    <span style={{fontSize:9,fontWeight:700,padding:'1px 5px',borderRadius:4,background:`${METHOD_COLOR[v.call.method]??'#888'}22`,color:METHOD_COLOR[v.call.method]??'#888',flexShrink:0}}>{v.call.method}</span>
-                    <span style={{fontSize:11,fontWeight:500,color:'var(--text-primary)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1,fontFamily:'monospace'}}>{v.call.path}</span>
-                    <span style={{fontSize:9,color:isMissing?'var(--red)':'#f59e0b',flexShrink:0,fontWeight:600}}>{isMissing?'MISSING':'WRONG METHOD'}</span>
-                  </div>
-                  <div style={{fontSize:10,color:'var(--text-muted)',paddingLeft:4}}>
-                    Called in: <span style={{fontFamily:'monospace',color:'var(--text-secondary)'}}>{v.call.file.split('/').slice(-2).join('/')}:{v.call.line}</span>
-                  </div>
-                  {v.similar.length>0&&(
-                    <div style={{fontSize:10,color:'var(--text-muted)',paddingLeft:4,marginTop:2}}>
-                      Route exists as: {v.similar.map(r=>`${r.method} ${r.path.split('/').slice(-2).join('/')}`).join(', ')}
-                    </div>
-                  )}
+            ?<div style={{padding:'12px',fontSize:11,color:'var(--green)',display:'flex',alignItems:'center',gap:6}}><CheckCircle size={13}/>All calls matched</div>
+            :report.violations.map((v,i)=>(
+              <div key={i} style={{padding:'8px 10px',borderBottom:'1px solid var(--border)'}}>
+                <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:3}}>
+                  <span style={{fontSize:9,fontWeight:700,padding:'1px 5px',borderRadius:4,background:`${METHOD_COLOR[v.call.method]??'#888'}22`,color:METHOD_COLOR[v.call.method]??'#888',flexShrink:0}}>{v.call.method}</span>
+                  <span style={{fontSize:11,fontWeight:500,color:'var(--text-primary)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1,fontFamily:'monospace'}}>{v.call.path}</span>
+                  <span style={{fontSize:9,color:v.kind==='missing_route'?'var(--red)':'#f59e0b',flexShrink:0,fontWeight:600}}>{v.kind==='missing_route'?'MISSING':'METHOD'}</span>
                 </div>
-              )
-            })
+                <div style={{fontSize:10,color:'var(--text-muted)',paddingLeft:4}}>{v.call.file.split('/').slice(-2).join('/')}:{v.call.line}</div>
+                {v.similar.length>0&&<div style={{fontSize:10,color:'var(--text-muted)',paddingLeft:4,marginTop:2}}>Exists as: {v.similar.map(r=>r.method).join(', ')}</div>}
+              </div>
+            ))
         ):tab==='routes'?(
-          !report||report.routes.length===0
-            ?<div style={{padding:'8px 12px',fontSize:11,color:'var(--text-muted)'}}>No backend routes found</div>
-            :report.routes.map((r,i)=>(
-              <div key={i} style={{display:'flex',alignItems:'center',gap:6,padding:'4px 10px'}}
-                onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background='var(--bg-hover)'}
-                onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background='transparent'}>
-                <span style={{fontSize:9,fontWeight:700,padding:'1px 5px',borderRadius:4,background:`${METHOD_COLOR[r.method]??'#888'}22`,color:METHOD_COLOR[r.method]??'#888',flexShrink:0,minWidth:36,textAlign:'center'}}>{r.method}</span>
-                <span style={{fontSize:11,color:'var(--text-primary)',fontFamily:'monospace',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}}>{r.path}</span>
-                <span style={{fontSize:9,color:'var(--text-muted)',flexShrink:0,fontFamily:'monospace'}}>{r.file.split('/').pop()}:{r.line}</span>
-              </div>
-            ))
+          (report?.routes??[]).map((r,i)=>(
+            <div key={i} style={{display:'flex',alignItems:'center',gap:6,padding:'4px 10px'}}
+              onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background='var(--bg-hover)'}
+              onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background='transparent'}>
+              <span style={{fontSize:9,fontWeight:700,padding:'1px 5px',borderRadius:4,background:`${METHOD_COLOR[r.method]??'#888'}22`,color:METHOD_COLOR[r.method]??'#888',flexShrink:0,minWidth:36,textAlign:'center'}}>{r.method}</span>
+              <span style={{fontSize:11,color:'var(--text-primary)',fontFamily:'monospace',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}}>{r.path}</span>
+              <span style={{fontSize:9,color:'var(--text-muted)',flexShrink:0}}>{r.file.split('/').pop()}:{r.line}</span>
+            </div>
+          ))
         ):(
-          !report||report.calls.length===0
-            ?<div style={{padding:'8px 12px',fontSize:11,color:'var(--text-muted)'}}>No frontend API calls found</div>
-            :report.calls.map((c,i)=>(
-              <div key={i} style={{display:'flex',alignItems:'center',gap:6,padding:'4px 10px'}}
-                onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background='var(--bg-hover)'}
-                onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background='transparent'}>
-                <span style={{fontSize:9,fontWeight:700,padding:'1px 5px',borderRadius:4,background:`${METHOD_COLOR[c.method]??'#888'}22`,color:METHOD_COLOR[c.method]??'#888',flexShrink:0,minWidth:36,textAlign:'center'}}>{c.method}</span>
-                <span style={{fontSize:11,color:'var(--text-primary)',fontFamily:'monospace',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}}>{c.path}</span>
-                <span style={{fontSize:9,color:'var(--text-muted)',flexShrink:0,fontFamily:'monospace'}}>{c.file.split('/').pop()}:{c.line}</span>
-              </div>
-            ))
+          (report?.calls??[]).map((c,i)=>(
+            <div key={i} style={{display:'flex',alignItems:'center',gap:6,padding:'4px 10px'}}
+              onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background='var(--bg-hover)'}
+              onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background='transparent'}>
+              <span style={{fontSize:9,fontWeight:700,padding:'1px 5px',borderRadius:4,background:`${METHOD_COLOR[c.method]??'#888'}22`,color:METHOD_COLOR[c.method]??'#888',flexShrink:0,minWidth:36,textAlign:'center'}}>{c.method}</span>
+              <span style={{fontSize:11,color:'var(--text-primary)',fontFamily:'monospace',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}}>{c.path}</span>
+              <span style={{fontSize:9,color:'var(--text-muted)',flexShrink:0}}>{c.file.split('/').pop()}:{c.line}</span>
+            </div>
+          ))
         )}
       </div>
     </div>
@@ -337,10 +294,10 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
   const { sessions, activeSessionId, rightExpanded } = useAppStore()
   const session = sessions.find(s => s.id === activeSessionId)
 
-  const [fileSearch,       setFileSearch]       = useState('')
-  const [showSearch,       setShowSearch]        = useState(false)
-  const [showAgentModal,   setShowAgentModal]    = useState(false)
-  const [open,  setOpen]  = useState({ explorer:true, contracts:false, agents:true, symbols:false, graph:true })
+  const [fileSearch,     setFileSearch]     = useState('')
+  const [showSearch,     setShowSearch]      = useState(false)
+  const [showAgentModal, setShowAgentModal]  = useState(false)
+  const [open,  setOpen]  = useState({ explorer:true, git:false, contracts:false, agents:true, symbols:false, graph:true })
   const [maxId, setMaxId] = useState<string|null>(null)
   const [graphFullscreenAt, setGraphFullscreenAt] = useState<number|null>(null)
 
@@ -354,7 +311,7 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
     const hasRunning = session?.agents.some(a => a.status==='running')
     return (
       <div style={{width:40,background:'var(--bg-secondary)',borderLeft:'1px solid var(--border)',display:'flex',flexDirection:'column',alignItems:'center',paddingTop:10,gap:6,height:'100%'}}>
-        {([{Icon:FolderOpen,label:'Files',dot:false},{Icon:GitBranch,label:'Contracts',dot:false},{Icon:Bot,label:'Agents',dot:!!hasRunning},{Icon:Network,label:'Symbols',dot:false}] as {Icon:LucideIcon,label:string,dot:boolean}[]).map(({Icon,label,dot})=>(
+        {([{Icon:FolderOpen,label:'Files',dot:false},{Icon:GitMerge,label:'Git',dot:false},{Icon:GitBranch,label:'Contracts',dot:false},{Icon:Bot,label:'Agents',dot:!!hasRunning},{Icon:Network,label:'Symbols',dot:false}] as {Icon:LucideIcon,label:string,dot:boolean}[]).map(({Icon,label,dot})=>(
           <div key={label} title={label} style={{position:'relative'}}>
             <button className="icon-btn" style={{width:32,height:32}}><Icon size={15}/></button>
             {dot&&<span style={{position:'absolute',top:5,right:5,width:5,height:5,borderRadius:'50%',background:'var(--green)',boxShadow:'0 0 4px var(--green)'}}/>}
@@ -370,7 +327,8 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
   function secStyle(id: string): React.CSSProperties {
     const base: React.CSSProperties = { display:'flex',flexDirection:'column',overflow:'hidden',borderBottom:'1px solid var(--border)' }
     if (maxId) return maxId===id ? {...base,flex:1,minHeight:0} : {...base,flexShrink:0,height:HDR}
-    return (open as any)[id] ? {...base,flex:({explorer:3,contracts:2,agents:1,symbols:2,graph:1} as any)[id]??1,minHeight:HDR+40} : {...base,flexShrink:0,height:HDR}
+    const weights: Record<string,number> = { explorer:3, git:2, contracts:1.5, agents:1, symbols:2, graph:1 }
+    return (open as any)[id] ? {...base,flex:weights[id]??1,minHeight:HDR+40} : {...base,flexShrink:0,height:HDR}
   }
 
   const sections: Array<{id:string;Icon:LucideIcon;title:string;extra?:React.ReactNode;body:React.ReactNode}> = [
@@ -388,8 +346,17 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
       ),
     },
     {
+      // ── Git panel (Phase 3) ────────────────────────────────────────────────
+      id:'git', Icon:GitMerge, title:'Source Control',
+      body: session?.rootPath
+        ? <GitPanel sessionId={session.id} />
+        : <div style={{padding:'8px 12px',fontSize:11,color:'var(--text-muted)'}}>Open a project to see git status</div>,
+    },
+    {
       id:'contracts', Icon:GitBranch, title:'API Contracts',
-      body: session ? <ContractsPanel sessionId={session.id}/> : <div style={{padding:'8px 12px',fontSize:11,color:'var(--text-muted)'}}>Open a project to check contracts</div>,
+      body: session
+        ? <ContractsPanel sessionId={session.id}/>
+        : <div style={{padding:'8px 12px',fontSize:11,color:'var(--text-muted)'}}>Open a project to check contracts</div>,
     },
     {
       id:'agents', Icon:Bot, title:`Agents (${session?.agents.length??0})`,
@@ -404,7 +371,7 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
     },
     {
       id:'symbols', Icon:Network, title:'Knowledge Graph',
-      body: session ? <SymbolsPanel sessionId={session.id}/> : <div style={{padding:'8px 12px',fontSize:11,color:'var(--text-muted)'}}>Open a project to see symbols</div>,
+      body: session ? <SymbolsPanel sessionId={session.id}/> : <div style={{padding:'8px 12px',fontSize:11,color:'var(--text-muted)'}}>Open a project</div>,
     },
     {
       id:'graph', Icon:LayoutDashboard, title:'Project Graph',

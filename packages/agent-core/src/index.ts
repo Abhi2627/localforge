@@ -17,6 +17,7 @@ import { scanProjectFiles, generateProjectSummary } from './mcp/ProjectScanner.j
 import { connectMCP } from './mcp/MCPClient.js'
 import { scanProject, updateFile, getSymbols, findSymbol, getSummary, getConflicts, buildAgentContext, clearGraph } from './knowledge/KnowledgeGraph.js'
 import { runEnforcer, getCachedReport, clearReport, buildContractContext } from './knowledge/ContractEnforcer.js'
+import { getStatus, getLog, getBranches, getDiff, getCommitDiff, isGitRepo } from './git/GitReader.js'
 
 type ChatRole = 'system' | 'user' | 'assistant'
 
@@ -54,9 +55,9 @@ function buildSystemPrompt(selectedModel: string, summary?: string | null, knowl
     `You are powered by ${selectedModel} running via Ollama — fully offline. ` +
     `Always format responses using clean Markdown with headers, bullets, and code blocks. ` +
     `Do not add thinking steps or filler phrases.` +
-    (summary      ? `\n\nProject context:\n${summary}`       : '') +
-    (knowledgeCtx ? `\n\n${knowledgeCtx}`                    : '') +
-    (contractCtx  ? `\n\n${contractCtx}`                     : '')
+    (summary      ? `\n\nProject context:\n${summary}` : '') +
+    (knowledgeCtx ? `\n\n${knowledgeCtx}`              : '') +
+    (contractCtx  ? `\n\n${contractCtx}`               : '')
   )
 }
 
@@ -172,14 +173,10 @@ async function bootstrap() {
       const count = scanProject(sessionId, rootPath)
       console.log(`[KnowledgeGraph] ${count} symbols`)
       broadcast({ type: 'knowledge_ready', sessionId, symbolCount: count })
-      // Also run contract check in background after symbols are scanned
       try {
         const report = runEnforcer(sessionId, rootPath)
-        console.log(`[ContractEnforcer] ${report.summary.violations} violations, ${report.summary.orphans} orphans`)
         broadcast({ type: 'contract_ready', sessionId, summary: report.summary })
-      } catch (e) {
-        console.warn('[ContractEnforcer] scan failed:', e)
-      }
+      } catch { }
     })
     generateProjectSummary(sessionId, rootPath, scan).then(summary => broadcast({ type: 'project_summary', sessionId, summary }))
     return { success: true, isEmpty: scan.isEmpty, fileList: scan.fileList, fileTree: scan.fileTree, fileCount: scan.fileList.length }
@@ -228,6 +225,37 @@ async function bootstrap() {
     return { success: true, summary: report.summary }
   })
 
+  // ── Git endpoints ──────────────────────────────────────────────────────────
+  server.get<{ Params: { sessionId: string } }>('/project/:sessionId/git/status', async (req) => {
+    const session = getSession(req.params.sessionId)
+    if (!session?.rootPath) return { error: 'No rootPath', isRepo: false }
+    const status = getStatus(session.rootPath)
+    return { isRepo: !!status, status }
+  })
+  server.get<{ Params: { sessionId: string }; Querystring: { limit?: string; branch?: string } }>('/project/:sessionId/git/log', async (req) => {
+    const session = getSession(req.params.sessionId)
+    if (!session?.rootPath) return { commits: [] }
+    const limit  = Math.min(parseInt(req.query.limit ?? '50'), 200)
+    const branch = req.query.branch ?? ''
+    return { commits: getLog(session.rootPath, limit, branch) }
+  })
+  server.get<{ Params: { sessionId: string } }>('/project/:sessionId/git/branches', async (req) => {
+    const session = getSession(req.params.sessionId)
+    if (!session?.rootPath) return { branches: [] }
+    return { branches: getBranches(session.rootPath) }
+  })
+  server.get<{ Params: { sessionId: string }; Querystring: { file?: string; staged?: string } }>('/project/:sessionId/git/diff', async (req) => {
+    const session = getSession(req.params.sessionId)
+    if (!session?.rootPath) return { diffs: [] }
+    const staged = req.query.staged === 'true'
+    return { diffs: getDiff(session.rootPath, req.query.file, staged) }
+  })
+  server.get<{ Params: { sessionId: string; hash: string } }>('/project/:sessionId/git/commit/:hash', async (req) => {
+    const session = getSession(req.params.sessionId)
+    if (!session?.rootPath) return { diffs: [] }
+    return { diffs: getCommitDiff(session.rootPath, req.params.hash) }
+  })
+
   // ── Chat streaming ─────────────────────────────────────────────────────────
   server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>(
     '/chat/stream',
@@ -250,7 +278,7 @@ async function bootstrap() {
         if (!getSession(sessionId)) upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: selectedModel })
         const session = getSession(sessionId)
 
-        const isProject = session?.type === 'project'
+        const isProject    = session?.type === 'project'
         const knowledgeCtx = isProject ? buildAgentContext(sessionId)    : undefined
         const contractCtx  = isProject ? buildContractContext(sessionId) : undefined
 
