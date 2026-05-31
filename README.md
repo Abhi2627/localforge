@@ -51,7 +51,7 @@ cd apps/desktop && npm run dev
 
 ## Roadmap
 
-### Core infrastructure
+### Core infrastructure ✅
 - [x] Project scaffold and monorepo setup
 - [x] Agent core: TaskQueue + write-ahead log
 - [x] Ollama client with model fallback chain
@@ -60,34 +60,36 @@ cd apps/desktop && npm run dev
 - [x] Hardware-aware scheduler (auto parallel/sequential)
 - [x] Session persistence (SQLite — chats + projects survive restart)
 
-### Desktop UI
+### Desktop UI ✅
 - [x] Welcome screen with animated feature showcase
 - [x] Personalised greeting with username (Account modal)
 - [x] Chat mode with SSE streaming responses
 - [x] Markdown rendering (headers, code blocks, tables, lists)
 - [x] Message timestamps, copy, edit, reload
 - [x] Auto-generated chat titles (markdown-stripped)
-- [x] Tab strip (recent sessions, fixed order, dismiss without delete)
-- [x] Left sidebar: Chats + Projects history, rename, delete
+- [x] Tab strip (recent sessions, auto-evict oldest, dismiss without delete)
+- [x] Left sidebar: Chats + Projects history, rename, delete, metadata
 - [x] Responsive layout (auto-collapse sidebars on resize)
 - [x] Right sidebar (project sessions only)
 - [x] Auto project onboarding (file scan + AI summary)
 - [x] Native folder picker (Tauri dialog plugin)
+- [x] VSCode-style terminal panel (xterm.js, multi-tab, PTY)
+- [x] Project flow graph (SVG, colour-coded, zoom/pan, fullscreen)
 
 ### Phase 1 — Core coding workflow ✅
 - [x] Agent creation UI (5 roles: Fullstack, Frontend, Backend, Test, Review)
-- [x] Integrated terminal (xterm.js + node-pty PTY — project sessions only)
-- [x] Project flow graph (SVG auto-generated, colour-coded by file type)
+- [x] Integrated terminal (node-pty PTY, multi-tab, Output/Problems/Debug/Ports panels)
+- [x] Project flow graph (radial layout, auto-fit, reset view)
 
-### Phase 2 — Intelligence layer
-- [ ] Internet RAG pipeline (live web context injection)
-- [ ] Model advisor (failure tracker + Ollama registry checker)
-- [ ] Knowledge graph (cross-agent symbol tracker)
+### Phase 2 — Intelligence layer (in progress)
+- [x] Internet RAG pipeline (DuckDuckGo, automatic heuristic trigger, source citations)
+- [x] Model Advisor (latency tracking, token speed, error log, smart suggestions, TopBar chip)
+- [ ] Knowledge graph (cross-agent symbol tracker — functions, classes, types across files)
 - [ ] API contract enforcer (FE/BE interface mismatch detection)
 
 ### Phase 3 — Polish
+- [ ] Git structure panel (commit history, branch view, diff viewer)
 - [ ] Preview on device (QR code dev server)
-- [ ] Git structure panel (commit history, branch view)
 
 ---
 

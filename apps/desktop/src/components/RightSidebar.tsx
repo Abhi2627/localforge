@@ -1,5 +1,5 @@
-import { useState, useMemo } from 'react'
-import { ChevronRight, ChevronDown, Bot, GitBranch, LayoutDashboard, Plus, Loader, File, Folder, FolderOpen, Search, LucideIcon } from 'lucide-react'
+import { useState, useMemo, useEffect, useCallback } from 'react'
+import { ChevronRight, ChevronDown, Bot, GitBranch, LayoutDashboard, Plus, Loader, File, Folder, FolderOpen, Search, LucideIcon, Network, AlertTriangle, RefreshCw } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import AgentModal from './AgentModal'
 import ProjectGraph from './ProjectGraph'
@@ -105,21 +105,204 @@ function AgentRow({ agentId, sessionId }: { agentId: string; sessionId: string }
   )
 }
 
+// ── Knowledge Graph / Symbols panel ──────────────────────────────────────────
+
+type SymbolKind = 'function'|'class'|'interface'|'type'|'enum'|'constant'|'component'|'route'
+
+interface SymbolNode { name: string; kind: SymbolKind; line: number; exported: boolean; file: string }
+interface Conflict   { name: string; kind: SymbolKind; files: string[] }
+interface GraphSummary {
+  totalSymbols: number
+  byKind:       Record<string, number>
+  byFile:       Array<{ file: string; count: number }>
+  conflicts:    Conflict[]
+}
+
+const KIND_COLOR: Record<string, string> = {
+  function:  '#3b82f6', class: '#8b5cf6', interface: '#06b6d4',
+  type:      '#a78bfa', enum:  '#f59e0b', constant:  '#94a3b8',
+  component: '#3dd68c', route: '#f97316',
+}
+const KIND_LETTER: Record<string, string> = {
+  function:'f', class:'C', interface:'I', type:'T', enum:'E', constant:'c', component:'R', route:'@',
+}
+
+function SymbolsPanel({ sessionId }: { sessionId: string }) {
+  const [summary,   setSummary]   = useState<GraphSummary | null>(null)
+  const [symbols,   setSymbols]   = useState<SymbolNode[]>([])
+  const [search,    setSearch]    = useState('')
+  const [loading,   setLoading]   = useState(false)
+  const [tab,       setTab]       = useState<'symbols'|'conflicts'>('symbols')
+  const [kindFilter,setKindFilter]= useState<string>('all')
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [sumRes, symRes] = await Promise.all([
+        fetch(`http://localhost:3001/project/${sessionId}/symbols/summary`),
+        fetch(`http://localhost:3001/project/${sessionId}/symbols`),
+      ])
+      const sum = await sumRes.json()
+      const sym = await symRes.json()
+      setSummary(sum)
+      setSymbols(sym.symbols ?? [])
+    } catch { }
+    setLoading(false)
+  }, [sessionId])
+
+  useEffect(() => { load() }, [load])
+
+  async function rescan() {
+    setLoading(true)
+    try {
+      await fetch(`http://localhost:3001/project/${sessionId}/symbols/rescan`, { method: 'POST' })
+      await load()
+    } catch { setLoading(false) }
+  }
+
+  const filtered = symbols.filter(s => {
+    if (kindFilter !== 'all' && s.kind !== kindFilter) return false
+    if (search && !s.name.toLowerCase().includes(search.toLowerCase())) return false
+    return true
+  })
+
+  const kinds = summary ? Object.keys(summary.byKind).filter(k => summary.byKind[k] > 0) : []
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', flex:1, overflow:'hidden', minHeight:0 }}>
+      {/* Stats row */}
+      {summary && (
+        <div style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 10px', borderBottom:'1px solid var(--border)', flexShrink:0 }}>
+          <span style={{ fontSize:11, color:'var(--text-primary)', fontWeight:500 }}>{summary.totalSymbols} symbols</span>
+          {summary.conflicts.length > 0 && (
+            <span style={{ display:'flex', alignItems:'center', gap:3, fontSize:10, color:'#f59e0b' }}>
+              <AlertTriangle size={10}/>{summary.conflicts.length} conflict{summary.conflicts.length>1?'s':''}
+            </span>
+          )}
+          <button onClick={rescan} title="Rescan project"
+            style={{ marginLeft:'auto', background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', display:'flex', padding:2 }}
+            onMouseEnter={e=>(e.currentTarget as HTMLElement).style.color='var(--text-primary)'}
+            onMouseLeave={e=>(e.currentTarget as HTMLElement).style.color='var(--text-muted)'}
+          ><RefreshCw size={11} style={{ animation: loading?'spin 1s linear infinite':'none' }}/></button>
+        </div>
+      )}
+
+      {/* Tabs */}
+      <div style={{ display:'flex', borderBottom:'1px solid var(--border)', flexShrink:0 }}>
+        {(['symbols','conflicts'] as const).map(t => (
+          <button key={t} onClick={()=>setTab(t)}
+            style={{ padding:'4px 10px', border:'none', background:'transparent', cursor:'pointer', fontSize:10, fontWeight:tab===t?600:400, color:tab===t?'var(--accent)':'var(--text-muted)', borderBottom:tab===t?'2px solid var(--accent)':'2px solid transparent', textTransform:'capitalize' }}
+          >
+            {t}{t==='conflicts'&&summary&&summary.conflicts.length>0?` (${summary.conflicts.length})`:''}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'symbols' ? (
+        <>
+          {/* Search + kind filter */}
+          <div style={{ padding:'4px 8px', flexShrink:0 }}>
+            <input placeholder="Search symbols…" value={search} onChange={e=>setSearch(e.target.value)}
+              style={{ width:'100%', background:'var(--bg-tertiary)', border:'1px solid var(--border)', borderRadius:4, padding:'3px 8px', color:'var(--text-primary)', fontSize:11, outline:'none', boxSizing:'border-box' }}
+            />
+          </div>
+          {kinds.length > 1 && (
+            <div style={{ display:'flex', gap:4, padding:'0 8px 4px', flexWrap:'wrap', flexShrink:0 }}>
+              <button onClick={()=>setKindFilter('all')}
+                style={{ padding:'1px 7px', borderRadius:10, border:`1px solid ${kindFilter==='all'?'var(--accent)':'var(--border)'}`, background:kindFilter==='all'?'var(--accent-dim)':'transparent', color:kindFilter==='all'?'var(--accent)':'var(--text-muted)', fontSize:9, cursor:'pointer', fontWeight:kindFilter==='all'?600:400 }}
+              >all</button>
+              {kinds.map(k => (
+                <button key={k} onClick={()=>setKindFilter(k)}
+                  style={{ padding:'1px 7px', borderRadius:10, border:`1px solid ${kindFilter===k?(KIND_COLOR[k]??'var(--accent)'):'var(--border)'}`, background:kindFilter===k?`${KIND_COLOR[k]??'var(--accent)'}22`:'transparent', color:kindFilter===k?(KIND_COLOR[k]??'var(--accent)'):'var(--text-muted)', fontSize:9, cursor:'pointer', fontWeight:kindFilter===k?600:400 }}
+                >{k}</button>
+              ))}
+            </div>
+          )}
+
+          {/* Symbol list */}
+          <div style={{ flex:1, overflowY:'auto', paddingBottom:4 }}>
+            {loading && symbols.length===0 ? (
+              <div style={{ padding:'12px', fontSize:11, color:'var(--text-muted)', display:'flex', alignItems:'center', gap:6 }}>
+                <Loader size={11} style={{ animation:'spin 1s linear infinite' }}/> Scanning symbols…
+              </div>
+            ) : filtered.length===0 ? (
+              <div style={{ padding:'8px 12px', fontSize:11, color:'var(--text-muted)' }}>
+                {symbols.length===0 ? 'No symbols yet — open a project' : 'No matches'}
+              </div>
+            ) : (
+              filtered.slice(0, 200).map((s, i) => {
+                const rel = s.file.split('/').slice(-2).join('/')
+                const col = KIND_COLOR[s.kind] ?? '#888'
+                return (
+                  <div key={i} style={{ display:'flex', alignItems:'center', gap:6, padding:'3px 10px', cursor:'default' }}
+                    onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background='var(--bg-hover)'}
+                    onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background='transparent'}
+                  >
+                    {/* Kind badge */}
+                    <span style={{ width:14, height:14, borderRadius:3, background:`${col}22`, color:col, fontSize:9, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, fontFamily:'monospace' }}>
+                      {KIND_LETTER[s.kind]??'?'}
+                    </span>
+                    <span style={{ flex:1, fontSize:11, color:'var(--text-primary)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s.name}</span>
+                    {!s.exported && <span style={{ fontSize:9, color:'var(--text-muted)', flexShrink:0 }}>local</span>}
+                    <span style={{ fontSize:9, color:'var(--text-muted)', flexShrink:0, fontFamily:'monospace', maxWidth:90, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                      {rel}:{s.line}
+                    </span>
+                  </div>
+                )
+              })
+            )}
+            {filtered.length > 200 && (
+              <div style={{ padding:'4px 10px', fontSize:10, color:'var(--text-muted)' }}>
+                Showing 200 of {filtered.length} — refine search to see more
+              </div>
+            )}
+          </div>
+        </>
+      ) : (
+        /* Conflicts tab */
+        <div style={{ flex:1, overflowY:'auto' }}>
+          {!summary || summary.conflicts.length===0 ? (
+            <div style={{ padding:'12px', fontSize:11, color:'var(--green)', display:'flex', alignItems:'center', gap:6 }}>
+              ✓ No conflicts detected
+            </div>
+          ) : (
+            summary.conflicts.map((c, i) => (
+              <div key={i} style={{ padding:'8px 10px', borderBottom:'1px solid var(--border)' }}>
+                <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:4 }}>
+                  <AlertTriangle size={11} style={{ color:'#f59e0b', flexShrink:0 }}/>
+                  <span style={{ fontSize:12, fontWeight:500, color:'var(--text-primary)' }}>{c.name}</span>
+                  <span style={{ fontSize:9, color:KIND_COLOR[c.kind]??'#888', background:`${KIND_COLOR[c.kind]??'#888'}22`, padding:'1px 5px', borderRadius:4 }}>{c.kind}</span>
+                </div>
+                <div style={{ fontSize:10, color:'var(--text-muted)', paddingLeft:17 }}>
+                  Defined in {c.files.length} files:
+                  {c.files.map((f, fi) => (
+                    <div key={fi} style={{ color:'var(--text-secondary)', fontFamily:'monospace', fontSize:10 }}>
+                      {f.split('/').slice(-2).join('/')}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Main sidebar ──────────────────────────────────────────────────────────────
+
 const HDR = 28
 
 export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps) {
   const { sessions, activeSessionId, rightExpanded } = useAppStore()
   const session = sessions.find(s => s.id === activeSessionId)
 
-  // ALL hooks before any early return
-  const [fileSearch,     setFileSearch]     = useState('')
-  const [showSearch,     setShowSearch]     = useState(false)
-  const [showAgentModal, setShowAgentModal] = useState(false)
-  const [open,  setOpen]  = useState({ explorer:true, git:false, agents:true, graph:true })
+  const [fileSearch,       setFileSearch]       = useState('')
+  const [showSearch,       setShowSearch]        = useState(false)
+  const [showAgentModal,   setShowAgentModal]    = useState(false)
+  const [open,  setOpen]  = useState({ explorer:true, git:false, agents:true, symbols:false, graph:true })
   const [maxId, setMaxId] = useState<string|null>(null)
-
-  // graphFullscreen tracks WHEN the fullscreen was opened (number, not bool)
-  // so ProjectGraph receives a new fitTrigger value each time the overlay opens
   const [graphFullscreenAt, setGraphFullscreenAt] = useState<number | null>(null)
 
   const allFiles    = session?.allFiles    ?? []
@@ -135,7 +318,7 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
     const hasRunning = session?.agents.some(a => a.status === 'running')
     return (
       <div style={{width:40,background:'var(--bg-secondary)',borderLeft:'1px solid var(--border)',display:'flex',flexDirection:'column',alignItems:'center',paddingTop:10,gap:6,height:'100%'}}>
-        {([{Icon:FolderOpen,label:'Files',dot:false},{Icon:GitBranch,label:'Git',dot:false},{Icon:Bot,label:'Agents',dot:!!hasRunning}] as {Icon:LucideIcon,label:string,dot:boolean}[]).map(({Icon,label,dot})=>(
+        {([{Icon:FolderOpen,label:'Files',dot:false},{Icon:GitBranch,label:'Git',dot:false},{Icon:Bot,label:'Agents',dot:!!hasRunning},{Icon:Network,label:'Symbols',dot:false}] as {Icon:LucideIcon,label:string,dot:boolean}[]).map(({Icon,label,dot})=>(
           <div key={label} title={label} style={{position:'relative'}}>
             <button className="icon-btn" style={{width:32,height:32}}><Icon size={15}/></button>
             {dot&&<span style={{position:'absolute',top:5,right:5,width:5,height:5,borderRadius:'50%',background:'var(--green)',boxShadow:'0 0 4px var(--green)'}}/>}
@@ -163,7 +346,7 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
       return { ...base, flexShrink:0, height:HDR }
     }
     if ((open as any)[id]) {
-      const w: Record<string,number> = { explorer:3, git:0.4, agents:1, graph:1 }
+      const w: Record<string,number> = { explorer:3, git:0.4, agents:1, symbols:2, graph:1 }
       return { ...base, flex: w[id]??1, minHeight: HDR+40 }
     }
     return { ...base, flexShrink:0, height:HDR }
@@ -230,14 +413,14 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
       ),
     },
     {
+      id:'symbols', Icon:Network, title:'Knowledge Graph',
+      body: session ? <SymbolsPanel sessionId={session.id} /> : <div style={{padding:'8px 12px',fontSize:11,color:'var(--text-muted)'}}>Open a project to see symbols</div>,
+    },
+    {
       id:'graph', Icon:LayoutDashboard, title:'Project Graph',
       extra:(
         <button className="icon-btn" style={{width:16,height:16}} title="Fullscreen"
-          onClick={e=>{
-            e.stopPropagation()
-            // Store timestamp so fullscreen ProjectGraph gets a fresh fitTrigger
-            setGraphFullscreenAt(Date.now())
-          }}>⤢</button>
+          onClick={e=>{e.stopPropagation();setGraphFullscreenAt(Date.now())}}>⤢</button>
       ),
       body:<ProjectGraph files={mergedFiles} rootPath={session?.rootPath??''}/>,
     },
@@ -245,7 +428,6 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
 
   return (
     <div style={{background:'var(--bg-secondary)',borderLeft:'1px solid var(--border)',display:'flex',flexDirection:'column',height:'100%',overflow:'hidden'}}>
-
       <div style={{height:32,flexShrink:0,padding:'0 12px',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',gap:6}}>
         <LayoutDashboard size={12} style={{color:'var(--text-muted)',flexShrink:0}}/>
         <span style={{fontSize:11,fontWeight:600,color:'var(--text-primary)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}}>
@@ -292,36 +474,21 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
       {showAgentModal&&session&&(
         <AgentModal sessionId={session.id} projectId={session.id} onClose={()=>setShowAgentModal(false)}/>
       )}
-
-      {/* Fullscreen graph overlay */}
       {graphFullscreenAt !== null && session && (
-        <div
-          style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.88)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:300}}
-          onClick={()=>setGraphFullscreenAt(null)}
-        >
-          <div
-            style={{background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:12,padding:16,width:'86vw',height:'86vh',display:'flex',flexDirection:'column',gap:8}}
-            onClick={e=>e.stopPropagation()}
-          >
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.88)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:300}}
+          onClick={()=>setGraphFullscreenAt(null)}>
+          <div style={{background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:12,padding:16,width:'86vw',height:'86vh',display:'flex',flexDirection:'column',gap:8}}
+            onClick={e=>e.stopPropagation()}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexShrink:0}}>
-              <span style={{fontSize:13,fontWeight:600,color:'var(--text-primary)'}}>
-                Project graph — {session.title}
-              </span>
+              <span style={{fontSize:13,fontWeight:600,color:'var(--text-primary)'}}>Project graph — {session.title}</span>
               <button className="icon-btn" onClick={()=>setGraphFullscreenAt(null)} style={{width:26,height:26}}>✕</button>
             </div>
-            {/* key forces fresh mount; fitTrigger=graphFullscreenAt tells graph to fit after overlay paints */}
             <div style={{flex:1,overflow:'hidden',minHeight:0,display:'flex',flexDirection:'column'}}>
-              <ProjectGraph
-                key={`fullscreen-${graphFullscreenAt}`}
-                files={mergedFiles}
-                rootPath={session.rootPath ?? ''}
-                fitTrigger={graphFullscreenAt}
-              />
+              <ProjectGraph key={`fullscreen-${graphFullscreenAt}`} files={mergedFiles} rootPath={session.rootPath??''} fitTrigger={graphFullscreenAt}/>
             </div>
           </div>
         </div>
       )}
-
       <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
     </div>
   )

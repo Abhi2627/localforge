@@ -15,6 +15,7 @@ import { chat } from './ollama/OllamaClient.js'
 import { getInstalledModels, getModelStats, selectModel, setFallbackModels, loadConfig, saveConfig } from './ollama/ModelManager.js'
 import { scanProjectFiles, generateProjectSummary } from './mcp/ProjectScanner.js'
 import { connectMCP } from './mcp/MCPClient.js'
+import { scanProject, updateFile, getSymbols, findSymbol, getSummary, getConflicts, buildAgentContext, clearGraph } from './knowledge/KnowledgeGraph.js'
 
 type ChatRole = 'system' | 'user' | 'assistant'
 
@@ -46,13 +47,14 @@ function broadcast(data: object) {
   wsClients.forEach(ws => { try { ws.send(msg) } catch { wsClients.delete(ws) } })
 }
 
-function buildSystemPrompt(selectedModel: string, summary?: string | null): string {
+function buildSystemPrompt(selectedModel: string, summary?: string | null, knowledgeContext?: string): string {
   return (
     `You are a helpful AI assistant running locally inside LocalForge. ` +
     `You are powered by ${selectedModel} running via Ollama — fully offline. ` +
     `Always format responses using clean Markdown with headers, bullets, and code blocks. ` +
     `Do not add thinking steps or filler phrases.` +
-    (summary ? `\n\nProject context:\n${summary}` : '')
+    (summary ? `\n\nProject context:\n${summary}` : '') +
+    (knowledgeContext ? `\n\n${knowledgeContext}` : '')
   )
 }
 
@@ -65,21 +67,24 @@ async function bootstrap() {
     origin: (origin, cb) => cb(null, true),
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
-    credentials: true,
-    preflight: true,
-    strictPreflight: false,
+    credentials: true, preflight: true, strictPreflight: false,
   })
   await server.register(websocket)
 
   const profile     = await profileSystem()
   const config      = loadConfig()
-  const mode        = config.executionMode ?? profile.recommendedMode
-  const maxParallel = config.maxParallel   ?? profile.recommendedMaxParallel
-  taskQueue = new TaskQueue(mode, maxParallel)
+  taskQueue         = new TaskQueue(config.executionMode ?? profile.recommendedMode, config.maxParallel ?? profile.recommendedMaxParallel)
 
   getDb()
   initSessionTables()
-  orchestrator.onEvent((projectId, event) => broadcast({ type: 'agent_event', projectId, event }))
+  orchestrator.onEvent((projectId, event) => {
+    broadcast({ type: 'agent_event', projectId, event })
+    // Update knowledge graph when agent writes a file
+    if (event.type === 'file_written' && event.filePath) {
+      const session = getSession(projectId)
+      if (session?.rootPath) updateFile(projectId, event.filePath)
+    }
+  })
 
   // ── WebSocket: agent events ────────────────────────────────────────────────
   server.get('/ws', { websocket: true }, (socket) => {
@@ -97,15 +102,7 @@ async function bootstrap() {
       console.log(`[terminal] spawning ${DEFAULT_SHELL} in ${cwd}`)
       ptyProc = pty.spawn(DEFAULT_SHELL, [], {
         name: 'xterm-256color', cols: 120, rows: 30, cwd,
-        env: {
-          ...process.env,
-          TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'LocalForge',
-          HOME:  process.env.HOME  ?? os.homedir(),
-          USER:  process.env.USER  ?? os.userInfo().username,
-          SHELL: DEFAULT_SHELL,
-          PATH:  process.env.PATH  ?? '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin',
-          LANG:  process.env.LANG  ?? 'en_US.UTF-8',
-        } as Record<string, string>,
+        env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'LocalForge', HOME: process.env.HOME ?? os.homedir(), USER: process.env.USER ?? os.userInfo().username, SHELL: DEFAULT_SHELL, PATH: process.env.PATH ?? '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin', LANG: process.env.LANG ?? 'en_US.UTF-8' } as Record<string, string>,
       })
       ptyProc.onData((data: string) => { try { socket.send(data) } catch { } })
       ptyProc.onExit(({ exitCode }) => {
@@ -139,13 +136,8 @@ async function bootstrap() {
   })
 
   // ── Models ─────────────────────────────────────────────────────────────────
-  server.get('/models', async () => {
-    try { return { models: await getInstalledModels() } } catch { return { error: 'Ollama not reachable', models: [] } }
-  })
-  // Full stats for Model Advisor panel
-  server.get('/models/stats', async () => {
-    try { return await getModelStats() } catch (e: any) { return { error: e.message } }
-  })
+  server.get('/models', async () => { try { return { models: await getInstalledModels() } } catch { return { error: 'Ollama not reachable', models: [] } } })
+  server.get('/models/stats', async () => { try { return await getModelStats() } catch (e: any) { return { error: e.message } } })
   server.get('/models/config', async () => loadConfig())
   server.post<{ Body: { model: string } }>('/models/select', async (req) => {
     if (!req.body.model) return { success: false }
@@ -165,7 +157,11 @@ async function bootstrap() {
     const { id, type, title, rootPath, modelName } = req.body
     return { success: true, session: upsertSession({ id, type: type as any, title, rootPath, modelName }) }
   })
-  server.delete<{ Params: { id: string } }>('/sessions/:id', async (req) => { deleteSession(req.params.id); return { success: true } })
+  server.delete<{ Params: { id: string } }>('/sessions/:id', async (req) => {
+    deleteSession(req.params.id)
+    clearGraph(req.params.id)
+    return { success: true }
+  })
   server.post<{ Body: { id: string; sessionId: string; role: string; content: string; agentName?: string } }>('/sessions/message', async (req) => {
     const { id, sessionId, role, content, agentName } = req.body
     if (!getSession(sessionId)) upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: loadConfig().selectedModel })
@@ -179,6 +175,12 @@ async function bootstrap() {
     if (!rootPath) return { success: false, message: 'rootPath required' }
     await connectMCP(rootPath)
     const scan = scanProjectFiles(rootPath)
+    // Build knowledge graph in background — don't block the response
+    setImmediate(() => {
+      const count = scanProject(sessionId, rootPath)
+      console.log(`[KnowledgeGraph] scanned ${count} symbols for session ${sessionId}`)
+      broadcast({ type: 'knowledge_ready', sessionId, symbolCount: count })
+    })
     generateProjectSummary(sessionId, rootPath, scan).then(summary => broadcast({ type: 'project_summary', sessionId, summary }))
     return { success: true, isEmpty: scan.isEmpty, fileList: scan.fileList, fileTree: scan.fileTree, fileCount: scan.fileList.length }
   })
@@ -195,6 +197,27 @@ async function bootstrap() {
     const { path: p, content } = req.body
     if (!p) { reply.status(400).send({ error: 'path required' }); return }
     try { fs.writeFileSync(p, content ?? '', 'utf8'); return { success: true } } catch (e: any) { reply.status(500).send({ error: e.message }) }
+  })
+
+  // ── Knowledge Graph endpoints ──────────────────────────────────────────────
+  server.get<{ Params: { sessionId: string } }>('/project/:sessionId/symbols', async (req) => {
+    return { symbols: getSymbols(req.params.sessionId) }
+  })
+  server.get<{ Params: { sessionId: string }; Querystring: { q?: string } }>('/project/:sessionId/symbols/search', async (req) => {
+    const q = req.query.q ?? ''
+    return { symbols: q ? findSymbol(req.params.sessionId, q) : getSymbols(req.params.sessionId) }
+  })
+  server.get<{ Params: { sessionId: string } }>('/project/:sessionId/symbols/summary', async (req) => {
+    return getSummary(req.params.sessionId)
+  })
+  server.get<{ Params: { sessionId: string } }>('/project/:sessionId/symbols/conflicts', async (req) => {
+    return { conflicts: getConflicts(req.params.sessionId) }
+  })
+  server.post<{ Params: { sessionId: string } }>('/project/:sessionId/symbols/rescan', async (req) => {
+    const session = getSession(req.params.sessionId)
+    if (!session?.rootPath) return { success: false, message: 'No rootPath' }
+    const count = scanProject(req.params.sessionId, session.rootPath)
+    return { success: true, symbolCount: count }
   })
 
   // ── Chat streaming ─────────────────────────────────────────────────────────
@@ -219,8 +242,13 @@ async function bootstrap() {
         if (!getSession(sessionId)) upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: selectedModel })
         const session = getSession(sessionId)
 
+        // Inject knowledge graph context for project sessions
+        const knowledgeContext = session?.type === 'project'
+          ? buildAgentContext(sessionId)
+          : undefined
+
         const messages = [
-          { role: 'system' as ChatRole, content: buildSystemPrompt(selectedModel, session?.summary) },
+          { role: 'system' as ChatRole, content: buildSystemPrompt(selectedModel, session?.summary, knowledgeContext) },
           ...mapHistory(history),
           { role: 'user' as ChatRole, content: message },
         ]
@@ -268,10 +296,7 @@ async function bootstrap() {
   server.post<{ Params: { projectId: string }; Body: { name: string; role: string; allowedPaths?: string[] } }>('/projects/:projectId/agents', async (req) => {
     const { name, role, allowedPaths } = req.body
     if (!name || !role) return { success: false }
-    const agent = orchestrator.addAgent(req.params.projectId, {
-      name, role: role as any, allowedPaths: allowedPaths ?? [],
-      projectPath: orchestrator.getProject(req.params.projectId).rootPath,
-    })
+    const agent = orchestrator.addAgent(req.params.projectId, { name, role: role as any, allowedPaths: allowedPaths ?? [], projectPath: orchestrator.getProject(req.params.projectId).rootPath })
     return { success: true, agent: { id: agent.id, name: agent.config.name, role: agent.config.role } }
   })
   server.post<{ Params: { projectId: string; agentId: string }; Body: { instruction: string; queue?: boolean } }>('/projects/:projectId/agents/:agentId/instruct', async (req) => {
