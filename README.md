@@ -81,11 +81,11 @@ cd apps/desktop && npm run dev
 - [x] Integrated terminal (node-pty PTY, multi-tab, Output/Problems/Debug/Ports panels)
 - [x] Project flow graph (radial layout, auto-fit, reset view)
 
-### Phase 2 — Intelligence layer (in progress)
+### Phase 2 — Intelligence layer ✅
 - [x] Internet RAG pipeline (DuckDuckGo, automatic heuristic trigger, source citations)
 - [x] Model Advisor (latency tracking, token speed, error log, smart suggestions, TopBar chip)
-- [ ] Knowledge graph (cross-agent symbol tracker — functions, classes, types across files)
-- [ ] API contract enforcer (FE/BE interface mismatch detection)
+- [x] Knowledge Graph (symbol extractor TS/JS/Python/Rust, conflict detection, agent context injection)
+- [x] API Contract Enforcer (fetch/axios/SWR call extraction, Express/Fastify/FastAPI route matching, violation detection, method mismatch detection, orphan route detection)
 
 ### Phase 3 — Polish
 - [ ] Git structure panel (commit history, branch view, diff viewer)

@@ -16,6 +16,7 @@ import { getInstalledModels, getModelStats, selectModel, setFallbackModels, load
 import { scanProjectFiles, generateProjectSummary } from './mcp/ProjectScanner.js'
 import { connectMCP } from './mcp/MCPClient.js'
 import { scanProject, updateFile, getSymbols, findSymbol, getSummary, getConflicts, buildAgentContext, clearGraph } from './knowledge/KnowledgeGraph.js'
+import { runEnforcer, getCachedReport, clearReport, buildContractContext } from './knowledge/ContractEnforcer.js'
 
 type ChatRole = 'system' | 'user' | 'assistant'
 
@@ -47,14 +48,15 @@ function broadcast(data: object) {
   wsClients.forEach(ws => { try { ws.send(msg) } catch { wsClients.delete(ws) } })
 }
 
-function buildSystemPrompt(selectedModel: string, summary?: string | null, knowledgeContext?: string): string {
+function buildSystemPrompt(selectedModel: string, summary?: string | null, knowledgeCtx?: string, contractCtx?: string): string {
   return (
     `You are a helpful AI assistant running locally inside LocalForge. ` +
     `You are powered by ${selectedModel} running via Ollama — fully offline. ` +
     `Always format responses using clean Markdown with headers, bullets, and code blocks. ` +
     `Do not add thinking steps or filler phrases.` +
-    (summary ? `\n\nProject context:\n${summary}` : '') +
-    (knowledgeContext ? `\n\n${knowledgeContext}` : '')
+    (summary      ? `\n\nProject context:\n${summary}`       : '') +
+    (knowledgeCtx ? `\n\n${knowledgeCtx}`                    : '') +
+    (contractCtx  ? `\n\n${contractCtx}`                     : '')
   )
 }
 
@@ -71,15 +73,14 @@ async function bootstrap() {
   })
   await server.register(websocket)
 
-  const profile     = await profileSystem()
-  const config      = loadConfig()
-  taskQueue         = new TaskQueue(config.executionMode ?? profile.recommendedMode, config.maxParallel ?? profile.recommendedMaxParallel)
+  const profile = await profileSystem()
+  const config  = loadConfig()
+  taskQueue     = new TaskQueue(config.executionMode ?? profile.recommendedMode, config.maxParallel ?? profile.recommendedMaxParallel)
 
   getDb()
   initSessionTables()
   orchestrator.onEvent((projectId, event) => {
     broadcast({ type: 'agent_event', projectId, event })
-    // Update knowledge graph when agent writes a file
     if (event.type === 'file_written' && event.filePath) {
       const session = getSession(projectId)
       if (session?.rootPath) updateFile(projectId, event.filePath)
@@ -99,7 +100,6 @@ async function bootstrap() {
     const cwd    = fs.existsSync(rawCwd) ? rawCwd : os.homedir()
     let ptyProc: ReturnType<typeof pty.spawn> | null = null
     try {
-      console.log(`[terminal] spawning ${DEFAULT_SHELL} in ${cwd}`)
       ptyProc = pty.spawn(DEFAULT_SHELL, [], {
         name: 'xterm-256color', cols: 120, rows: 30, cwd,
         env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'LocalForge', HOME: process.env.HOME ?? os.homedir(), USER: process.env.USER ?? os.userInfo().username, SHELL: DEFAULT_SHELL, PATH: process.env.PATH ?? '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin', LANG: process.env.LANG ?? 'en_US.UTF-8' } as Record<string, string>,
@@ -120,7 +120,6 @@ async function bootstrap() {
       })
       socket.on('close', () => { if (ptyProc) { try { ptyProc.kill() } catch { } ptyProc = null } })
     } catch (err: any) {
-      console.error('[terminal] spawn error:', err.message)
       try { socket.send(`\r\n\x1b[31m[Failed: ${err.message}]\x1b[0m\r\nShell: ${DEFAULT_SHELL}\r\n`) } catch { }
       try { socket.close() } catch { }
     }
@@ -139,13 +138,8 @@ async function bootstrap() {
   server.get('/models', async () => { try { return { models: await getInstalledModels() } } catch { return { error: 'Ollama not reachable', models: [] } } })
   server.get('/models/stats', async () => { try { return await getModelStats() } catch (e: any) { return { error: e.message } } })
   server.get('/models/config', async () => loadConfig())
-  server.post<{ Body: { model: string } }>('/models/select', async (req) => {
-    if (!req.body.model) return { success: false }
-    return selectModel(req.body.model)
-  })
-  server.post<{ Body: { models: string[] } }>('/models/fallback', async (req) => {
-    return { success: true, config: await setFallbackModels(req.body.models) }
-  })
+  server.post<{ Body: { model: string } }>('/models/select', async (req) => { if (!req.body.model) return { success: false }; return selectModel(req.body.model) })
+  server.post<{ Body: { models: string[] } }>('/models/fallback', async (req) => { return { success: true, config: await setFallbackModels(req.body.models) } })
 
   // ── Sessions ───────────────────────────────────────────────────────────────
   server.get('/sessions', async () => ({ sessions: getAllSessions() }))
@@ -158,8 +152,7 @@ async function bootstrap() {
     return { success: true, session: upsertSession({ id, type: type as any, title, rootPath, modelName }) }
   })
   server.delete<{ Params: { id: string } }>('/sessions/:id', async (req) => {
-    deleteSession(req.params.id)
-    clearGraph(req.params.id)
+    deleteSession(req.params.id); clearGraph(req.params.id); clearReport(req.params.id)
     return { success: true }
   })
   server.post<{ Body: { id: string; sessionId: string; role: string; content: string; agentName?: string } }>('/sessions/message', async (req) => {
@@ -175,11 +168,18 @@ async function bootstrap() {
     if (!rootPath) return { success: false, message: 'rootPath required' }
     await connectMCP(rootPath)
     const scan = scanProjectFiles(rootPath)
-    // Build knowledge graph in background — don't block the response
     setImmediate(() => {
       const count = scanProject(sessionId, rootPath)
-      console.log(`[KnowledgeGraph] scanned ${count} symbols for session ${sessionId}`)
+      console.log(`[KnowledgeGraph] ${count} symbols`)
       broadcast({ type: 'knowledge_ready', sessionId, symbolCount: count })
+      // Also run contract check in background after symbols are scanned
+      try {
+        const report = runEnforcer(sessionId, rootPath)
+        console.log(`[ContractEnforcer] ${report.summary.violations} violations, ${report.summary.orphans} orphans`)
+        broadcast({ type: 'contract_ready', sessionId, summary: report.summary })
+      } catch (e) {
+        console.warn('[ContractEnforcer] scan failed:', e)
+      }
     })
     generateProjectSummary(sessionId, rootPath, scan).then(summary => broadcast({ type: 'project_summary', sessionId, summary }))
     return { success: true, isEmpty: scan.isEmpty, fileList: scan.fileList, fileTree: scan.fileTree, fileCount: scan.fileList.length }
@@ -199,25 +199,33 @@ async function bootstrap() {
     try { fs.writeFileSync(p, content ?? '', 'utf8'); return { success: true } } catch (e: any) { reply.status(500).send({ error: e.message }) }
   })
 
-  // ── Knowledge Graph endpoints ──────────────────────────────────────────────
-  server.get<{ Params: { sessionId: string } }>('/project/:sessionId/symbols', async (req) => {
-    return { symbols: getSymbols(req.params.sessionId) }
-  })
+  // ── Knowledge Graph ────────────────────────────────────────────────────────
+  server.get<{ Params: { sessionId: string } }>('/project/:sessionId/symbols', async (req) => ({ symbols: getSymbols(req.params.sessionId) }))
   server.get<{ Params: { sessionId: string }; Querystring: { q?: string } }>('/project/:sessionId/symbols/search', async (req) => {
     const q = req.query.q ?? ''
     return { symbols: q ? findSymbol(req.params.sessionId, q) : getSymbols(req.params.sessionId) }
   })
-  server.get<{ Params: { sessionId: string } }>('/project/:sessionId/symbols/summary', async (req) => {
-    return getSummary(req.params.sessionId)
-  })
-  server.get<{ Params: { sessionId: string } }>('/project/:sessionId/symbols/conflicts', async (req) => {
-    return { conflicts: getConflicts(req.params.sessionId) }
-  })
+  server.get<{ Params: { sessionId: string } }>('/project/:sessionId/symbols/summary', async (req) => getSummary(req.params.sessionId))
+  server.get<{ Params: { sessionId: string } }>('/project/:sessionId/symbols/conflicts', async (req) => ({ conflicts: getConflicts(req.params.sessionId) }))
   server.post<{ Params: { sessionId: string } }>('/project/:sessionId/symbols/rescan', async (req) => {
     const session = getSession(req.params.sessionId)
     if (!session?.rootPath) return { success: false, message: 'No rootPath' }
-    const count = scanProject(req.params.sessionId, session.rootPath)
-    return { success: true, symbolCount: count }
+    return { success: true, symbolCount: scanProject(req.params.sessionId, session.rootPath) }
+  })
+
+  // ── API Contract Enforcer ──────────────────────────────────────────────────
+  server.get<{ Params: { sessionId: string } }>('/project/:sessionId/contracts', async (req) => {
+    const cached = getCachedReport(req.params.sessionId)
+    if (cached) return cached
+    const session = getSession(req.params.sessionId)
+    if (!session?.rootPath) return { error: 'No rootPath', violations: [], orphans: [], summary: null }
+    return runEnforcer(req.params.sessionId, session.rootPath)
+  })
+  server.post<{ Params: { sessionId: string } }>('/project/:sessionId/contracts/rescan', async (req) => {
+    const session = getSession(req.params.sessionId)
+    if (!session?.rootPath) return { success: false, message: 'No rootPath' }
+    const report = runEnforcer(req.params.sessionId, session.rootPath)
+    return { success: true, summary: report.summary }
   })
 
   // ── Chat streaming ─────────────────────────────────────────────────────────
@@ -242,13 +250,12 @@ async function bootstrap() {
         if (!getSession(sessionId)) upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: selectedModel })
         const session = getSession(sessionId)
 
-        // Inject knowledge graph context for project sessions
-        const knowledgeContext = session?.type === 'project'
-          ? buildAgentContext(sessionId)
-          : undefined
+        const isProject = session?.type === 'project'
+        const knowledgeCtx = isProject ? buildAgentContext(sessionId)    : undefined
+        const contractCtx  = isProject ? buildContractContext(sessionId) : undefined
 
         const messages = [
-          { role: 'system' as ChatRole, content: buildSystemPrompt(selectedModel, session?.summary, knowledgeContext) },
+          { role: 'system' as ChatRole, content: buildSystemPrompt(selectedModel, session?.summary, knowledgeCtx, contractCtx) },
           ...mapHistory(history),
           { role: 'user' as ChatRole, content: message },
         ]
@@ -290,9 +297,7 @@ async function bootstrap() {
     const p = await orchestrator.createProject({ name, rootPath })
     return { success: true, project: { id: p.id, name: p.name, rootPath: p.rootPath } }
   })
-  server.get<{ Params: { projectId: string } }>('/projects/:projectId/agents', async (req) => {
-    return { agents: orchestrator.listAgents(req.params.projectId) }
-  })
+  server.get<{ Params: { projectId: string } }>('/projects/:projectId/agents', async (req) => ({ agents: orchestrator.listAgents(req.params.projectId) }))
   server.post<{ Params: { projectId: string }; Body: { name: string; role: string; allowedPaths?: string[] } }>('/projects/:projectId/agents', async (req) => {
     const { name, role, allowedPaths } = req.body
     if (!name || !role) return { success: false }

@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from 'react'
-import { ChevronRight, ChevronDown, Bot, GitBranch, LayoutDashboard, Plus, Loader, File, Folder, FolderOpen, Search, LucideIcon, Network, AlertTriangle, RefreshCw } from 'lucide-react'
+import { ChevronRight, ChevronDown, Bot, GitBranch, LayoutDashboard, Plus, Loader, File, Folder, FolderOpen, Search, LucideIcon, Network, AlertTriangle, RefreshCw, CheckCircle, XCircle, AlertCircle } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import AgentModal from './AgentModal'
 import ProjectGraph from './ProjectGraph'
@@ -8,9 +8,9 @@ interface RightSidebarProps {
   onOpenTerminal: (cwd: string) => void
 }
 
-interface TreeNode {
-  name: string; path: string; isDir: boolean; children: TreeNode[]; isNew: boolean
-}
+// ── File tree (unchanged) ─────────────────────────────────────────────────────
+
+interface TreeNode { name: string; path: string; isDir: boolean; children: TreeNode[]; isNew: boolean }
 
 function buildTree(files: string[], rootPath: string, newFiles: Set<string>): TreeNode[] {
   const root: TreeNode = { name: '', path: rootPath, isDir: true, children: [], isNew: false }
@@ -21,17 +21,11 @@ function buildTree(files: string[], rootPath: string, newFiles: Set<string>): Tr
     for (let i = 0; i < parts.length; i++) {
       const part = parts[i], isLast = i === parts.length - 1
       let child = node.children.find(c => c.name === part)
-      if (!child) {
-        child = { name: part, path: `${node.path}/${part}`, isDir: !isLast, children: [], isNew: newFiles.has(file) && isLast }
-        node.children.push(child)
-      }
+      if (!child) { child = { name: part, path: `${node.path}/${part}`, isDir: !isLast, children: [], isNew: newFiles.has(file) && isLast }; node.children.push(child) }
       if (!isLast) node = child
     }
   }
-  function sort(ns: TreeNode[]) {
-    ns.sort((a, b) => a.isDir !== b.isDir ? (a.isDir ? -1 : 1) : a.name.localeCompare(b.name))
-    ns.forEach(n => sort(n.children))
-  }
+  function sort(ns: TreeNode[]) { ns.sort((a, b) => a.isDir !== b.isDir ? (a.isDir ? -1 : 1) : a.name.localeCompare(b.name)); ns.forEach(n => sort(n.children)) }
   sort(root.children)
   return root.children
 }
@@ -43,20 +37,18 @@ function nodeMatchesFilter(node: TreeNode, filter: string): boolean {
 }
 
 function FileTreeNode({ node, depth = 0, filter }: { node: TreeNode; depth?: number; filter: string }) {
-  const [open, setOpen]  = useState(depth < 2)
-  const activeSessionId  = useAppStore(s => s.activeSessionId)
-  const openFileFn       = useAppStore(s => s.openFile)
+  const [open, setOpen] = useState(depth < 2)
+  const activeSessionId = useAppStore(s => s.activeSessionId)
+  const openFileFn      = useAppStore(s => s.openFile)
   if (!nodeMatchesFilter(node, filter)) return null
   const indent = depth * 12
   if (node.isDir) {
     const isOpen = filter ? true : open
     return (
       <div>
-        <div onClick={() => setOpen(!open)}
-          style={{ display:'flex', alignItems:'center', gap:3, padding:`2px 8px 2px ${8+indent}px`, cursor:'pointer', fontSize:12, color:'var(--text-secondary)', userSelect:'none' }}
+        <div onClick={() => setOpen(!open)} style={{ display:'flex', alignItems:'center', gap:3, padding:`2px 8px 2px ${8+indent}px`, cursor:'pointer', fontSize:12, color:'var(--text-secondary)', userSelect:'none' }}
           onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)'}
-          onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}
-        >
+          onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}>
           {isOpen ? <ChevronDown size={11} style={{flexShrink:0,opacity:0.5}}/> : <ChevronRight size={11} style={{flexShrink:0,opacity:0.5}}/>}
           {isOpen ? <FolderOpen size={13} style={{flexShrink:0,color:'#dcb67a'}}/> : <Folder size={13} style={{flexShrink:0,color:'#dcb67a'}}/>}
           <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{node.name}</span>
@@ -65,16 +57,13 @@ function FileTreeNode({ node, depth = 0, filter }: { node: TreeNode; depth?: num
       </div>
     )
   }
-  const ext = node.name.split('.').pop() ?? ''
-  const col = fileColor(ext)
+  const ext = node.name.split('.').pop() ?? '', col = fileColor(ext)
   const hl  = !!(filter && node.name.toLowerCase().includes(filter.toLowerCase()))
   return (
-    <div
-      style={{ display:'flex', alignItems:'center', gap:5, padding:`2px 8px 2px ${20+indent}px`, cursor:'pointer', fontSize:12, color:hl?'var(--accent)':node.isNew?'var(--green)':'var(--text-secondary)', background:hl?'var(--accent-dim)':'transparent' }}
+    <div style={{ display:'flex', alignItems:'center', gap:5, padding:`2px 8px 2px ${20+indent}px`, cursor:'pointer', fontSize:12, color:hl?'var(--accent)':node.isNew?'var(--green)':'var(--text-secondary)', background:hl?'var(--accent-dim)':'transparent' }}
       onClick={() => { if (activeSessionId) openFileFn(activeSessionId, node.path) }}
       onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = hl?'var(--accent-dim)':'var(--bg-hover)'}
-      onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = hl?'var(--accent-dim)':'transparent'}
-    >
+      onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = hl?'var(--accent-dim)':'transparent'}>
       <File size={12} style={{flexShrink:0,color:col}}/>
       <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}}>{node.name}</span>
       {node.isNew && <span style={{fontSize:9,color:'var(--green)',flexShrink:0}}>M</span>}
@@ -105,35 +94,23 @@ function AgentRow({ agentId, sessionId }: { agentId: string; sessionId: string }
   )
 }
 
-// ── Knowledge Graph / Symbols panel ──────────────────────────────────────────
+// ── Knowledge Graph panel (symbols) ──────────────────────────────────────────
 
 type SymbolKind = 'function'|'class'|'interface'|'type'|'enum'|'constant'|'component'|'route'
-
 interface SymbolNode { name: string; kind: SymbolKind; line: number; exported: boolean; file: string }
 interface Conflict   { name: string; kind: SymbolKind; files: string[] }
-interface GraphSummary {
-  totalSymbols: number
-  byKind:       Record<string, number>
-  byFile:       Array<{ file: string; count: number }>
-  conflicts:    Conflict[]
-}
+interface GraphSummary { totalSymbols: number; byKind: Record<string,number>; byFile: Array<{file:string;count:number}>; conflicts: Conflict[] }
 
-const KIND_COLOR: Record<string, string> = {
-  function:  '#3b82f6', class: '#8b5cf6', interface: '#06b6d4',
-  type:      '#a78bfa', enum:  '#f59e0b', constant:  '#94a3b8',
-  component: '#3dd68c', route: '#f97316',
-}
-const KIND_LETTER: Record<string, string> = {
-  function:'f', class:'C', interface:'I', type:'T', enum:'E', constant:'c', component:'R', route:'@',
-}
+const KIND_COLOR: Record<string,string> = { function:'#3b82f6',class:'#8b5cf6',interface:'#06b6d4',type:'#a78bfa',enum:'#f59e0b',constant:'#94a3b8',component:'#3dd68c',route:'#f97316' }
+const KIND_LETTER: Record<string,string> = { function:'f',class:'C',interface:'I',type:'T',enum:'E',constant:'c',component:'R',route:'@' }
 
 function SymbolsPanel({ sessionId }: { sessionId: string }) {
-  const [summary,   setSummary]   = useState<GraphSummary | null>(null)
-  const [symbols,   setSymbols]   = useState<SymbolNode[]>([])
-  const [search,    setSearch]    = useState('')
-  const [loading,   setLoading]   = useState(false)
-  const [tab,       setTab]       = useState<'symbols'|'conflicts'>('symbols')
-  const [kindFilter,setKindFilter]= useState<string>('all')
+  const [summary,    setSummary]    = useState<GraphSummary|null>(null)
+  const [symbols,    setSymbols]    = useState<SymbolNode[]>([])
+  const [search,     setSearch]     = useState('')
+  const [loading,    setLoading]    = useState(false)
+  const [tab,        setTab]        = useState<'symbols'|'conflicts'>('symbols')
+  const [kindFilter, setKindFilter] = useState('all')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -142,10 +119,8 @@ function SymbolsPanel({ sessionId }: { sessionId: string }) {
         fetch(`http://localhost:3001/project/${sessionId}/symbols/summary`),
         fetch(`http://localhost:3001/project/${sessionId}/symbols`),
       ])
-      const sum = await sumRes.json()
-      const sym = await symRes.json()
-      setSummary(sum)
-      setSymbols(sym.symbols ?? [])
+      setSummary(await sumRes.json())
+      setSymbols((await symRes.json()).symbols ?? [])
     } catch { }
     setLoading(false)
   }, [sessionId])
@@ -154,138 +129,202 @@ function SymbolsPanel({ sessionId }: { sessionId: string }) {
 
   async function rescan() {
     setLoading(true)
-    try {
-      await fetch(`http://localhost:3001/project/${sessionId}/symbols/rescan`, { method: 'POST' })
-      await load()
-    } catch { setLoading(false) }
+    try { await fetch(`http://localhost:3001/project/${sessionId}/symbols/rescan`, { method:'POST' }); await load() }
+    catch { setLoading(false) }
   }
 
-  const filtered = symbols.filter(s => {
-    if (kindFilter !== 'all' && s.kind !== kindFilter) return false
-    if (search && !s.name.toLowerCase().includes(search.toLowerCase())) return false
-    return true
-  })
-
-  const kinds = summary ? Object.keys(summary.byKind).filter(k => summary.byKind[k] > 0) : []
+  const filtered = symbols.filter(s => (kindFilter==='all' || s.kind===kindFilter) && (!search || s.name.toLowerCase().includes(search.toLowerCase())))
+  const kinds    = summary ? Object.keys(summary.byKind).filter(k => summary.byKind[k] > 0) : []
 
   return (
-    <div style={{ display:'flex', flexDirection:'column', flex:1, overflow:'hidden', minHeight:0 }}>
-      {/* Stats row */}
+    <div style={{display:'flex',flexDirection:'column',flex:1,overflow:'hidden',minHeight:0}}>
       {summary && (
-        <div style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 10px', borderBottom:'1px solid var(--border)', flexShrink:0 }}>
-          <span style={{ fontSize:11, color:'var(--text-primary)', fontWeight:500 }}>{summary.totalSymbols} symbols</span>
-          {summary.conflicts.length > 0 && (
-            <span style={{ display:'flex', alignItems:'center', gap:3, fontSize:10, color:'#f59e0b' }}>
-              <AlertTriangle size={10}/>{summary.conflicts.length} conflict{summary.conflicts.length>1?'s':''}
-            </span>
-          )}
-          <button onClick={rescan} title="Rescan project"
-            style={{ marginLeft:'auto', background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', display:'flex', padding:2 }}
+        <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',borderBottom:'1px solid var(--border)',flexShrink:0}}>
+          <span style={{fontSize:11,color:'var(--text-primary)',fontWeight:500}}>{summary.totalSymbols} symbols</span>
+          {summary.conflicts.length>0&&<span style={{display:'flex',alignItems:'center',gap:3,fontSize:10,color:'#f59e0b'}}><AlertTriangle size={10}/>{summary.conflicts.length} conflict{summary.conflicts.length>1?'s':''}</span>}
+          <button onClick={rescan} style={{marginLeft:'auto',background:'none',border:'none',cursor:'pointer',color:'var(--text-muted)',display:'flex',padding:2}}
             onMouseEnter={e=>(e.currentTarget as HTMLElement).style.color='var(--text-primary)'}
             onMouseLeave={e=>(e.currentTarget as HTMLElement).style.color='var(--text-muted)'}
-          ><RefreshCw size={11} style={{ animation: loading?'spin 1s linear infinite':'none' }}/></button>
+          ><RefreshCw size={11} style={{animation:loading?'spin 1s linear infinite':'none'}}/></button>
         </div>
       )}
-
-      {/* Tabs */}
-      <div style={{ display:'flex', borderBottom:'1px solid var(--border)', flexShrink:0 }}>
-        {(['symbols','conflicts'] as const).map(t => (
-          <button key={t} onClick={()=>setTab(t)}
-            style={{ padding:'4px 10px', border:'none', background:'transparent', cursor:'pointer', fontSize:10, fontWeight:tab===t?600:400, color:tab===t?'var(--accent)':'var(--text-muted)', borderBottom:tab===t?'2px solid var(--accent)':'2px solid transparent', textTransform:'capitalize' }}
-          >
+      <div style={{display:'flex',borderBottom:'1px solid var(--border)',flexShrink:0}}>
+        {(['symbols','conflicts'] as const).map(t=>(
+          <button key={t} onClick={()=>setTab(t)} style={{padding:'4px 10px',border:'none',background:'transparent',cursor:'pointer',fontSize:10,fontWeight:tab===t?600:400,color:tab===t?'var(--accent)':'var(--text-muted)',borderBottom:tab===t?'2px solid var(--accent)':'2px solid transparent',textTransform:'capitalize'}}>
             {t}{t==='conflicts'&&summary&&summary.conflicts.length>0?` (${summary.conflicts.length})`:''}
           </button>
         ))}
       </div>
-
-      {tab === 'symbols' ? (
+      {tab==='symbols'?(
         <>
-          {/* Search + kind filter */}
-          <div style={{ padding:'4px 8px', flexShrink:0 }}>
-            <input placeholder="Search symbols…" value={search} onChange={e=>setSearch(e.target.value)}
-              style={{ width:'100%', background:'var(--bg-tertiary)', border:'1px solid var(--border)', borderRadius:4, padding:'3px 8px', color:'var(--text-primary)', fontSize:11, outline:'none', boxSizing:'border-box' }}
-            />
+          <div style={{padding:'4px 8px',flexShrink:0}}>
+            <input placeholder="Search symbols…" value={search} onChange={e=>setSearch(e.target.value)} style={{width:'100%',background:'var(--bg-tertiary)',border:'1px solid var(--border)',borderRadius:4,padding:'3px 8px',color:'var(--text-primary)',fontSize:11,outline:'none',boxSizing:'border-box'}}/>
           </div>
-          {kinds.length > 1 && (
-            <div style={{ display:'flex', gap:4, padding:'0 8px 4px', flexWrap:'wrap', flexShrink:0 }}>
-              <button onClick={()=>setKindFilter('all')}
-                style={{ padding:'1px 7px', borderRadius:10, border:`1px solid ${kindFilter==='all'?'var(--accent)':'var(--border)'}`, background:kindFilter==='all'?'var(--accent-dim)':'transparent', color:kindFilter==='all'?'var(--accent)':'var(--text-muted)', fontSize:9, cursor:'pointer', fontWeight:kindFilter==='all'?600:400 }}
-              >all</button>
-              {kinds.map(k => (
-                <button key={k} onClick={()=>setKindFilter(k)}
-                  style={{ padding:'1px 7px', borderRadius:10, border:`1px solid ${kindFilter===k?(KIND_COLOR[k]??'var(--accent)'):'var(--border)'}`, background:kindFilter===k?`${KIND_COLOR[k]??'var(--accent)'}22`:'transparent', color:kindFilter===k?(KIND_COLOR[k]??'var(--accent)'):'var(--text-muted)', fontSize:9, cursor:'pointer', fontWeight:kindFilter===k?600:400 }}
-                >{k}</button>
+          {kinds.length>1&&(
+            <div style={{display:'flex',gap:4,padding:'0 8px 4px',flexWrap:'wrap',flexShrink:0}}>
+              <button onClick={()=>setKindFilter('all')} style={{padding:'1px 7px',borderRadius:10,border:`1px solid ${kindFilter==='all'?'var(--accent)':'var(--border)'}`,background:kindFilter==='all'?'var(--accent-dim)':'transparent',color:kindFilter==='all'?'var(--accent)':'var(--text-muted)',fontSize:9,cursor:'pointer',fontWeight:kindFilter==='all'?600:400}}>all</button>
+              {kinds.map(k=>(
+                <button key={k} onClick={()=>setKindFilter(k)} style={{padding:'1px 7px',borderRadius:10,border:`1px solid ${kindFilter===k?(KIND_COLOR[k]??'var(--accent)'):'var(--border)'}`,background:kindFilter===k?`${KIND_COLOR[k]??'var(--accent)'}22`:'transparent',color:kindFilter===k?(KIND_COLOR[k]??'var(--accent)'):'var(--text-muted)',fontSize:9,cursor:'pointer',fontWeight:kindFilter===k?600:400}}>{k}</button>
               ))}
             </div>
           )}
-
-          {/* Symbol list */}
-          <div style={{ flex:1, overflowY:'auto', paddingBottom:4 }}>
-            {loading && symbols.length===0 ? (
-              <div style={{ padding:'12px', fontSize:11, color:'var(--text-muted)', display:'flex', alignItems:'center', gap:6 }}>
-                <Loader size={11} style={{ animation:'spin 1s linear infinite' }}/> Scanning symbols…
-              </div>
-            ) : filtered.length===0 ? (
-              <div style={{ padding:'8px 12px', fontSize:11, color:'var(--text-muted)' }}>
-                {symbols.length===0 ? 'No symbols yet — open a project' : 'No matches'}
-              </div>
-            ) : (
-              filtered.slice(0, 200).map((s, i) => {
-                const rel = s.file.split('/').slice(-2).join('/')
-                const col = KIND_COLOR[s.kind] ?? '#888'
-                return (
-                  <div key={i} style={{ display:'flex', alignItems:'center', gap:6, padding:'3px 10px', cursor:'default' }}
-                    onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background='var(--bg-hover)'}
-                    onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background='transparent'}
-                  >
-                    {/* Kind badge */}
-                    <span style={{ width:14, height:14, borderRadius:3, background:`${col}22`, color:col, fontSize:9, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, fontFamily:'monospace' }}>
-                      {KIND_LETTER[s.kind]??'?'}
-                    </span>
-                    <span style={{ flex:1, fontSize:11, color:'var(--text-primary)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s.name}</span>
-                    {!s.exported && <span style={{ fontSize:9, color:'var(--text-muted)', flexShrink:0 }}>local</span>}
-                    <span style={{ fontSize:9, color:'var(--text-muted)', flexShrink:0, fontFamily:'monospace', maxWidth:90, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                      {rel}:{s.line}
-                    </span>
-                  </div>
-                )
-              })
-            )}
-            {filtered.length > 200 && (
-              <div style={{ padding:'4px 10px', fontSize:10, color:'var(--text-muted)' }}>
-                Showing 200 of {filtered.length} — refine search to see more
-              </div>
-            )}
+          <div style={{flex:1,overflowY:'auto',paddingBottom:4}}>
+            {loading&&symbols.length===0?<div style={{padding:'12px',fontSize:11,color:'var(--text-muted)',display:'flex',alignItems:'center',gap:6}}><Loader size={11} style={{animation:'spin 1s linear infinite'}}/>Scanning…</div>
+            :filtered.length===0?<div style={{padding:'8px 12px',fontSize:11,color:'var(--text-muted)'}}>{symbols.length===0?'No symbols yet':'No matches'}</div>
+            :filtered.slice(0,200).map((s,i)=>{
+              const rel=s.file.split('/').slice(-2).join('/'),col=KIND_COLOR[s.kind]??'#888'
+              return (
+                <div key={i} style={{display:'flex',alignItems:'center',gap:6,padding:'3px 10px'}}
+                  onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background='var(--bg-hover)'}
+                  onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background='transparent'}>
+                  <span style={{width:14,height:14,borderRadius:3,background:`${col}22`,color:col,fontSize:9,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,fontFamily:'monospace'}}>{KIND_LETTER[s.kind]??'?'}</span>
+                  <span style={{flex:1,fontSize:11,color:'var(--text-primary)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{s.name}</span>
+                  {!s.exported&&<span style={{fontSize:9,color:'var(--text-muted)',flexShrink:0}}>local</span>}
+                  <span style={{fontSize:9,color:'var(--text-muted)',flexShrink:0,fontFamily:'monospace',maxWidth:90,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{rel}:{s.line}</span>
+                </div>
+              )
+            })}
+            {filtered.length>200&&<div style={{padding:'4px 10px',fontSize:10,color:'var(--text-muted)'}}>Showing 200 of {filtered.length} — refine search</div>}
           </div>
         </>
-      ) : (
-        /* Conflicts tab */
-        <div style={{ flex:1, overflowY:'auto' }}>
-          {!summary || summary.conflicts.length===0 ? (
-            <div style={{ padding:'12px', fontSize:11, color:'var(--green)', display:'flex', alignItems:'center', gap:6 }}>
-              ✓ No conflicts detected
-            </div>
-          ) : (
-            summary.conflicts.map((c, i) => (
-              <div key={i} style={{ padding:'8px 10px', borderBottom:'1px solid var(--border)' }}>
-                <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:4 }}>
-                  <AlertTriangle size={11} style={{ color:'#f59e0b', flexShrink:0 }}/>
-                  <span style={{ fontSize:12, fontWeight:500, color:'var(--text-primary)' }}>{c.name}</span>
-                  <span style={{ fontSize:9, color:KIND_COLOR[c.kind]??'#888', background:`${KIND_COLOR[c.kind]??'#888'}22`, padding:'1px 5px', borderRadius:4 }}>{c.kind}</span>
+      ):(
+        <div style={{flex:1,overflowY:'auto'}}>
+          {!summary||summary.conflicts.length===0
+            ?<div style={{padding:'12px',fontSize:11,color:'var(--green)',display:'flex',alignItems:'center',gap:6}}>✓ No conflicts</div>
+            :summary.conflicts.map((c,i)=>(
+              <div key={i} style={{padding:'8px 10px',borderBottom:'1px solid var(--border)'}}>
+                <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:4}}>
+                  <AlertTriangle size={11} style={{color:'#f59e0b',flexShrink:0}}/>
+                  <span style={{fontSize:12,fontWeight:500,color:'var(--text-primary)'}}>{c.name}</span>
+                  <span style={{fontSize:9,color:KIND_COLOR[c.kind]??'#888',background:`${KIND_COLOR[c.kind]??'#888'}22`,padding:'1px 5px',borderRadius:4}}>{c.kind}</span>
                 </div>
-                <div style={{ fontSize:10, color:'var(--text-muted)', paddingLeft:17 }}>
-                  Defined in {c.files.length} files:
-                  {c.files.map((f, fi) => (
-                    <div key={fi} style={{ color:'var(--text-secondary)', fontFamily:'monospace', fontSize:10 }}>
-                      {f.split('/').slice(-2).join('/')}
-                    </div>
-                  ))}
+                <div style={{fontSize:10,color:'var(--text-muted)',paddingLeft:17}}>
+                  {c.files.map((f,fi)=><div key={fi} style={{color:'var(--text-secondary)',fontFamily:'monospace',fontSize:10}}>{f.split('/').slice(-2).join('/')}</div>)}
                 </div>
               </div>
             ))
-          )}
+          }
         </div>
       )}
+    </div>
+  )
+}
+
+// ── API Contract Enforcer panel ───────────────────────────────────────────────
+
+interface ApiCall    { method:string; path:string; file:string; line:number }
+interface ApiRoute   { method:string; path:string; file:string; line:number }
+interface Violation  { kind:'missing_route'|'method_mismatch'; call:ApiCall; similar:ApiRoute[] }
+interface ContractSummary { totalCalls:number; totalRoutes:number; matched:number; violations:number; orphans:number; health:'good'|'warn'|'bad' }
+interface ContractReport  { calls:ApiCall[]; routes:ApiRoute[]; violations:Violation[]; orphans:{route:ApiRoute}[]; summary:ContractSummary }
+
+const METHOD_COLOR: Record<string,string> = { GET:'#3dd68c',POST:'#3b82f6',PUT:'#f59e0b',DELETE:'#ef4444',PATCH:'#a78bfa',ANY:'#94a3b8' }
+
+function ContractsPanel({ sessionId }: { sessionId: string }) {
+  const [report,  setReport]  = useState<ContractReport|null>(null)
+  const [loading, setLoading] = useState(false)
+  const [tab,     setTab]     = useState<'violations'|'routes'|'calls'>('violations')
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await fetch(`http://localhost:3001/project/${sessionId}/contracts`)
+      setReport(await res.json())
+    } catch { }
+    setLoading(false)
+  }, [sessionId])
+
+  async function rescan() {
+    setLoading(true)
+    try { await fetch(`http://localhost:3001/project/${sessionId}/contracts/rescan`, { method:'POST' }); await load() }
+    catch { setLoading(false) }
+  }
+
+  useEffect(() => { load() }, [load])
+
+  const health     = report?.summary?.health
+  const healthIcon = health==='good' ? <CheckCircle size={11} style={{color:'var(--green)'}}/>
+    : health==='warn' ? <AlertCircle size={11} style={{color:'#f59e0b'}}/>
+    : <XCircle size={11} style={{color:'var(--red)'}}/>
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',flex:1,overflow:'hidden',minHeight:0}}>
+      {/* Summary bar */}
+      {report?.summary&&(
+        <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',borderBottom:'1px solid var(--border)',flexShrink:0,flexWrap:'wrap'}}>
+          {healthIcon}
+          <span style={{fontSize:11,color:'var(--text-primary)',fontWeight:500}}>
+            {report.summary.violations===0?'No violations':`${report.summary.violations} violation${report.summary.violations>1?'s':''}`}
+          </span>
+          <span style={{fontSize:10,color:'var(--text-muted)'}}>{report.summary.totalCalls} calls · {report.summary.totalRoutes} routes</span>
+          <button onClick={rescan} style={{marginLeft:'auto',background:'none',border:'none',cursor:'pointer',color:'var(--text-muted)',display:'flex',padding:2}}
+            onMouseEnter={e=>(e.currentTarget as HTMLElement).style.color='var(--text-primary)'}
+            onMouseLeave={e=>(e.currentTarget as HTMLElement).style.color='var(--text-muted)'}
+          ><RefreshCw size={11} style={{animation:loading?'spin 1s linear infinite':'none'}}/></button>
+        </div>
+      )}
+
+      {/* Tabs */}
+      <div style={{display:'flex',borderBottom:'1px solid var(--border)',flexShrink:0}}>
+        {(['violations','routes','calls'] as const).map(t=>(
+          <button key={t} onClick={()=>setTab(t)} style={{padding:'4px 10px',border:'none',background:'transparent',cursor:'pointer',fontSize:10,fontWeight:tab===t?600:400,color:tab===t?'var(--accent)':'var(--text-muted)',borderBottom:tab===t?'2px solid var(--accent)':'2px solid transparent',textTransform:'capitalize'}}>
+            {t}{t==='violations'&&report&&report.summary.violations>0?` (${report.summary.violations})`:''}
+          </button>
+        ))}
+      </div>
+
+      {/* Content */}
+      <div style={{flex:1,overflowY:'auto'}}>
+        {loading&&!report?<div style={{padding:'12px',fontSize:11,color:'var(--text-muted)',display:'flex',alignItems:'center',gap:6}}><Loader size={11} style={{animation:'spin 1s linear infinite'}}/>Scanning contracts…</div>
+        :tab==='violations'?(
+          !report||report.violations.length===0
+            ?<div style={{padding:'12px',fontSize:11,color:'var(--green)',display:'flex',alignItems:'center',gap:6}}><CheckCircle size={13}/>All frontend calls have matching backend routes</div>
+            :report.violations.map((v,i)=>{
+              const isMissing = v.kind==='missing_route'
+              return (
+                <div key={i} style={{padding:'8px 10px',borderBottom:'1px solid var(--border)'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:3}}>
+                    <span style={{fontSize:9,fontWeight:700,padding:'1px 5px',borderRadius:4,background:`${METHOD_COLOR[v.call.method]??'#888'}22`,color:METHOD_COLOR[v.call.method]??'#888',flexShrink:0}}>{v.call.method}</span>
+                    <span style={{fontSize:11,fontWeight:500,color:'var(--text-primary)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1,fontFamily:'monospace'}}>{v.call.path}</span>
+                    <span style={{fontSize:9,color:isMissing?'var(--red)':'#f59e0b',flexShrink:0,fontWeight:600}}>{isMissing?'MISSING':'WRONG METHOD'}</span>
+                  </div>
+                  <div style={{fontSize:10,color:'var(--text-muted)',paddingLeft:4}}>
+                    Called in: <span style={{fontFamily:'monospace',color:'var(--text-secondary)'}}>{v.call.file.split('/').slice(-2).join('/')}:{v.call.line}</span>
+                  </div>
+                  {v.similar.length>0&&(
+                    <div style={{fontSize:10,color:'var(--text-muted)',paddingLeft:4,marginTop:2}}>
+                      Route exists as: {v.similar.map(r=>`${r.method} ${r.path.split('/').slice(-2).join('/')}`).join(', ')}
+                    </div>
+                  )}
+                </div>
+              )
+            })
+        ):tab==='routes'?(
+          !report||report.routes.length===0
+            ?<div style={{padding:'8px 12px',fontSize:11,color:'var(--text-muted)'}}>No backend routes found</div>
+            :report.routes.map((r,i)=>(
+              <div key={i} style={{display:'flex',alignItems:'center',gap:6,padding:'4px 10px'}}
+                onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background='var(--bg-hover)'}
+                onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background='transparent'}>
+                <span style={{fontSize:9,fontWeight:700,padding:'1px 5px',borderRadius:4,background:`${METHOD_COLOR[r.method]??'#888'}22`,color:METHOD_COLOR[r.method]??'#888',flexShrink:0,minWidth:36,textAlign:'center'}}>{r.method}</span>
+                <span style={{fontSize:11,color:'var(--text-primary)',fontFamily:'monospace',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}}>{r.path}</span>
+                <span style={{fontSize:9,color:'var(--text-muted)',flexShrink:0,fontFamily:'monospace'}}>{r.file.split('/').pop()}:{r.line}</span>
+              </div>
+            ))
+        ):(
+          !report||report.calls.length===0
+            ?<div style={{padding:'8px 12px',fontSize:11,color:'var(--text-muted)'}}>No frontend API calls found</div>
+            :report.calls.map((c,i)=>(
+              <div key={i} style={{display:'flex',alignItems:'center',gap:6,padding:'4px 10px'}}
+                onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background='var(--bg-hover)'}
+                onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background='transparent'}>
+                <span style={{fontSize:9,fontWeight:700,padding:'1px 5px',borderRadius:4,background:`${METHOD_COLOR[c.method]??'#888'}22`,color:METHOD_COLOR[c.method]??'#888',flexShrink:0,minWidth:36,textAlign:'center'}}>{c.method}</span>
+                <span style={{fontSize:11,color:'var(--text-primary)',fontFamily:'monospace',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}}>{c.path}</span>
+                <span style={{fontSize:9,color:'var(--text-muted)',flexShrink:0,fontFamily:'monospace'}}>{c.file.split('/').pop()}:{c.line}</span>
+              </div>
+            ))
+        )}
+      </div>
     </div>
   )
 }
@@ -301,24 +340,21 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
   const [fileSearch,       setFileSearch]       = useState('')
   const [showSearch,       setShowSearch]        = useState(false)
   const [showAgentModal,   setShowAgentModal]    = useState(false)
-  const [open,  setOpen]  = useState({ explorer:true, git:false, agents:true, symbols:false, graph:true })
+  const [open,  setOpen]  = useState({ explorer:true, contracts:false, agents:true, symbols:false, graph:true })
   const [maxId, setMaxId] = useState<string|null>(null)
-  const [graphFullscreenAt, setGraphFullscreenAt] = useState<number | null>(null)
+  const [graphFullscreenAt, setGraphFullscreenAt] = useState<number|null>(null)
 
   const allFiles    = session?.allFiles    ?? []
   const written     = session?.writtenFiles ?? []
-  const mergedFiles = useMemo(() => [...new Set([...allFiles, ...written])], [allFiles.join(','), written.join(',')])
+  const mergedFiles = useMemo(() => [...new Set([...allFiles,...written])], [allFiles.join(','),written.join(',')])
   const newFileSet  = useMemo(() => new Set(written), [written.join(',')])
-  const tree        = useMemo(
-    () => session?.rootPath ? buildTree(mergedFiles, session.rootPath, newFileSet) : [],
-    [mergedFiles.join(','), session?.rootPath, written.join(',')]
-  )
+  const tree        = useMemo(() => session?.rootPath ? buildTree(mergedFiles, session.rootPath, newFileSet) : [], [mergedFiles.join(','),session?.rootPath,written.join(',')])
 
   if (!rightExpanded) {
-    const hasRunning = session?.agents.some(a => a.status === 'running')
+    const hasRunning = session?.agents.some(a => a.status==='running')
     return (
       <div style={{width:40,background:'var(--bg-secondary)',borderLeft:'1px solid var(--border)',display:'flex',flexDirection:'column',alignItems:'center',paddingTop:10,gap:6,height:'100%'}}>
-        {([{Icon:FolderOpen,label:'Files',dot:false},{Icon:GitBranch,label:'Git',dot:false},{Icon:Bot,label:'Agents',dot:!!hasRunning},{Icon:Network,label:'Symbols',dot:false}] as {Icon:LucideIcon,label:string,dot:boolean}[]).map(({Icon,label,dot})=>(
+        {([{Icon:FolderOpen,label:'Files',dot:false},{Icon:GitBranch,label:'Contracts',dot:false},{Icon:Bot,label:'Agents',dot:!!hasRunning},{Icon:Network,label:'Symbols',dot:false}] as {Icon:LucideIcon,label:string,dot:boolean}[]).map(({Icon,label,dot})=>(
           <div key={label} title={label} style={{position:'relative'}}>
             <button className="icon-btn" style={{width:32,height:32}}><Icon size={15}/></button>
             {dot&&<span style={{position:'absolute',top:5,right:5,width:5,height:5,borderRadius:'50%',background:'var(--green)',boxShadow:'0 0 4px var(--green)'}}/>}
@@ -328,100 +364,51 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
     )
   }
 
-  function toggleOpen(id: string) {
-    if (maxId===id) { setMaxId(null); return }
-    setOpen(p => ({ ...p, [id]: !(p as any)[id] }))
-  }
-  function toggleMax(id: string) {
-    if (maxId===id) { setMaxId(null) }
-    else            { setMaxId(id); setOpen(p => ({ ...p, [id]: true })) }
-  }
-  function isExp(id: string): boolean {
-    return maxId ? maxId===id : (open as any)[id]
-  }
+  function toggleOpen(id: string) { if (maxId===id) { setMaxId(null); return }; setOpen(p => ({ ...p, [id]: !(p as any)[id] })) }
+  function toggleMax(id: string) { if (maxId===id) { setMaxId(null) } else { setMaxId(id); setOpen(p => ({ ...p, [id]: true })) } }
+  function isExp(id: string) { return maxId ? maxId===id : (open as any)[id] }
   function secStyle(id: string): React.CSSProperties {
-    const base: React.CSSProperties = { display:'flex', flexDirection:'column', overflow:'hidden', borderBottom:'1px solid var(--border)' }
-    if (maxId) {
-      if (maxId===id) return { ...base, flex:1, minHeight:0 }
-      return { ...base, flexShrink:0, height:HDR }
-    }
-    if ((open as any)[id]) {
-      const w: Record<string,number> = { explorer:3, git:0.4, agents:1, symbols:2, graph:1 }
-      return { ...base, flex: w[id]??1, minHeight: HDR+40 }
-    }
-    return { ...base, flexShrink:0, height:HDR }
+    const base: React.CSSProperties = { display:'flex',flexDirection:'column',overflow:'hidden',borderBottom:'1px solid var(--border)' }
+    if (maxId) return maxId===id ? {...base,flex:1,minHeight:0} : {...base,flexShrink:0,height:HDR}
+    return (open as any)[id] ? {...base,flex:({explorer:3,contracts:2,agents:1,symbols:2,graph:1} as any)[id]??1,minHeight:HDR+40} : {...base,flexShrink:0,height:HDR}
   }
 
-  const sections: Array<{ id:string; Icon:LucideIcon; title:string; extra?:React.ReactNode; body:React.ReactNode }> = [
+  const sections: Array<{id:string;Icon:LucideIcon;title:string;extra?:React.ReactNode;body:React.ReactNode}> = [
     {
       id:'explorer', Icon:FolderOpen,
       title:`Explorer${mergedFiles.length>0?` (${mergedFiles.length})`:''}`,
-      extra:(
-        <button className="icon-btn" style={{width:16,height:16}} title="Search"
-          onClick={e=>{e.stopPropagation();setShowSearch(v=>!v)}}>
-          <Search size={10}/>
-        </button>
-      ),
+      extra:<button className="icon-btn" style={{width:16,height:16}} onClick={e=>{e.stopPropagation();setShowSearch(v=>!v)}}><Search size={10}/></button>,
       body:(
         <>
-          {showSearch&&(
-            <input autoFocus placeholder="Search files…" value={fileSearch} onChange={e=>setFileSearch(e.target.value)}
-              style={{flexShrink:0,margin:'4px 8px',background:'var(--bg-tertiary)',border:'1px solid var(--border)',borderRadius:4,padding:'3px 8px',color:'var(--text-primary)',fontSize:11,outline:'none'}}/>
-          )}
+          {showSearch&&<input autoFocus placeholder="Search files…" value={fileSearch} onChange={e=>setFileSearch(e.target.value)} style={{flexShrink:0,margin:'4px 8px',background:'var(--bg-tertiary)',border:'1px solid var(--border)',borderRadius:4,padding:'3px 8px',color:'var(--text-primary)',fontSize:11,outline:'none'}}/>}
           <div style={{flex:1,overflowY:'auto',overflowX:'hidden',paddingBottom:4}}>
-            {tree.length===0
-              ? <div style={{padding:'8px 12px',fontSize:11,color:'var(--text-muted)'}}>No files yet</div>
-              : tree.map(n=><FileTreeNode key={n.path} node={n} depth={0} filter={fileSearch}/>)
-            }
+            {tree.length===0?<div style={{padding:'8px 12px',fontSize:11,color:'var(--text-muted)'}}>No files yet</div>:tree.map(n=><FileTreeNode key={n.path} node={n} depth={0} filter={fileSearch}/>)}
           </div>
         </>
       ),
     },
     {
-      id:'git', Icon:GitBranch, title:'Source Control', extra:undefined,
-      body:<div style={{padding:'8px 12px',fontSize:11,color:'var(--text-muted)'}}>Git integration — Phase 3</div>,
+      id:'contracts', Icon:GitBranch, title:'API Contracts',
+      body: session ? <ContractsPanel sessionId={session.id}/> : <div style={{padding:'8px 12px',fontSize:11,color:'var(--text-muted)'}}>Open a project to check contracts</div>,
     },
     {
-      id:'agents', Icon:Bot,
-      title:`Agents (${session?.agents.length??0})`,
-      extra: session?.type==='project'?(
-        <button className="icon-btn" style={{width:16,height:16}} title="Add agent"
-          onClick={e=>{e.stopPropagation();setShowAgentModal(true)}}><Plus size={10}/></button>
-      ):undefined,
+      id:'agents', Icon:Bot, title:`Agents (${session?.agents.length??0})`,
+      extra: session?.type==='project'?<button className="icon-btn" style={{width:16,height:16}} onClick={e=>{e.stopPropagation();setShowAgentModal(true)}}><Plus size={10}/></button>:undefined,
       body:(
         <div style={{flex:1,overflowY:'auto'}}>
-          {(!session||session.agents.length===0)?(
-            session?.type==='project'?(
-              <div style={{padding:'8px 12px'}}>
-                <div style={{fontSize:11,color:'var(--text-muted)',marginBottom:8}}>No agents yet.</div>
-                <button onClick={()=>setShowAgentModal(true)}
-                  style={{display:'flex',alignItems:'center',gap:6,width:'100%',padding:'6px 10px',background:'var(--accent)',border:'none',borderRadius:6,color:'white',fontSize:11,fontWeight:500,cursor:'pointer',justifyContent:'center'}}>
-                  <Plus size={12}/> Add first agent
-                </button>
-              </div>
-            ):<div style={{padding:'8px 12px',fontSize:11,color:'var(--text-muted)'}}>Available in project sessions</div>
-          ):(
-            <>
-              {session.agents.map(a=><AgentRow key={a.id} agentId={a.id} sessionId={session.id}/>)}
-              <button onClick={()=>setShowAgentModal(true)}
-                style={{display:'flex',alignItems:'center',gap:5,margin:'5px 10px',padding:'4px 8px',background:'transparent',border:'1px dashed var(--border-light)',borderRadius:5,color:'var(--text-muted)',fontSize:11,cursor:'pointer',width:'calc(100% - 20px)',justifyContent:'center'}}>
-                <Plus size={10}/> Add agent
-              </button>
-            </>
+          {(!session||session.agents.length===0)?(session?.type==='project'?(<div style={{padding:'8px 12px'}}><div style={{fontSize:11,color:'var(--text-muted)',marginBottom:8}}>No agents yet.</div><button onClick={()=>setShowAgentModal(true)} style={{display:'flex',alignItems:'center',gap:6,width:'100%',padding:'6px 10px',background:'var(--accent)',border:'none',borderRadius:6,color:'white',fontSize:11,fontWeight:500,cursor:'pointer',justifyContent:'center'}}><Plus size={12}/> Add first agent</button></div>):<div style={{padding:'8px 12px',fontSize:11,color:'var(--text-muted)'}}>Available in project sessions</div>):(
+            <>{session.agents.map(a=><AgentRow key={a.id} agentId={a.id} sessionId={session.id}/>)}<button onClick={()=>setShowAgentModal(true)} style={{display:'flex',alignItems:'center',gap:5,margin:'5px 10px',padding:'4px 8px',background:'transparent',border:'1px dashed var(--border-light)',borderRadius:5,color:'var(--text-muted)',fontSize:11,cursor:'pointer',width:'calc(100% - 20px)',justifyContent:'center'}}><Plus size={10}/> Add agent</button></>
           )}
         </div>
       ),
     },
     {
       id:'symbols', Icon:Network, title:'Knowledge Graph',
-      body: session ? <SymbolsPanel sessionId={session.id} /> : <div style={{padding:'8px 12px',fontSize:11,color:'var(--text-muted)'}}>Open a project to see symbols</div>,
+      body: session ? <SymbolsPanel sessionId={session.id}/> : <div style={{padding:'8px 12px',fontSize:11,color:'var(--text-muted)'}}>Open a project to see symbols</div>,
     },
     {
       id:'graph', Icon:LayoutDashboard, title:'Project Graph',
-      extra:(
-        <button className="icon-btn" style={{width:16,height:16}} title="Fullscreen"
-          onClick={e=>{e.stopPropagation();setGraphFullscreenAt(Date.now())}}>⤢</button>
-      ),
+      extra:<button className="icon-btn" style={{width:16,height:16}} onClick={e=>{e.stopPropagation();setGraphFullscreenAt(Date.now())}}>⤢</button>,
       body:<ProjectGraph files={mergedFiles} rootPath={session?.rootPath??''}/>,
     },
   ]
@@ -430,55 +417,34 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
     <div style={{background:'var(--bg-secondary)',borderLeft:'1px solid var(--border)',display:'flex',flexDirection:'column',height:'100%',overflow:'hidden'}}>
       <div style={{height:32,flexShrink:0,padding:'0 12px',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',gap:6}}>
         <LayoutDashboard size={12} style={{color:'var(--text-muted)',flexShrink:0}}/>
-        <span style={{fontSize:11,fontWeight:600,color:'var(--text-primary)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}}>
-          {session?.rootPath?.split('/').pop()??session?.title??'No project open'}
-        </span>
-        {session?.type==='project'&&!session.summary&&session.rootPath&&(
-          <Loader size={10} style={{animation:'spin 1s linear infinite',flexShrink:0,color:'var(--text-muted)'}}/>
-        )}
+        <span style={{fontSize:11,fontWeight:600,color:'var(--text-primary)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}}>{session?.rootPath?.split('/').pop()??session?.title??'No project open'}</span>
+        {session?.type==='project'&&!session.summary&&session.rootPath&&<Loader size={10} style={{animation:'spin 1s linear infinite',flexShrink:0,color:'var(--text-muted)'}}/>}
       </div>
 
       <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',minHeight:0}}>
         {sections.map(sec => {
-          const exp   = isExp(sec.id)
-          const isMax = maxId===sec.id
+          const exp=isExp(sec.id), isMax=maxId===sec.id
           return (
             <div key={sec.id} style={secStyle(sec.id)}>
-              <div
-                onClick={()=>toggleOpen(sec.id)}
-                style={{ height:HDR, flexShrink:0, display:'flex', alignItems:'center', gap:5, padding:'0 10px', cursor:'pointer', userSelect:'none', borderBottom: exp ? '1px solid var(--border)' : 'none', background: isMax ? 'var(--accent-dim)' : 'transparent' }}
+              <div onClick={()=>toggleOpen(sec.id)} style={{height:HDR,flexShrink:0,display:'flex',alignItems:'center',gap:5,padding:'0 10px',cursor:'pointer',userSelect:'none',borderBottom:exp?'1px solid var(--border)':'none',background:isMax?'var(--accent-dim)':'transparent'}}
                 onMouseEnter={e=>{if(!isMax)(e.currentTarget as HTMLElement).style.background='var(--bg-hover)'}}
-                onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.background=isMax?'var(--accent-dim)':'transparent'}}
-              >
-                {exp ? <ChevronDown size={10} style={{color:'var(--text-muted)',flexShrink:0}}/> : <ChevronRight size={10} style={{color:'var(--text-muted)',flexShrink:0}}/>}
+                onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.background=isMax?'var(--accent-dim)':'transparent'}}>
+                {exp?<ChevronDown size={10} style={{color:'var(--text-muted)',flexShrink:0}}/>:<ChevronRight size={10} style={{color:'var(--text-muted)',flexShrink:0}}/>}
                 <sec.Icon size={12} style={{color:isMax?'var(--accent)':'var(--text-muted)',flexShrink:0}}/>
-                <span style={{flex:1,fontSize:10,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.06em',color:isMax?'var(--accent)':'var(--text-muted)'}}>
-                  {sec.title}
-                </span>
+                <span style={{flex:1,fontSize:10,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.06em',color:isMax?'var(--accent)':'var(--text-muted)'}}>{sec.title}</span>
                 {sec.extra&&<div onClick={e=>e.stopPropagation()}>{sec.extra}</div>}
-                <button onClick={e=>{e.stopPropagation();toggleMax(sec.id)}}
-                  style={{background:'none',border:'none',cursor:'pointer',color:isMax?'var(--accent)':'var(--text-muted)',padding:'0 2px',display:'flex',fontSize:11,lineHeight:1}}
-                  title={isMax?'Restore':'Maximise'}
-                >{isMax?'▾':'▸'}</button>
+                <button onClick={e=>{e.stopPropagation();toggleMax(sec.id)}} style={{background:'none',border:'none',cursor:'pointer',color:isMax?'var(--accent)':'var(--text-muted)',padding:'0 2px',display:'flex',fontSize:11,lineHeight:1}}>{isMax?'▾':'▸'}</button>
               </div>
-              {exp&&(
-                <div style={{flex:1,overflow:'hidden',minHeight:0,display:'flex',flexDirection:'column'}}>
-                  {sec.body}
-                </div>
-              )}
+              {exp&&<div style={{flex:1,overflow:'hidden',minHeight:0,display:'flex',flexDirection:'column'}}>{sec.body}</div>}
             </div>
           )
         })}
       </div>
 
-      {showAgentModal&&session&&(
-        <AgentModal sessionId={session.id} projectId={session.id} onClose={()=>setShowAgentModal(false)}/>
-      )}
-      {graphFullscreenAt !== null && session && (
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.88)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:300}}
-          onClick={()=>setGraphFullscreenAt(null)}>
-          <div style={{background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:12,padding:16,width:'86vw',height:'86vh',display:'flex',flexDirection:'column',gap:8}}
-            onClick={e=>e.stopPropagation()}>
+      {showAgentModal&&session&&<AgentModal sessionId={session.id} projectId={session.id} onClose={()=>setShowAgentModal(false)}/>}
+      {graphFullscreenAt!==null&&session&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.88)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:300}} onClick={()=>setGraphFullscreenAt(null)}>
+          <div style={{background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:12,padding:16,width:'86vw',height:'86vh',display:'flex',flexDirection:'column',gap:8}} onClick={e=>e.stopPropagation()}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexShrink:0}}>
               <span style={{fontSize:13,fontWeight:600,color:'var(--text-primary)'}}>Project graph — {session.title}</span>
               <button className="icon-btn" onClick={()=>setGraphFullscreenAt(null)} style={{width:26,height:26}}>✕</button>
