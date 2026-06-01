@@ -17,7 +17,7 @@ import { scanProjectFiles, generateProjectSummary } from './mcp/ProjectScanner.j
 import { connectMCP } from './mcp/MCPClient.js'
 import { scanProject, updateFile, getSymbols, findSymbol, getSummary, getConflicts, buildAgentContext, clearGraph } from './knowledge/KnowledgeGraph.js'
 import { runEnforcer, getCachedReport, clearReport, buildContractContext } from './knowledge/ContractEnforcer.js'
-import { getStatus, getLog, getBranches, getDiff, getCommitDiff, isGitRepo } from './git/GitReader.js'
+import { getStatus, getLog, getBranches, getDiff, getCommitDiff } from './git/GitReader.js'
 
 type ChatRole = 'system' | 'user' | 'assistant'
 
@@ -42,7 +42,22 @@ function detectShell(): string {
   return '/bin/sh'
 }
 
+// Get LAN IP — the address your phone needs to reach this machine
+function getLanIp(): string {
+  const nets = os.networkInterfaces()
+  for (const name of Object.keys(nets)) {
+    // Skip loopback and virtual adapters
+    if (name.toLowerCase().includes('lo') || name.toLowerCase().includes('utun') ||
+        name.toLowerCase().includes('vmnet') || name.toLowerCase().includes('veth')) continue
+    for (const net of nets[name] ?? []) {
+      if (net.family === 'IPv4' && !net.internal) return net.address
+    }
+  }
+  return '127.0.0.1'
+}
+
 const DEFAULT_SHELL = detectShell()
+const LAN_IP        = getLanIp()
 
 function broadcast(data: object) {
   const msg = JSON.stringify(data)
@@ -135,6 +150,13 @@ async function bootstrap() {
     return { success: true }
   })
 
+  // ── Network info — returns LAN IP for QR preview feature ──────────────────
+  server.get('/network/info', async () => ({
+    lanIp:    LAN_IP,
+    hostname: os.hostname(),
+    platform: os.platform(),
+  }))
+
   // ── Models ─────────────────────────────────────────────────────────────────
   server.get('/models', async () => { try { return { models: await getInstalledModels() } } catch { return { error: 'Ollama not reachable', models: [] } } })
   server.get('/models/stats', async () => { try { return await getModelStats() } catch (e: any) { return { error: e.message } } })
@@ -171,12 +193,8 @@ async function bootstrap() {
     const scan = scanProjectFiles(rootPath)
     setImmediate(() => {
       const count = scanProject(sessionId, rootPath)
-      console.log(`[KnowledgeGraph] ${count} symbols`)
       broadcast({ type: 'knowledge_ready', sessionId, symbolCount: count })
-      try {
-        const report = runEnforcer(sessionId, rootPath)
-        broadcast({ type: 'contract_ready', sessionId, summary: report.summary })
-      } catch { }
+      try { const report = runEnforcer(sessionId, rootPath); broadcast({ type: 'contract_ready', sessionId, summary: report.summary }) } catch { }
     })
     generateProjectSummary(sessionId, rootPath, scan).then(summary => broadcast({ type: 'project_summary', sessionId, summary }))
     return { success: true, isEmpty: scan.isEmpty, fileList: scan.fileList, fileTree: scan.fileTree, fileCount: scan.fileList.length }
@@ -206,7 +224,7 @@ async function bootstrap() {
   server.get<{ Params: { sessionId: string } }>('/project/:sessionId/symbols/conflicts', async (req) => ({ conflicts: getConflicts(req.params.sessionId) }))
   server.post<{ Params: { sessionId: string } }>('/project/:sessionId/symbols/rescan', async (req) => {
     const session = getSession(req.params.sessionId)
-    if (!session?.rootPath) return { success: false, message: 'No rootPath' }
+    if (!session?.rootPath) return { success: false }
     return { success: true, symbolCount: scanProject(req.params.sessionId, session.rootPath) }
   })
 
@@ -220,9 +238,8 @@ async function bootstrap() {
   })
   server.post<{ Params: { sessionId: string } }>('/project/:sessionId/contracts/rescan', async (req) => {
     const session = getSession(req.params.sessionId)
-    if (!session?.rootPath) return { success: false, message: 'No rootPath' }
-    const report = runEnforcer(req.params.sessionId, session.rootPath)
-    return { success: true, summary: report.summary }
+    if (!session?.rootPath) return { success: false }
+    return { success: true, summary: runEnforcer(req.params.sessionId, session.rootPath).summary }
   })
 
   // ── Git endpoints ──────────────────────────────────────────────────────────
@@ -235,9 +252,7 @@ async function bootstrap() {
   server.get<{ Params: { sessionId: string }; Querystring: { limit?: string; branch?: string } }>('/project/:sessionId/git/log', async (req) => {
     const session = getSession(req.params.sessionId)
     if (!session?.rootPath) return { commits: [] }
-    const limit  = Math.min(parseInt(req.query.limit ?? '50'), 200)
-    const branch = req.query.branch ?? ''
-    return { commits: getLog(session.rootPath, limit, branch) }
+    return { commits: getLog(session.rootPath, Math.min(parseInt(req.query.limit ?? '50'), 200), req.query.branch ?? '') }
   })
   server.get<{ Params: { sessionId: string } }>('/project/:sessionId/git/branches', async (req) => {
     const session = getSession(req.params.sessionId)
@@ -247,8 +262,7 @@ async function bootstrap() {
   server.get<{ Params: { sessionId: string }; Querystring: { file?: string; staged?: string } }>('/project/:sessionId/git/diff', async (req) => {
     const session = getSession(req.params.sessionId)
     if (!session?.rootPath) return { diffs: [] }
-    const staged = req.query.staged === 'true'
-    return { diffs: getDiff(session.rootPath, req.query.file, staged) }
+    return { diffs: getDiff(session.rootPath, req.query.file, req.query.staged === 'true') }
   })
   server.get<{ Params: { sessionId: string; hash: string } }>('/project/:sessionId/git/commit/:hash', async (req) => {
     const session = getSession(req.params.sessionId)
@@ -258,8 +272,7 @@ async function bootstrap() {
 
   // ── Chat streaming ─────────────────────────────────────────────────────────
   server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>(
-    '/chat/stream',
-    async (req, reply) => {
+    '/chat/stream', async (req, reply) => {
       const { message, sessionId, history = [] } = req.body
       if (!message) { reply.status(400).send('No message'); return }
 
@@ -277,23 +290,16 @@ async function bootstrap() {
         const { selectedModel } = loadConfig()
         if (!getSession(sessionId)) upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: selectedModel })
         const session = getSession(sessionId)
-
-        const isProject    = session?.type === 'project'
-        const knowledgeCtx = isProject ? buildAgentContext(sessionId)    : undefined
-        const contractCtx  = isProject ? buildContractContext(sessionId) : undefined
+        const isProject = session?.type === 'project'
 
         const messages = [
-          { role: 'system' as ChatRole, content: buildSystemPrompt(selectedModel, session?.summary, knowledgeCtx, contractCtx) },
+          { role: 'system' as ChatRole, content: buildSystemPrompt(selectedModel, session?.summary, isProject ? buildAgentContext(sessionId) : undefined, isProject ? buildContractContext(sessionId) : undefined) },
           ...mapHistory(history),
           { role: 'user' as ChatRole, content: message },
         ]
 
         let fullReply = ''
-        await chat(selectedModel, messages, (chunk) => {
-          fullReply += chunk.content
-          send({ chunk: chunk.content })
-        })
-
+        await chat(selectedModel, messages, (chunk) => { fullReply += chunk.content; send({ chunk: chunk.content }) })
         reply.raw.write('data: [DONE]\n\n')
         reply.raw.end()
         try { saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: fullReply }) } catch { }
@@ -343,7 +349,7 @@ async function bootstrap() {
   const PORT = Number(process.env.PORT ?? 3001)
   await server.listen({ port: PORT, host: '0.0.0.0' })
   console.log(`\n🔨 LocalForge  :${PORT}  |  Model: ${loadConfig().selectedModel}`)
-  console.log(`   Shell: ${DEFAULT_SHELL}\n`)
+  console.log(`   Shell: ${DEFAULT_SHELL}  |  LAN: ${LAN_IP}\n`)
 }
 
 process.on('SIGINT', async () => { await server.close(); closeDb(); process.exit(0) })

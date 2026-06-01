@@ -85,11 +85,11 @@ cd apps/desktop && npm run dev
 - [x] Internet RAG pipeline (DuckDuckGo, automatic heuristic trigger, source citations)
 - [x] Model Advisor (latency tracking, token speed, error log, smart suggestions, TopBar chip)
 - [x] Knowledge Graph (symbol extractor TS/JS/Python/Rust, conflict detection, agent context injection)
-- [x] API Contract Enforcer (fetch/axios/SWR call extraction, Express/Fastify/FastAPI route matching, violation detection, method mismatch detection, orphan route detection)
+- [x] API Contract Enforcer (fetch/axios/SWR call extraction, Express/Fastify/FastAPI route matching, violation + mismatch detection)
 
-### Phase 3 — Polish
-- [ ] Git structure panel (commit history, branch view, diff viewer)
-- [ ] Preview on device (QR code dev server)
+### Phase 3 — Polish ✅
+- [x] Git panel (status/staged/unstaged/untracked, commit log with diffs, branch view, inline diff viewer)
+- [x] Preview on device (QR code → phone scans → opens dev server on LAN)
 
 ---
 
