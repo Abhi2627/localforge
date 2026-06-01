@@ -73,7 +73,8 @@ function buildSystemPrompt(
     `You are a helpful AI assistant running locally inside LocalForge. ` +
     `You are powered by ${selectedModel} running via Ollama — fully offline. ` +
     `Always format responses using clean Markdown with headers, bullets, and code blocks. ` +
-    `Do not add thinking steps or filler phrases.` +
+    `Do not add thinking steps or filler phrases. ` +
+    `IMPORTANT: When you are uncertain about any fact, name, number, or current event, say so explicitly rather than guessing.` +
     (summary      ? `\n\nProject context:\n${summary}` : '') +
     (knowledgeCtx ? `\n\n${knowledgeCtx}`              : '') +
     (contractCtx  ? `\n\n${contractCtx}`               : '')
@@ -83,8 +84,6 @@ function buildSystemPrompt(
 function mapHistory(h: Array<{ role: string; content: string }>) {
   return h.slice(-20).map(x => ({ role: x.role as ChatRole, content: x.content }))
 }
-
-// ── Shared SSE stream helper ───────────────────────────────────────────────────
 
 function setupSSE(reply: any) {
   reply.raw.setTimeout(0)
@@ -120,14 +119,12 @@ async function bootstrap() {
     }
   })
 
-  // ── WebSocket: agent events ────────────────────────────────────────────────
   server.get('/ws', { websocket: true }, (socket) => {
     wsClients.add(socket)
     socket.send(JSON.stringify({ type: 'connected' }))
     socket.on('close', () => wsClients.delete(socket))
   })
 
-  // ── WebSocket: PTY terminal ────────────────────────────────────────────────
   server.get<{ Querystring: { cwd?: string } }>('/terminal', { websocket: true }, (socket, req) => {
     const rawCwd = req.query.cwd ?? os.homedir()
     const cwd    = fs.existsSync(rawCwd) ? rawCwd : os.homedir()
@@ -137,7 +134,7 @@ async function bootstrap() {
         name: 'xterm-256color', cols: 120, rows: 30, cwd,
         env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'LocalForge', HOME: process.env.HOME ?? os.homedir(), USER: process.env.USER ?? os.userInfo().username, SHELL: DEFAULT_SHELL, PATH: process.env.PATH ?? '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin', LANG: process.env.LANG ?? 'en_US.UTF-8' } as Record<string, string>,
       })
-      ptyProc.onData((data: string) => { try { socket.send(data) } catch { } })
+      ptyProc.onData((d: string) => { try { socket.send(d) } catch { } })
       ptyProc.onExit(({ exitCode }) => {
         try { socket.send(`\r\n\x1b[90m[shell exited ${exitCode}]\x1b[0m\r\n`) } catch { }
         try { socket.close() } catch { }
@@ -158,7 +155,6 @@ async function bootstrap() {
     }
   })
 
-  // ── Health ─────────────────────────────────────────────────────────────────
   server.get('/health', async () => ({ status: 'ok', mode: taskQueue.currentMode, shell: DEFAULT_SHELL }))
   server.get('/system', async () => profileSystem())
   server.post<{ Body: { mode: 'sequential' | 'parallel'; maxParallel?: number } }>('/system/mode', async (req) => {
@@ -168,35 +164,29 @@ async function bootstrap() {
   })
   server.get('/network/info', async () => ({ lanIp: LAN_IP, hostname: os.hostname(), platform: os.platform() }))
 
-  // ── Models ─────────────────────────────────────────────────────────────────
   server.get('/models', async () => { try { return { models: await getInstalledModels() } } catch { return { error: 'Ollama not reachable', models: [] } } })
   server.get('/models/stats', async () => { try { return await getModelStats() } catch (e: any) { return { error: e.message } } })
   server.get('/models/config', async () => loadConfig())
   server.post<{ Body: { model: string } }>('/models/select', async (req) => { if (!req.body.model) return { success: false }; return selectModel(req.body.model) })
   server.post<{ Body: { models: string[] } }>('/models/fallback', async (req) => ({ success: true, config: await setFallbackModels(req.body.models) }))
 
-  // ── Sessions ───────────────────────────────────────────────────────────────
   server.get('/sessions', async () => ({ sessions: getAllSessions() }))
   server.get<{ Params: { id: string } }>('/sessions/:id', async (req) => {
-    const s = getSession(req.params.id)
-    return s ? { session: s, messages: getSessionMessages(req.params.id) } : { error: 'Not found' }
+    const s = getSession(req.params.id); return s ? { session: s, messages: getSessionMessages(req.params.id) } : { error: 'Not found' }
   })
   server.post<{ Body: { id: string; type: string; title: string; rootPath?: string; modelName?: string } }>('/sessions', async (req) => {
     const { id, type, title, rootPath, modelName } = req.body
     return { success: true, session: upsertSession({ id, type: type as any, title, rootPath, modelName }) }
   })
   server.delete<{ Params: { id: string } }>('/sessions/:id', async (req) => {
-    deleteSession(req.params.id); clearGraph(req.params.id); clearReport(req.params.id)
-    return { success: true }
+    deleteSession(req.params.id); clearGraph(req.params.id); clearReport(req.params.id); return { success: true }
   })
   server.post<{ Body: { id: string; sessionId: string; role: string; content: string; agentName?: string } }>('/sessions/message', async (req) => {
     const { id, sessionId, role, content, agentName } = req.body
     if (!getSession(sessionId)) upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: loadConfig().selectedModel })
-    saveMessage({ id, sessionId, role: role as any, content, agentName })
-    return { success: true }
+    saveMessage({ id, sessionId, role: role as any, content, agentName }); return { success: true }
   })
 
-  // ── Project ────────────────────────────────────────────────────────────────
   server.post<{ Body: { sessionId: string; rootPath: string } }>('/project/open', async (req) => {
     const { sessionId, rootPath } = req.body
     if (!rootPath) return { success: false, message: 'rootPath required' }
@@ -212,96 +202,76 @@ async function bootstrap() {
   })
   server.get<{ Params: { sessionId: string } }>('/project/:sessionId/summary', async (req) => ({ summary: getSession(req.params.sessionId)?.summary ?? null }))
   server.get<{ Querystring: { path: string } }>('/project/file', async (req, reply) => {
-    const p = req.query.path
-    if (!p) { reply.status(400).send({ error: 'path required' }); return }
+    const p = req.query.path; if (!p) { reply.status(400).send({ error: 'path required' }); return }
     if (!fs.existsSync(p)) { reply.status(404).send({ error: 'not found' }); return }
     try { return { content: fs.readFileSync(p, 'utf8') } } catch (e: any) { reply.status(500).send({ error: e.message }) }
   })
   server.post<{ Body: { path: string; content: string } }>('/project/file', async (req, reply) => {
-    const { path: p, content } = req.body
-    if (!p) { reply.status(400).send({ error: 'path required' }); return }
+    const { path: p, content } = req.body; if (!p) { reply.status(400).send({ error: 'path required' }); return }
     try { fs.writeFileSync(p, content ?? '', 'utf8'); return { success: true } } catch (e: any) { reply.status(500).send({ error: e.message }) }
   })
 
-  // ── Knowledge Graph ────────────────────────────────────────────────────────
   server.get<{ Params: { sessionId: string } }>('/project/:sessionId/symbols', async (req) => ({ symbols: getSymbols(req.params.sessionId) }))
   server.get<{ Params: { sessionId: string }; Querystring: { q?: string } }>('/project/:sessionId/symbols/search', async (req) => {
-    const q = req.query.q ?? ''
-    return { symbols: q ? findSymbol(req.params.sessionId, q) : getSymbols(req.params.sessionId) }
+    const q = req.query.q ?? ''; return { symbols: q ? findSymbol(req.params.sessionId, q) : getSymbols(req.params.sessionId) }
   })
   server.get<{ Params: { sessionId: string } }>('/project/:sessionId/symbols/summary', async (req) => getSummary(req.params.sessionId))
   server.get<{ Params: { sessionId: string } }>('/project/:sessionId/symbols/conflicts', async (req) => ({ conflicts: getConflicts(req.params.sessionId) }))
   server.post<{ Params: { sessionId: string } }>('/project/:sessionId/symbols/rescan', async (req) => {
-    const session = getSession(req.params.sessionId)
-    if (!session?.rootPath) return { success: false }
+    const session = getSession(req.params.sessionId); if (!session?.rootPath) return { success: false }
     return { success: true, symbolCount: scanProject(req.params.sessionId, session.rootPath) }
   })
 
-  // ── API Contract Enforcer ──────────────────────────────────────────────────
   server.get<{ Params: { sessionId: string } }>('/project/:sessionId/contracts', async (req) => {
-    const cached = getCachedReport(req.params.sessionId)
-    if (cached) return cached
-    const session = getSession(req.params.sessionId)
-    if (!session?.rootPath) return { error: 'No rootPath', violations: [], orphans: [], summary: null }
+    const cached = getCachedReport(req.params.sessionId); if (cached) return cached
+    const session = getSession(req.params.sessionId); if (!session?.rootPath) return { error: 'No rootPath', violations: [], orphans: [], summary: null }
     return runEnforcer(req.params.sessionId, session.rootPath)
   })
   server.post<{ Params: { sessionId: string } }>('/project/:sessionId/contracts/rescan', async (req) => {
-    const session = getSession(req.params.sessionId)
-    if (!session?.rootPath) return { success: false }
+    const session = getSession(req.params.sessionId); if (!session?.rootPath) return { success: false }
     return { success: true, summary: runEnforcer(req.params.sessionId, session.rootPath).summary }
   })
 
-  // ── Git endpoints ──────────────────────────────────────────────────────────
   server.get<{ Params: { sessionId: string } }>('/project/:sessionId/git/status', async (req) => {
-    const session = getSession(req.params.sessionId)
-    if (!session?.rootPath) return { error: 'No rootPath', isRepo: false }
+    const session = getSession(req.params.sessionId); if (!session?.rootPath) return { isRepo: false }
     return { isRepo: true, status: getStatus(session.rootPath) }
   })
   server.get<{ Params: { sessionId: string }; Querystring: { limit?: string; branch?: string } }>('/project/:sessionId/git/log', async (req) => {
-    const session = getSession(req.params.sessionId)
-    if (!session?.rootPath) return { commits: [] }
+    const session = getSession(req.params.sessionId); if (!session?.rootPath) return { commits: [] }
     return { commits: getLog(session.rootPath, Math.min(parseInt(req.query.limit ?? '50'), 200), req.query.branch ?? '') }
   })
   server.get<{ Params: { sessionId: string } }>('/project/:sessionId/git/branches', async (req) => {
-    const session = getSession(req.params.sessionId)
-    if (!session?.rootPath) return { branches: [] }
+    const session = getSession(req.params.sessionId); if (!session?.rootPath) return { branches: [] }
     return { branches: getBranches(session.rootPath) }
   })
   server.get<{ Params: { sessionId: string }; Querystring: { file?: string; staged?: string } }>('/project/:sessionId/git/diff', async (req) => {
-    const session = getSession(req.params.sessionId)
-    if (!session?.rootPath) return { diffs: [] }
+    const session = getSession(req.params.sessionId); if (!session?.rootPath) return { diffs: [] }
     return { diffs: getDiff(session.rootPath, req.query.file, req.query.staged === 'true') }
   })
   server.get<{ Params: { sessionId: string; hash: string } }>('/project/:sessionId/git/commit/:hash', async (req) => {
-    const session = getSession(req.params.sessionId)
-    if (!session?.rootPath) return { diffs: [] }
+    const session = getSession(req.params.sessionId); if (!session?.rootPath) return { diffs: [] }
     return { diffs: getCommitDiff(session.rootPath, req.params.hash) }
   })
 
-  // ── Chat streaming (no RAG — always fast) ─────────────────────────────────
+  // ── Chat streaming (no RAG) ────────────────────────────────────────────────
   server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>(
     '/chat/stream', async (req, reply) => {
       const { message, sessionId, history = [] } = req.body
       if (!message) { reply.status(400).send('No message'); return }
-
       const send = setupSSE(reply)
-
       try {
         const { selectedModel } = loadConfig()
         if (!getSession(sessionId)) upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: selectedModel })
         const session   = getSession(sessionId)
         const isProject = session?.type === 'project'
-
-        const messages = [
+        const messages  = [
           { role: 'system' as ChatRole, content: buildSystemPrompt(selectedModel, session?.summary, isProject ? buildAgentContext(sessionId) : undefined, isProject ? buildContractContext(sessionId) : undefined) },
           ...mapHistory(history),
           { role: 'user' as ChatRole, content: message },
         ]
-
         let fullReply = ''
         await chat(selectedModel, messages, (chunk) => { fullReply += chunk.content; send({ chunk: chunk.content }) })
-        reply.raw.write('data: [DONE]\n\n')
-        reply.raw.end()
+        reply.raw.write('data: [DONE]\n\n'); reply.raw.end()
         try { saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: fullReply }) } catch { }
       } catch (err: any) {
         try { send({ chunk: `\n\nError: ${err.message}` }); reply.raw.write('data: [DONE]\n\n'); reply.raw.end() } catch { }
@@ -310,46 +280,36 @@ async function bootstrap() {
   )
 
   // ── Chat streaming WITH RAG (/chat/stream/web) ────────────────────────────
-  // Triggered when user types @web or for known live-data queries (auto-detect)
-  // Isolated from /chat/stream — any RAG failure here cannot affect the main stream
   server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>(
     '/chat/stream/web', async (req, reply) => {
       const { message, sessionId, history = [] } = req.body
       if (!message) { reply.status(400).send('No message'); return }
-
-      const send = setupSSE(reply)
-
+      const send     = setupSSE(reply)
+      const forceWeb = hasWebTrigger(message)
       try {
         const { selectedModel } = loadConfig()
         if (!getSession(sessionId)) upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: selectedModel })
         const session   = getSession(sessionId)
         const isProject = session?.type === 'project'
-        const forceWeb  = hasWebTrigger(message)
 
-        // ── RAG phase ─────────────────────────────────────────────────────
+        // RAG phase — hard-capped at 5s
         let systemPrompt = buildSystemPrompt(
           selectedModel, session?.summary,
           isProject ? buildAgentContext(sessionId)    : undefined,
           isProject ? buildContractContext(sessionId) : undefined,
         )
 
-        const rag = await runRAG(message, forceWeb, (status) => {
-          send({ type: 'rag_status', status })
-        })
+        const rag = await runRAG(message, forceWeb, (status) => send({ type: 'rag_status', status }))
 
         if (rag.didSearch) {
           systemPrompt = injectRAGContext(systemPrompt, rag)
-
           if (rag.sources.length > 0) {
-            // Tell the client which sources were found so it can render pills
             send({ type: 'rag_sources', sources: rag.sources.map(s => ({ title: s.title, url: s.url })) })
           }
-
           console.log(`[RAG] query="${rag.query}" sources=${rag.sources.length} failed=${rag.ragFailed}`)
         }
 
-        // ── Model call ────────────────────────────────────────────────────
-        // Strip @web prefix from the actual message sent to the model
+        // Strip @web prefix before sending to model
         const cleanMessage = message.replace(/^@web\s*/i, '').trim()
 
         const messages = [
@@ -360,9 +320,7 @@ async function bootstrap() {
 
         let fullReply = ''
         await chat(selectedModel, messages, (chunk) => { fullReply += chunk.content; send({ chunk: chunk.content }) })
-
-        reply.raw.write('data: [DONE]\n\n')
-        reply.raw.end()
+        reply.raw.write('data: [DONE]\n\n'); reply.raw.end()
         try { saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: fullReply }) } catch { }
       } catch (err: any) {
         try { send({ chunk: `\n\nError: ${err.message}` }); reply.raw.write('data: [DONE]\n\n'); reply.raw.end() } catch { }
@@ -384,34 +342,29 @@ async function bootstrap() {
     return { success: true, reply: await chat(selectedModel, messages) }
   })
 
-  // ── Projects / Agents ─────────────────────────────────────────────────────
   server.get('/projects', async () => ({ projects: orchestrator.listProjects() }))
   server.post<{ Body: { name: string; rootPath: string } }>('/projects', async (req) => {
-    const { name, rootPath } = req.body
-    if (!name || !rootPath) return { success: false }
+    const { name, rootPath } = req.body; if (!name || !rootPath) return { success: false }
     const p = await orchestrator.createProject({ name, rootPath })
     return { success: true, project: { id: p.id, name: p.name, rootPath: p.rootPath } }
   })
   server.get<{ Params: { projectId: string } }>('/projects/:projectId/agents', async (req) => ({ agents: orchestrator.listAgents(req.params.projectId) }))
   server.post<{ Params: { projectId: string }; Body: { name: string; role: string; allowedPaths?: string[] } }>('/projects/:projectId/agents', async (req) => {
-    const { name, role, allowedPaths } = req.body
-    if (!name || !role) return { success: false }
+    const { name, role, allowedPaths } = req.body; if (!name || !role) return { success: false }
     const agent = orchestrator.addAgent(req.params.projectId, { name, role: role as any, allowedPaths: allowedPaths ?? [], projectPath: orchestrator.getProject(req.params.projectId).rootPath })
     return { success: true, agent: { id: agent.id, name: agent.config.name, role: agent.config.role } }
   })
   server.post<{ Params: { projectId: string; agentId: string }; Body: { instruction: string; queue?: boolean } }>('/projects/:projectId/agents/:agentId/instruct', async (req) => {
-    const { instruction, queue = true } = req.body
-    if (!instruction) return { success: false }
+    const { instruction, queue = true } = req.body; if (!instruction) return { success: false }
     if (queue) { await orchestrator.runInstruction(req.params.projectId, req.params.agentId, instruction); return { success: true } }
-    await orchestrator.runInstructionDirect(req.params.projectId, req.params.agentId, instruction)
-    return { success: true }
+    await orchestrator.runInstructionDirect(req.params.projectId, req.params.agentId, instruction); return { success: true }
   })
 
   const PORT = Number(process.env.PORT ?? 3001)
   await server.listen({ port: PORT, host: '0.0.0.0' })
   console.log(`\n🔨 LocalForge  :${PORT}  |  Model: ${loadConfig().selectedModel}`)
   console.log(`   Shell: ${DEFAULT_SHELL}  |  LAN: ${LAN_IP}`)
-  console.log(`   RAG:   /chat/stream/web  (@web prefix or auto-detect)\n`)
+  console.log(`   RAG:   /chat/stream/web  (type @web or auto-detect)\n`)
 }
 
 process.on('SIGINT', async () => { await server.close(); closeDb(); process.exit(0) })

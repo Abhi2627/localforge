@@ -1,26 +1,25 @@
 /**
- * RAGPipeline.ts — Reliable web-augmented context injection
+ * RAGPipeline.ts — Web-augmented context injection
  *
- * Design principles:
- * - Only runs on EXPLICIT @web trigger (user typed @web) or auto-detect for live-data queries
- * - Hard-capped at MAX_RAG_MS total — never blocks the stream
- * - All errors caught — RAG failure never crashes the stream
- * - DuckDuckGo HTML scraper with AbortSignal propagation
+ * Key design:
+ * - Explicit @web trigger OR auto-detect for live-data queries
+ * - Hard-capped at MAX_RAG_MS total
+ * - All errors caught — never crashes the stream
  */
 
 import { search, type SearchResult } from './WebSearch.js'
 
-const MAX_RAG_MS = 5000  // 5s hard cap — generous but bounded
+const MAX_RAG_MS = 5000
 
 export interface RAGResult {
   didSearch:    boolean
-  ragFailed:    boolean   // true = offline or timed out
+  ragFailed:    boolean
   query:        string
   sources:      SearchResult[]
   contextBlock: string
 }
 
-// ── Live-data classifier (auto mode only) ─────────────────────────────────────
+// ── Live-data classifier ──────────────────────────────────────────────────────
 
 const LIVE_DATA_SIGNALS = [
   /\b(stock price|share price|closing price|current price|market cap|trading at)\b/i,
@@ -30,26 +29,27 @@ const LIVE_DATA_SIGNALS = [
   /\b(score|result|winner|won|lost).{0,20}(match|game|today|yesterday|last night)\b/i,
   /\b(latest news|breaking news|what happened|news today)\b/i,
   /\b(latest version|current version|stable version|release).{0,20}(of|for)\s+\w+/i,
+  // Political/government current state
+  /\b(current|who is|who's).{0,20}(cm|chief minister|pm|prime minister|president|governor|ceo|cto)\b/i,
+  /\b(cm|chief minister|pm|prime minister).{0,20}(of|for)\s+\w+/i,
 ]
 
 const SKIP_PATTERNS = [
-  /^(what is|explain|define|describe|tell me about|how does|what are)\s+/i,
-  /\b(algorithm|data structure|design pattern|programming|coding|syntax)\b/i,
-  /\b(history|invented|discovered|founded|created|developed)\b/i,
+  /\b(algorithm|data structure|design pattern|syntax)\b/i,
+  /\b(invented|discovered|founded|created|developed)\b/i,
 ]
 
 export function needsWebSearch(message: string): boolean {
   const msg = message.trim()
-  if (msg.split(/\s+/).length < 4) return false
+  if (msg.split(/\s+/).length < 3) return false
   if (SKIP_PATTERNS.some(r => r.test(msg))) return false
   return LIVE_DATA_SIGNALS.some(r => r.test(msg))
 }
 
-// Strip @web prefix if present
 export function extractQuery(message: string): string {
   return message
     .replace(/^@web\s*/i, '')
-    .replace(/^(can you|could you|please|tell me|show me|what is|what's)\s+/i, '')
+    .replace(/^(can you|could you|please|tell me|show me)\s+/i, '')
     .replace(/\?+$/, '')
     .trim()
     .slice(0, 150)
@@ -61,33 +61,33 @@ export function hasWebTrigger(message: string): boolean {
 
 function buildContextBlock(results: SearchResult[], query: string): string {
   if (results.length === 0) return ''
-  const lines = [`[WEB CONTEXT — searched: "${query}"]`, '']
+  const lines = [
+    `[WEB SEARCH RESULTS for: "${query}"]`,
+    `[Retrieved ${new Date().toUTCString()}]`,
+    '',
+  ]
   for (const r of results) {
-    lines.push(`## ${r.title}`)
-    lines.push(`Source: ${r.url}`)
-    if (r.snippet) lines.push(`Summary: ${r.snippet}`)
-    if (r.content)  lines.push(`Content:\n${r.content.slice(0, 1000)}`)
+    lines.push(`### ${r.title}`)
+    lines.push(`URL: ${r.url}`)
+    if (r.snippet) lines.push(`Snippet: ${r.snippet}`)
+    if (r.content) lines.push(`Page content:\n${r.content.slice(0, 1200)}`)
     lines.push('')
   }
-  lines.push('[END WEB CONTEXT]')
-  lines.push('Use the web context above to answer directly with specific facts and numbers.')
-  lines.push('Always cite the source URL inline. Do NOT tell the user how to find the data themselves.')
+  lines.push('[END WEB RESULTS]')
   return lines.join('\n')
 }
 
 // ── Main RAG function ─────────────────────────────────────────────────────────
 
 export async function runRAG(
-  message:   string,
-  forceWeb:  boolean = false,   // true when user typed @web
-  onStatus:  (msg: string) => void = () => {}
+  message:  string,
+  forceWeb: boolean = false,
+  onStatus: (msg: string) => void = () => {}
 ): Promise<RAGResult> {
   const empty: RAGResult = { didSearch: false, ragFailed: false, query: '', sources: [], contextBlock: '' }
 
   try {
-    // Decide whether to search
-    const shouldSearch = forceWeb || needsWebSearch(message)
-    if (!shouldSearch) return empty
+    if (!forceWeb && !needsWebSearch(message)) return empty
 
     const query = extractQuery(message)
     if (!query) return empty
@@ -116,8 +116,7 @@ export async function runRAG(
       }
     } catch (err: any) {
       clearTimeout(timer)
-      const isTimeout = err?.name === 'AbortError'
-      console.warn(`[RAG] ${isTimeout ? 'timed out' : 'failed'}: ${err?.message}`)
+      console.warn(`[RAG] ${err?.name === 'AbortError' ? 'timed out' : 'failed'}: ${err?.message}`)
       return { ...empty, didSearch: true, ragFailed: true, query }
     }
   } catch {
@@ -125,16 +124,28 @@ export async function runRAG(
   }
 }
 
-// ── Inject RAG context into system prompt ─────────────────────────────────────
+// ── Context injection ─────────────────────────────────────────────────────────
 
 export function injectRAGContext(systemPrompt: string, rag: RAGResult): string {
   if (!rag.didSearch) return systemPrompt
 
   if (rag.ragFailed) {
-    return systemPrompt + '\n\n[SYSTEM NOTE: A web search was attempted but failed — device may be offline or search timed out. Tell the user clearly you cannot access real-time data right now. Do NOT fabricate numbers.]'
+    return systemPrompt + '\n\n[SYSTEM: Web search failed — device may be offline. Tell the user clearly you cannot fetch live data right now. Do NOT guess or make up any facts, names, or numbers.]'
   }
 
   if (!rag.contextBlock) return systemPrompt
 
-  return systemPrompt + '\n\n' + rag.contextBlock
+  // Strong instruction — forces model to use the web results, not training memory
+  const instruction = `
+
+${rag.contextBlock}
+
+CRITICAL INSTRUCTIONS FOR ANSWERING:
+1. Use ONLY the web search results above to answer. Do NOT use your training data for this question.
+2. If the answer is clearly stated in the results, state it directly and confidently.
+3. Cite the source URL after your answer.
+4. If the results do not contain the answer, say "The search results don't contain a clear answer to this. You may want to check [URL] directly."
+5. Do NOT invent, guess, or hallucinate any facts, names, dates, or numbers.`
+
+  return systemPrompt + instruction
 }
