@@ -18,6 +18,7 @@ import { connectMCP } from './mcp/MCPClient.js'
 import { scanProject, updateFile, getSymbols, findSymbol, getSummary, getConflicts, buildAgentContext, clearGraph } from './knowledge/KnowledgeGraph.js'
 import { runEnforcer, getCachedReport, clearReport, buildContractContext } from './knowledge/ContractEnforcer.js'
 import { getStatus, getLog, getBranches, getDiff, getCommitDiff } from './git/GitReader.js'
+import { runRAG, injectRAGContext, hasWebTrigger } from './rag/RAGPipeline.js'
 
 type ChatRole = 'system' | 'user' | 'assistant'
 
@@ -42,11 +43,9 @@ function detectShell(): string {
   return '/bin/sh'
 }
 
-// Get LAN IP — the address your phone needs to reach this machine
 function getLanIp(): string {
   const nets = os.networkInterfaces()
   for (const name of Object.keys(nets)) {
-    // Skip loopback and virtual adapters
     if (name.toLowerCase().includes('lo') || name.toLowerCase().includes('utun') ||
         name.toLowerCase().includes('vmnet') || name.toLowerCase().includes('veth')) continue
     for (const net of nets[name] ?? []) {
@@ -64,7 +63,12 @@ function broadcast(data: object) {
   wsClients.forEach(ws => { try { ws.send(msg) } catch { wsClients.delete(ws) } })
 }
 
-function buildSystemPrompt(selectedModel: string, summary?: string | null, knowledgeCtx?: string, contractCtx?: string): string {
+function buildSystemPrompt(
+  selectedModel: string,
+  summary?:      string | null,
+  knowledgeCtx?: string,
+  contractCtx?:  string
+): string {
   return (
     `You are a helpful AI assistant running locally inside LocalForge. ` +
     `You are powered by ${selectedModel} running via Ollama — fully offline. ` +
@@ -78,6 +82,19 @@ function buildSystemPrompt(selectedModel: string, summary?: string | null, knowl
 
 function mapHistory(h: Array<{ role: string; content: string }>) {
   return h.slice(-20).map(x => ({ role: x.role as ChatRole, content: x.content }))
+}
+
+// ── Shared SSE stream helper ───────────────────────────────────────────────────
+
+function setupSSE(reply: any) {
+  reply.raw.setTimeout(0)
+  reply.raw.setHeader('Access-Control-Allow-Origin', '*')
+  reply.raw.setHeader('Content-Type',      'text/event-stream')
+  reply.raw.setHeader('Cache-Control',     'no-cache')
+  reply.raw.setHeader('Connection',        'keep-alive')
+  reply.raw.setHeader('X-Accel-Buffering', 'no')
+  reply.raw.flushHeaders()
+  return (data: object) => { try { reply.raw.write(`data: ${JSON.stringify(data)}\n\n`) } catch { } }
 }
 
 async function bootstrap() {
@@ -149,20 +166,14 @@ async function bootstrap() {
     saveConfig({ executionMode: req.body.mode, maxParallel: req.body.maxParallel ?? 1 })
     return { success: true }
   })
-
-  // ── Network info — returns LAN IP for QR preview feature ──────────────────
-  server.get('/network/info', async () => ({
-    lanIp:    LAN_IP,
-    hostname: os.hostname(),
-    platform: os.platform(),
-  }))
+  server.get('/network/info', async () => ({ lanIp: LAN_IP, hostname: os.hostname(), platform: os.platform() }))
 
   // ── Models ─────────────────────────────────────────────────────────────────
   server.get('/models', async () => { try { return { models: await getInstalledModels() } } catch { return { error: 'Ollama not reachable', models: [] } } })
   server.get('/models/stats', async () => { try { return await getModelStats() } catch (e: any) { return { error: e.message } } })
   server.get('/models/config', async () => loadConfig())
   server.post<{ Body: { model: string } }>('/models/select', async (req) => { if (!req.body.model) return { success: false }; return selectModel(req.body.model) })
-  server.post<{ Body: { models: string[] } }>('/models/fallback', async (req) => { return { success: true, config: await setFallbackModels(req.body.models) } })
+  server.post<{ Body: { models: string[] } }>('/models/fallback', async (req) => ({ success: true, config: await setFallbackModels(req.body.models) }))
 
   // ── Sessions ───────────────────────────────────────────────────────────────
   server.get('/sessions', async () => ({ sessions: getAllSessions() }))
@@ -199,9 +210,7 @@ async function bootstrap() {
     generateProjectSummary(sessionId, rootPath, scan).then(summary => broadcast({ type: 'project_summary', sessionId, summary }))
     return { success: true, isEmpty: scan.isEmpty, fileList: scan.fileList, fileTree: scan.fileTree, fileCount: scan.fileList.length }
   })
-  server.get<{ Params: { sessionId: string } }>('/project/:sessionId/summary', async (req) => {
-    return { summary: getSession(req.params.sessionId)?.summary ?? null }
-  })
+  server.get<{ Params: { sessionId: string } }>('/project/:sessionId/summary', async (req) => ({ summary: getSession(req.params.sessionId)?.summary ?? null }))
   server.get<{ Querystring: { path: string } }>('/project/file', async (req, reply) => {
     const p = req.query.path
     if (!p) { reply.status(400).send({ error: 'path required' }); return }
@@ -246,8 +255,7 @@ async function bootstrap() {
   server.get<{ Params: { sessionId: string } }>('/project/:sessionId/git/status', async (req) => {
     const session = getSession(req.params.sessionId)
     if (!session?.rootPath) return { error: 'No rootPath', isRepo: false }
-    const status = getStatus(session.rootPath)
-    return { isRepo: !!status, status }
+    return { isRepo: true, status: getStatus(session.rootPath) }
   })
   server.get<{ Params: { sessionId: string }; Querystring: { limit?: string; branch?: string } }>('/project/:sessionId/git/log', async (req) => {
     const session = getSession(req.params.sessionId)
@@ -270,26 +278,18 @@ async function bootstrap() {
     return { diffs: getCommitDiff(session.rootPath, req.params.hash) }
   })
 
-  // ── Chat streaming ─────────────────────────────────────────────────────────
+  // ── Chat streaming (no RAG — always fast) ─────────────────────────────────
   server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>(
     '/chat/stream', async (req, reply) => {
       const { message, sessionId, history = [] } = req.body
       if (!message) { reply.status(400).send('No message'); return }
 
-      reply.raw.setTimeout(0)
-      reply.raw.setHeader('Access-Control-Allow-Origin', '*')
-      reply.raw.setHeader('Content-Type',      'text/event-stream')
-      reply.raw.setHeader('Cache-Control',     'no-cache')
-      reply.raw.setHeader('Connection',        'keep-alive')
-      reply.raw.setHeader('X-Accel-Buffering', 'no')
-      reply.raw.flushHeaders()
-
-      const send = (data: object) => { try { reply.raw.write(`data: ${JSON.stringify(data)}\n\n`) } catch { } }
+      const send = setupSSE(reply)
 
       try {
         const { selectedModel } = loadConfig()
         if (!getSession(sessionId)) upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: selectedModel })
-        const session = getSession(sessionId)
+        const session   = getSession(sessionId)
         const isProject = session?.type === 'project'
 
         const messages = [
@@ -300,6 +300,67 @@ async function bootstrap() {
 
         let fullReply = ''
         await chat(selectedModel, messages, (chunk) => { fullReply += chunk.content; send({ chunk: chunk.content }) })
+        reply.raw.write('data: [DONE]\n\n')
+        reply.raw.end()
+        try { saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: fullReply }) } catch { }
+      } catch (err: any) {
+        try { send({ chunk: `\n\nError: ${err.message}` }); reply.raw.write('data: [DONE]\n\n'); reply.raw.end() } catch { }
+      }
+    }
+  )
+
+  // ── Chat streaming WITH RAG (/chat/stream/web) ────────────────────────────
+  // Triggered when user types @web or for known live-data queries (auto-detect)
+  // Isolated from /chat/stream — any RAG failure here cannot affect the main stream
+  server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>(
+    '/chat/stream/web', async (req, reply) => {
+      const { message, sessionId, history = [] } = req.body
+      if (!message) { reply.status(400).send('No message'); return }
+
+      const send = setupSSE(reply)
+
+      try {
+        const { selectedModel } = loadConfig()
+        if (!getSession(sessionId)) upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: selectedModel })
+        const session   = getSession(sessionId)
+        const isProject = session?.type === 'project'
+        const forceWeb  = hasWebTrigger(message)
+
+        // ── RAG phase ─────────────────────────────────────────────────────
+        let systemPrompt = buildSystemPrompt(
+          selectedModel, session?.summary,
+          isProject ? buildAgentContext(sessionId)    : undefined,
+          isProject ? buildContractContext(sessionId) : undefined,
+        )
+
+        const rag = await runRAG(message, forceWeb, (status) => {
+          send({ type: 'rag_status', status })
+        })
+
+        if (rag.didSearch) {
+          systemPrompt = injectRAGContext(systemPrompt, rag)
+
+          if (rag.sources.length > 0) {
+            // Tell the client which sources were found so it can render pills
+            send({ type: 'rag_sources', sources: rag.sources.map(s => ({ title: s.title, url: s.url })) })
+          }
+
+          console.log(`[RAG] query="${rag.query}" sources=${rag.sources.length} failed=${rag.ragFailed}`)
+        }
+
+        // ── Model call ────────────────────────────────────────────────────
+        // Strip @web prefix from the actual message sent to the model
+        const cleanMessage = message.replace(/^@web\s*/i, '').trim()
+
+        const messages = [
+          { role: 'system' as ChatRole, content: systemPrompt },
+          ...mapHistory(history),
+          { role: 'user' as ChatRole, content: cleanMessage },
+        ]
+
+        let fullReply = ''
+        await chat(selectedModel, messages, (chunk) => { fullReply += chunk.content; send({ chunk: chunk.content }) })
+
         reply.raw.write('data: [DONE]\n\n')
         reply.raw.end()
         try { saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: fullReply }) } catch { }
@@ -349,7 +410,8 @@ async function bootstrap() {
   const PORT = Number(process.env.PORT ?? 3001)
   await server.listen({ port: PORT, host: '0.0.0.0' })
   console.log(`\n🔨 LocalForge  :${PORT}  |  Model: ${loadConfig().selectedModel}`)
-  console.log(`   Shell: ${DEFAULT_SHELL}  |  LAN: ${LAN_IP}\n`)
+  console.log(`   Shell: ${DEFAULT_SHELL}  |  LAN: ${LAN_IP}`)
+  console.log(`   RAG:   /chat/stream/web  (@web prefix or auto-detect)\n`)
 }
 
 process.on('SIGINT', async () => { await server.close(); closeDb(); process.exit(0) })
