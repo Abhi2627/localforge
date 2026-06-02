@@ -8,8 +8,8 @@
   --border:         #1f1f2a;
   --border-light:   #2f2f3d;
   --text-primary:   #f1f1f6;
-  --text-secondary: #b0b5c8;   /* brighter — was #9499ad */
-  --text-muted:     #7a7f96;   /* brighter — was #62677c */
+  --text-secondary: #b0b5c8;
+  --text-muted:     #7a7f96;
   --accent:         #8b5cf6;
   --accent-dim:     rgba(139, 92, 246, 0.15);
   --green:          #10b981;
@@ -27,13 +27,7 @@
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-html, body, #root {
-  height: 100%;
-  width: 100%;
-  overflow: hidden;
-}
-
+html, body, #root { height: 100%; width: 100%; overflow: hidden; }
 body {
   background: var(--bg-primary);
   color: var(--text-primary);
@@ -46,80 +40,44 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 2px; }
 
-/* ── Topbar ── */
 .topbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 12px;
-  height: var(--topbar-height);
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
-  overflow: hidden;
-  flex-shrink: 0;
+  display: flex; align-items: center; gap: 8px; padding: 0 12px;
+  height: var(--topbar-height); background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border); overflow: hidden; flex-shrink: 0;
   -webkit-app-region: drag;
 }
 .topbar > * { -webkit-app-region: no-drag; flex-shrink: 0; }
 
 .model-select {
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-primary);
-  font-size: 11px;
-  padding: 3px 8px;
-  outline: none;
-  cursor: pointer;
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex-shrink: 1;
-  min-width: 60px;
+  background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text-primary); font-size: 11px; padding: 3px 8px; outline: none;
+  cursor: pointer; max-width: 200px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; flex-shrink: 1; min-width: 60px;
 }
 .model-select:focus { border-color: var(--accent); }
 
-/* ── Icon button ── */
 .icon-btn {
-  width: 32px;
-  height: 32px;
-  border-radius: 6px;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.15s, color 0.15s;
-  flex-shrink: 0;
+  width: 32px; height: 32px; border-radius: 6px; border: none; background: transparent;
+  color: var(--text-muted); cursor: pointer; display: flex; align-items: center;
+  justify-content: center; transition: background 0.15s, color 0.15s; flex-shrink: 0;
 }
 .icon-btn:hover  { background: var(--bg-hover); color: var(--text-primary); }
 .icon-btn.active { background: var(--accent-dim); color: var(--accent); }
 
-.main-area {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  min-width: 0;
-  min-height: 0;
-}
+.main-area { display: flex; flex-direction: column; overflow: hidden; min-width: 0; min-height: 0; }
 
-/* ── Chat messages ── */
 .chat-messages {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-height: 0;
+  flex: 1; overflow-y: auto; padding: 16px;
+  display: flex; flex-direction: column; gap: 8px; min-height: 0;
 }
 
-/* User bubble — 60% max width */
+/*
+  User bubble — no max-width or width here.
+  The 60% constraint lives on the wrapper div in ChatPanel.tsx (maxWidth: '60%').
+  The bubble itself just fills whatever space the wrapper gives it.
+  This way: short text → small bubble, long text → up to 60% wide.
+*/
 .msg-user {
-  align-self: flex-end;
-  max-width: min(60%, 520px);
   background: var(--accent-dim);
   border: 1px solid var(--accent);
   border-radius: 12px 12px 3px 12px;
@@ -128,6 +86,10 @@ body {
   font-size: 13px;
   line-height: 1.6;
   word-break: break-word;
+  /* display: inline-block makes the bubble shrink to content width */
+  display: inline-block;
+  /* but also fills the wrapper when content is long */
+  max-width: 100%;
 }
 
 .msg-agent {
@@ -144,71 +106,32 @@ body {
 }
 
 .msg-system {
-  align-self: center;
-  font-size: 12px;
-  color: var(--text-muted);
-  display: flex;
-  align-items: center;
-  gap: 5px;
+  align-self: center; font-size: 12px; color: var(--text-muted);
+  display: flex; align-items: center; gap: 5px;
 }
 
 .msg-stream {
-  align-self: flex-start;
-  max-width: min(88%, 720px);
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-light);
-  border-radius: 3px 12px 12px 12px;
-  padding: 10px 14px;
-  font-size: 13px;
-  line-height: 1.6;
-  word-break: break-word;
-  overflow-x: auto;
+  align-self: flex-start; max-width: min(88%, 720px);
+  background: var(--bg-tertiary); border: 1px solid var(--border-light);
+  border-radius: 3px 12px 12px 12px; padding: 10px 14px;
+  font-size: 13px; line-height: 1.6; word-break: break-word; overflow-x: auto;
 }
 
-.agent-label {
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 3px;
-}
+.agent-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 3px; }
 
-/* ── Sidebar ── */
-.sidebar-section {
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
+.sidebar-section { padding: 8px 10px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
 
-/* Section header labels — bigger and brighter */
 .sidebar-label {
-  font-size: 11px;           /* was 10px */
-  font-weight: 700;          /* was 600 */
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-secondary);  /* was text-muted */
-  margin-bottom: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-secondary); margin-bottom: 6px;
+  display: flex; align-items: center; justify-content: space-between;
 }
 
 .project-pill {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  width: 100%;
-  text-align: left;
-  margin-bottom: 3px;
-  transition: all 0.15s;
-  font-size: 12px;
-  overflow: hidden;
+  display: flex; align-items: center; gap: 7px; padding: 6px 8px; border-radius: 6px;
+  border: 1px solid var(--border); background: transparent; color: var(--text-secondary);
+  cursor: pointer; width: 100%; text-align: left; margin-bottom: 3px;
+  transition: all 0.15s; font-size: 12px; overflow: hidden;
 }
 .project-pill:hover  { background: var(--bg-hover); color: var(--text-primary); }
 .project-pill.active { border-color: var(--accent); background: var(--accent-dim); color: var(--text-primary); }
@@ -219,30 +142,14 @@ body {
 .dot-gray   { background: var(--text-muted); }
 
 .file-tree-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 12px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  display: flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 4px;
+  cursor: pointer; font-size: 12px; color: var(--text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .file-tree-item:hover { background: var(--bg-hover); color: var(--text-primary); }
 .file-tree-item.new   { color: var(--green); }
 
-/* ── Agent badges ── */
-.agent-badge {
-  font-size: 10px;
-  font-weight: 600;
-  padding: 2px 6px;
-  border-radius: 10px;
-  flex-shrink: 0;
-  white-space: nowrap;
-}
+.agent-badge { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 10px; flex-shrink: 0; white-space: nowrap; }
 .badge-fullstack { background: var(--accent-dim); color: var(--accent); }
 .badge-frontend  { background: var(--green-dim);  color: var(--green); }
 .badge-backend   { background: var(--amber-dim);  color: var(--amber); }
@@ -254,5 +161,5 @@ body {
 
 .pulse { animation: pulse 2s ease-in-out infinite; }
 @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.4 } }
-@keyframes blink { 0%,100% { opacity:1 } 50% { opacity:0 } }
+@keyframes blink  { 0%,100% { opacity:1 } 50% { opacity:0 } }
 @keyframes spin   { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }

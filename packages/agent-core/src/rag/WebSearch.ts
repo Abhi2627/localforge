@@ -17,7 +17,6 @@ export async function search(
 ): Promise<SearchResult[]> {
   try {
     const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`
-
     const res = await fetch(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -26,24 +25,15 @@ export async function search(
       },
       signal,
     })
-
     if (!res.ok) return []
-
     const html   = await res.text()
     const parsed = parseDDGHtml(html).slice(0, maxResults)
     if (parsed.length === 0) return []
-
-    // Fetch page content in parallel — each fetch respects the same abort signal
     const withContent = await Promise.all(
-      parsed.map(async r => ({
-        ...r,
-        content: await fetchPageText(r.url, signal),
-      }))
+      parsed.map(async r => ({ ...r, content: await fetchPageText(r.url, signal) }))
     )
-
     return withContent.filter(r => r.title || r.snippet)
   } catch (err: any) {
-    // AbortError = timeout fired — not a real error, just return empty
     if (err?.name === 'AbortError') return []
     console.warn('[WebSearch] failed:', err?.message ?? err)
     return []
@@ -57,43 +47,28 @@ function parseDDGHtml(html: string): Omit<SearchResult, 'content'>[] {
   const links:    [string, string][] = []
   const snippets: string[]           = []
   let m: RegExpExecArray | null
-
   while ((m = linkRe.exec(html)) !== null) {
     let href = m[1]
-    try {
-      const uddg = href.match(/uddg=([^&]+)/)
-      if (uddg) href = decodeURIComponent(uddg[1])
-    } catch { }
+    try { const uddg = href.match(/uddg=([^&]+)/); if (uddg) href = decodeURIComponent(uddg[1]) } catch { }
     const title = stripTags(m[2]).trim()
     if (href.startsWith('http') && title) links.push([href, title])
   }
-  while ((m = snippetRe.exec(html)) !== null) {
-    snippets.push(stripTags(m[1]).trim())
-  }
+  while ((m = snippetRe.exec(html)) !== null) { snippets.push(stripTags(m[1]).trim()) }
   for (let i = 0; i < Math.min(links.length, 5); i++) {
     results.push({ url: links[i][0], title: links[i][1], snippet: snippets[i] ?? '' })
   }
   return results
 }
 
-async function fetchPageText(
-  url:     string,
-  signal?: AbortSignal,
-  maxChars = 2000
-): Promise<string> {
+async function fetchPageText(url: string, signal?: AbortSignal, maxChars = 2000): Promise<string> {
   try {
     if (/\.(pdf|zip|png|jpg|jpeg|gif|svg|mp4|mp3|exe|dmg|woff|ttf)$/i.test(url)) return ''
-    const res = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; LocalForge/1.0)' },
-      signal,
-    })
+    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; LocalForge/1.0)' }, signal })
     if (!res.ok) return ''
     const ct = res.headers.get('content-type') ?? ''
     if (!ct.includes('text/html') && !ct.includes('text/plain')) return ''
     return extractReadableText(await res.text(), maxChars)
-  } catch {
-    return ''
-  }
+  } catch { return '' }
 }
 
 function extractReadableText(html: string, maxChars: number): string {

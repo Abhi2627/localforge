@@ -12,9 +12,10 @@ export interface RAGResult {
   query:        string
   sources:      SearchResult[]
   contextBlock: string
+  // Pre-extracted facts to prepend before the model response
+  // This bypasses model hallucination for simple factual lookups
+  extractedFacts?: string
 }
-
-// ── Live-data classifier ──────────────────────────────────────────────────────
 
 const LIVE_DATA_SIGNALS = [
   /\b(stock price|share price|closing price|current price|market cap|trading at)\b/i,
@@ -71,6 +72,26 @@ function buildContextBlock(results: SearchResult[], query: string): string {
   return lines.join('\n')
 }
 
+// ── Extract key facts directly from snippets ──────────────────────────────────
+// This is the critical addition: we pull facts OUT of the search results
+// and format them as a clean answer prefix, so the model just needs to elaborate.
+// The model cannot hallucinate what it never generates — we generate the facts ourselves.
+
+function extractFactsFromResults(results: SearchResult[], query: string): string | undefined {
+  if (results.length === 0) return undefined
+
+  const topSnippet = results[0]?.snippet
+  const topContent = results[0]?.content?.split('\n').filter(l => l.length > 20)[0] ?? ''
+  const source     = results[0]?.url ?? ''
+  const title      = results[0]?.title ?? ''
+
+  if (!topSnippet && !topContent) return undefined
+
+  // Build a clean fact summary from the raw snippet — no model involved
+  const factText = topSnippet || topContent
+  return `> **From web search:** ${factText}\n> Source: ${source}\n`
+}
+
 export async function runRAG(
   message:  string,
   forceWeb: boolean = false,
@@ -90,7 +111,15 @@ export async function runRAG(
       clearTimeout(timer)
       if (results.length === 0) { onStatus('No results found'); return { ...empty, didSearch: true, ragFailed: true, query } }
       onStatus(`Found ${results.length} source${results.length > 1 ? 's' : ''}`)
-      return { didSearch: true, ragFailed: false, query, sources: results, contextBlock: buildContextBlock(results, query) }
+      const extractedFacts = extractFactsFromResults(results, query)
+      return {
+        didSearch:    true,
+        ragFailed:    false,
+        query,
+        sources:      results,
+        contextBlock: buildContextBlock(results, query),
+        extractedFacts,
+      }
     } catch (err: any) {
       clearTimeout(timer)
       console.warn(`[RAG] ${err?.name === 'AbortError' ? 'timed out' : 'failed'}: ${err?.message}`)
@@ -108,20 +137,14 @@ export function injectRAGContext(systemPrompt: string, rag: RAGResult): string {
 
   if (!rag.contextBlock) return systemPrompt
 
-  // The instruction is placed AFTER the context so it's the last thing the model reads
-  // before generating — highest influence position in the prompt
   return (
     systemPrompt +
     '\n\n' + rag.contextBlock +
-    `\n\n
-===STRICT INSTRUCTIONS FOR THIS RESPONSE===
-You MUST follow these rules or your answer will be wrong:
-1. Answer using ONLY the [WEB SEARCH RESULTS] above. Your training data is OUTDATED for this question.
-2. Copy facts EXACTLY from the search results — do not paraphrase, infer, or combine with memory.
-3. If the results state a party name, use that EXACT party name. Do not substitute it with another party.
-4. If the results do not contain a specific fact, write "Not found in search results" for that fact.
-5. Cite the source URL at the end of your answer.
-6. Do NOT add information not present in the search results.
-===END STRICT INSTRUCTIONS===`
+    `\n\n===STRICT INSTRUCTIONS===
+1. The web search results above are your ONLY source for this answer. Do not use training memory.
+2. Copy names, party names, numbers, and dates EXACTLY as they appear in the search snippets.
+3. Do NOT substitute retrieved information with anything from training data.
+4. Cite the source URL.
+===END INSTRUCTIONS===`
   )
 }
