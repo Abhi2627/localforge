@@ -39,6 +39,12 @@ interface AppState {
   openFiles:  Record<string, string[]>
   activeFile: Record<string, string | null>
 
+  // Per-session sending/streaming state — fixes "thinking bubble on all chats" bug
+  sendingSessionId:   string | null
+  streamingSessionId: string | null
+  setSendingSession:   (id: string | null) => void
+  setStreamingSession: (id: string | null) => void
+
   openFile:           (sessionId: string, filePath: string) => void
   closeFile:          (sessionId: string, filePath: string) => void
   setActiveFile:      (sessionId: string, filePath: string | null) => void
@@ -70,6 +76,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   models: [], selectedModel: '', leftExpanded: true,
   rightExpanded: true, isConnected: false, userName: '',
   openFiles: {}, activeFile: {},
+  sendingSessionId: null,
+  streamingSessionId: null,
+
+  setSendingSession:   (id) => set({ sendingSessionId: id }),
+  setStreamingSession: (id) => set({ streamingSessionId: id }),
 
   openFile: (sessionId, filePath) => set(s => {
     const cur     = s.openFiles[sessionId] ?? []
@@ -97,9 +108,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setScreen: (screen) => set({ screen }),
 
   loadSession: (session) => set(s => {
-    // Never duplicate by ID
     if (s.sessions.find(x => x.id === session.id)) return s
-    // Never duplicate project sessions by rootPath
     if (session.type === 'project' && session.rootPath) {
       if (s.sessions.find(x => x.type === 'project' && x.rootPath === session.rootPath)) return s
     }
@@ -130,6 +139,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     sessions: s.sessions.filter(sess => sess.id !== id),
     activeSessionId: null,
     screen: 'welcome',
+    // Clean up sending/streaming state if the closed session was active
+    sendingSessionId:   s.sendingSessionId   === id ? null : s.sendingSessionId,
+    streamingSessionId: s.streamingSessionId === id ? null : s.streamingSessionId,
   })),
 
   addMessage: (sessionId, msg) => set(s => ({

@@ -15,23 +15,22 @@ async function req<T>(method: string, path: string, body?: object): Promise<T> {
 
 export interface RAGSource { title: string; url: string }
 
-export interface StreamCallbacks {
-  onChunk:       (chunk: string) => void
-  onRagStatus?:  (status: string) => void
-  onRagSources?: (sources: RAGSource[]) => void
-}
-
 async function doStream(
   endpoint:  string,
   message:   string,
   sessionId: string,
   history:   Array<{ role: string; content: string }>,
-  callbacks: StreamCallbacks
+  callbacks: {
+    onChunk:       (chunk: string) => void
+    onRagStatus?:  (status: string) => void
+    onRagSources?: (sources: RAGSource[]) => void
+    onProvider?:   (provider: string, model: string) => void
+  }
 ): Promise<void> {
   const res = await fetch(`${BASE}${endpoint}`, {
-    method:  'POST',
+    method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ message, sessionId, history }),
+    body: JSON.stringify({ message, sessionId, history }),
   })
   if (!res.ok) throw new Error(`Stream failed (${res.status}): ${await res.text()}`)
 
@@ -48,22 +47,40 @@ async function doStream(
       if (data === '[DONE]') return
       try {
         const parsed = JSON.parse(data)
-        if (parsed.chunk !== undefined)        callbacks.onChunk(parsed.chunk)
-        if (parsed.type === 'rag_status')      callbacks.onRagStatus?.(parsed.status)
-        if (parsed.type === 'rag_sources')     callbacks.onRagSources?.(parsed.sources)
+        if (parsed.chunk !== undefined)    callbacks.onChunk(parsed.chunk)
+        if (parsed.type === 'rag_status')  callbacks.onRagStatus?.(parsed.status)
+        if (parsed.type === 'rag_sources') callbacks.onRagSources?.(parsed.sources)
+        if (parsed.type === 'provider')    callbacks.onProvider?.(parsed.provider, parsed.model)
       } catch { }
     }
   }
 }
 
 export const api = {
+  // ── Models (Ollama) ──────────────────────────────────────────────────────
   getModels:     () => req<{ models: any[] }>('GET', '/models'),
   getModelStats: () => req<any>('GET', '/models/stats'),
   selectModel:   (model: string) => req<any>('POST', '/models/select', { model }),
   setFallbacks:  (models: string[]) => req<any>('POST', '/models/fallback', { models }),
-  getSystem:     () => req<any>('GET', '/system'),
-  getNetworkInfo:() => req<{ lanIp: string; hostname: string; platform: string }>('GET', '/network/info'),
 
+  // ── Settings ─────────────────────────────────────────────────────────────
+  getSettings:      () => req<any>('GET', '/settings'),
+  setProvider:      (activeProvider: string, cloudModel?: string) =>
+    req<any>('POST', '/settings/provider', { activeProvider, cloudModel }),
+  saveApiKey:       (provider: string, apiKey: string, baseUrl?: string) =>
+    req<any>('POST', '/settings/apikey', { provider, apiKey, baseUrl }),
+  deleteApiKey:     (provider: string) =>
+    req<any>('POST', '/settings/apikey/delete', { provider }),
+  validateApiKey:   (provider: string, apiKey: string, model: string, baseUrl?: string) =>
+    req<{ ok: boolean; error?: string }>('POST', '/settings/apikey/validate', { provider, apiKey, model, baseUrl }),
+  saveLLMDefaults:  (defaults: Partial<{ temperature: number; maxTokens: number; systemPrompt: string; contextLength: number }>) =>
+    req<any>('POST', '/settings/llm', defaults),
+
+  // ── System ───────────────────────────────────────────────────────────────
+  getSystem:      () => req<any>('GET', '/system'),
+  getNetworkInfo: () => req<{ lanIp: string; hostname: string; platform: string }>('GET', '/network/info'),
+
+  // ── Sessions ─────────────────────────────────────────────────────────────
   getSessions:   () => req<{ sessions: any[] }>('GET', '/sessions'),
   getSession:    (id: string) => req<{ session: any; messages: any[] }>('GET', `/sessions/${id}`),
   createSession: (id: string, type: string, title: string, rootPath?: string, modelName?: string) =>
@@ -72,10 +89,10 @@ export const api = {
   saveMessage:   (id: string, sessionId: string, role: string, content: string, agentName?: string) =>
     req<any>('POST', '/sessions/message', { id, sessionId, role, content, agentName }),
 
+  // ── Project ───────────────────────────────────────────────────────────────
   openProject:       (sessionId: string, rootPath: string) =>
     req<{ success: boolean; isEmpty: boolean; fileList: string[]; fileTree: string; fileCount: number }>(
-      'POST', '/project/open', { sessionId, rootPath }
-    ),
+      'POST', '/project/open', { sessionId, rootPath }),
   getProjectSummary: (sessionId: string) =>
     req<{ summary: string | null }>('GET', `/project/${sessionId}/summary`),
   readFile:          (filePath: string) =>
@@ -83,10 +100,10 @@ export const api = {
   writeFile:         (filePath: string, content: string) =>
     req<{ success: boolean }>('POST', '/project/file', { path: filePath, content }),
 
+  // ── Chat ──────────────────────────────────────────────────────────────────
   sendChat: (message: string, sessionId: string, history: any[] = []) =>
     req<{ success: boolean; reply: string }>('POST', '/chat', { message, sessionId, history }),
 
-  // Standard stream — no RAG, always fast
   streamChat: (
     message:   string,
     sessionId: string,
@@ -95,7 +112,6 @@ export const api = {
     onChunk:   (chunk: string) => void,
   ) => doStream('/chat/stream', message, sessionId, history, { onChunk }),
 
-  // Web-augmented stream — RAG phase runs first, then model
   streamChatWeb: (
     message:        string,
     sessionId:      string,
@@ -105,6 +121,7 @@ export const api = {
     onRagSources?:  (sources: RAGSource[]) => void,
   ) => doStream('/chat/stream/web', message, sessionId, history, { onChunk, onRagStatus, onRagSources }),
 
+  // ── Agents ────────────────────────────────────────────────────────────────
   createProject: (name: string, rootPath: string) =>
     req<any>('POST', '/projects', { name, rootPath }),
   createAgent:   (projectId: string, name: string, role: string, allowedPaths: string[] = []) =>
