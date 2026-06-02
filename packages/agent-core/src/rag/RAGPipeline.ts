@@ -1,10 +1,5 @@
 /**
  * RAGPipeline.ts — Web-augmented context injection
- *
- * Key design:
- * - Explicit @web trigger OR auto-detect for live-data queries
- * - Hard-capped at MAX_RAG_MS total
- * - All errors caught — never crashes the stream
  */
 
 import { search, type SearchResult } from './WebSearch.js'
@@ -29,8 +24,7 @@ const LIVE_DATA_SIGNALS = [
   /\b(score|result|winner|won|lost).{0,20}(match|game|today|yesterday|last night)\b/i,
   /\b(latest news|breaking news|what happened|news today)\b/i,
   /\b(latest version|current version|stable version|release).{0,20}(of|for)\s+\w+/i,
-  // Political/government current state
-  /\b(current|who is|who's).{0,20}(cm|chief minister|pm|prime minister|president|governor|ceo|cto)\b/i,
+  /\b(current|who is|who's).{0,20}(cm|chief minister|pm|prime minister|president|governor|ceo)\b/i,
   /\b(cm|chief minister|pm|prime minister).{0,20}(of|for)\s+\w+/i,
 ]
 
@@ -63,7 +57,7 @@ function buildContextBlock(results: SearchResult[], query: string): string {
   if (results.length === 0) return ''
   const lines = [
     `[WEB SEARCH RESULTS for: "${query}"]`,
-    `[Retrieved ${new Date().toUTCString()}]`,
+    `[Retrieved: ${new Date().toUTCString()}]`,
     '',
   ]
   for (const r of results) {
@@ -77,75 +71,57 @@ function buildContextBlock(results: SearchResult[], query: string): string {
   return lines.join('\n')
 }
 
-// ── Main RAG function ─────────────────────────────────────────────────────────
-
 export async function runRAG(
   message:  string,
   forceWeb: boolean = false,
   onStatus: (msg: string) => void = () => {}
 ): Promise<RAGResult> {
   const empty: RAGResult = { didSearch: false, ragFailed: false, query: '', sources: [], contextBlock: '' }
-
   try {
     if (!forceWeb && !needsWebSearch(message)) return empty
-
     const query = extractQuery(message)
     if (!query) return empty
 
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), MAX_RAG_MS)
-
     onStatus('Searching web…')
-
     try {
       const results = await search(query, 3, controller.signal)
       clearTimeout(timer)
-
-      if (results.length === 0) {
-        onStatus('No results found')
-        return { ...empty, didSearch: true, ragFailed: true, query }
-      }
-
+      if (results.length === 0) { onStatus('No results found'); return { ...empty, didSearch: true, ragFailed: true, query } }
       onStatus(`Found ${results.length} source${results.length > 1 ? 's' : ''}`)
-      return {
-        didSearch:    true,
-        ragFailed:    false,
-        query,
-        sources:      results,
-        contextBlock: buildContextBlock(results, query),
-      }
+      return { didSearch: true, ragFailed: false, query, sources: results, contextBlock: buildContextBlock(results, query) }
     } catch (err: any) {
       clearTimeout(timer)
       console.warn(`[RAG] ${err?.name === 'AbortError' ? 'timed out' : 'failed'}: ${err?.message}`)
       return { ...empty, didSearch: true, ragFailed: true, query }
     }
-  } catch {
-    return empty
-  }
+  } catch { return empty }
 }
-
-// ── Context injection ─────────────────────────────────────────────────────────
 
 export function injectRAGContext(systemPrompt: string, rag: RAGResult): string {
   if (!rag.didSearch) return systemPrompt
 
   if (rag.ragFailed) {
-    return systemPrompt + '\n\n[SYSTEM: Web search failed — device may be offline. Tell the user clearly you cannot fetch live data right now. Do NOT guess or make up any facts, names, or numbers.]'
+    return systemPrompt + '\n\n[SYSTEM: Web search failed — tell the user you cannot fetch live data right now. Do NOT guess or invent any facts.]'
   }
 
   if (!rag.contextBlock) return systemPrompt
 
-  // Strong instruction — forces model to use the web results, not training memory
-  const instruction = `
-
-${rag.contextBlock}
-
-CRITICAL INSTRUCTIONS FOR ANSWERING:
-1. Use ONLY the web search results above to answer. Do NOT use your training data for this question.
-2. If the answer is clearly stated in the results, state it directly and confidently.
-3. Cite the source URL after your answer.
-4. If the results do not contain the answer, say "The search results don't contain a clear answer to this. You may want to check [URL] directly."
-5. Do NOT invent, guess, or hallucinate any facts, names, dates, or numbers.`
-
-  return systemPrompt + instruction
+  // The instruction is placed AFTER the context so it's the last thing the model reads
+  // before generating — highest influence position in the prompt
+  return (
+    systemPrompt +
+    '\n\n' + rag.contextBlock +
+    `\n\n
+===STRICT INSTRUCTIONS FOR THIS RESPONSE===
+You MUST follow these rules or your answer will be wrong:
+1. Answer using ONLY the [WEB SEARCH RESULTS] above. Your training data is OUTDATED for this question.
+2. Copy facts EXACTLY from the search results — do not paraphrase, infer, or combine with memory.
+3. If the results state a party name, use that EXACT party name. Do not substitute it with another party.
+4. If the results do not contain a specific fact, write "Not found in search results" for that fact.
+5. Cite the source URL at the end of your answer.
+6. Do NOT add information not present in the search results.
+===END STRICT INSTRUCTIONS===`
+  )
 }

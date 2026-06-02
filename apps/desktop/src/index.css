@@ -8,8 +8,8 @@
   --border:         #1f1f2a;
   --border-light:   #2f2f3d;
   --text-primary:   #f1f1f6;
-  --text-secondary: #9499ad;
-  --text-muted:     #62677c;
+  --text-secondary: #b0b5c8;   /* brighter — was #9499ad */
+  --text-muted:     #7a7f96;   /* brighter — was #62677c */
   --accent:         #8b5cf6;
   --accent-dim:     rgba(139, 92, 246, 0.15);
   --green:          #10b981;
@@ -19,15 +19,13 @@
   --red:            #ef4444;
   --red-dim:        rgba(239, 68, 68, 0.15);
 
-  /* Responsive sidebar widths */
   --left-expanded:   220px;
   --left-collapsed:  48px;
-  --right-expanded:  260px;
+  --right-expanded:  280px;
   --right-collapsed: 40px;
   --topbar-height:   40px;
 }
 
-/* ── Reset ──────────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body, #root {
@@ -44,12 +42,11 @@ body {
   line-height: 1.5;
 }
 
-/* ── Scrollbars ─────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar       { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 2px; }
 
-/* ── Topbar ──────────────────────────────────────────────────────────────── */
+/* ── Topbar ── */
 .topbar {
   display: flex;
   align-items: center;
@@ -58,13 +55,12 @@ body {
   height: var(--topbar-height);
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
-  overflow: hidden;           /* never overflow on narrow windows */
+  overflow: hidden;
   flex-shrink: 0;
   -webkit-app-region: drag;
 }
 .topbar > * { -webkit-app-region: no-drag; flex-shrink: 0; }
 
-/* Model select shrinks gracefully */
 .model-select {
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
@@ -74,16 +70,16 @@ body {
   padding: 3px 8px;
   outline: none;
   cursor: pointer;
-  max-width: 200px;           /* won't push other items off screen */
+  max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex-shrink: 1;             /* allowed to shrink */
+  flex-shrink: 1;
   min-width: 60px;
 }
 .model-select:focus { border-color: var(--accent); }
 
-/* ── Icon button ─────────────────────────────────────────────────────────── */
+/* ── Icon button ── */
 .icon-btn {
   width: 32px;
   height: 32px;
@@ -101,17 +97,15 @@ body {
 .icon-btn:hover  { background: var(--bg-hover); color: var(--text-primary); }
 .icon-btn.active { background: var(--accent-dim); color: var(--accent); }
 
-/* ── Main layout — set via inline style in App.tsx ──────────────────────── */
-/* Overflow guards on every panel */
 .main-area {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  min-width: 0;         /* allow flex children to shrink below content size */
+  min-width: 0;
   min-height: 0;
 }
 
-/* ── Chat messages ──────────────────────────────────────────────────────── */
+/* ── Chat messages ── */
 .chat-messages {
   flex: 1;
   overflow-y: auto;
@@ -122,14 +116,14 @@ body {
   min-height: 0;
 }
 
-/* Message bubbles adapt to available width */
+/* User bubble — 60% max width */
 .msg-user {
   align-self: flex-end;
-  max-width: min(80%, 600px);
+  max-width: min(60%, 520px);
   background: var(--accent-dim);
   border: 1px solid var(--accent);
   border-radius: 12px 12px 3px 12px;
-  padding: 8px 12px;
+  padding: 10px 14px;
   color: var(--text-primary);
   font-size: 13px;
   line-height: 1.6;
@@ -138,11 +132,11 @@ body {
 
 .msg-agent {
   align-self: flex-start;
-  max-width: min(88%, 680px);
+  max-width: min(88%, 720px);
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
   border-radius: 3px 12px 12px 12px;
-  padding: 8px 12px;
+  padding: 10px 14px;
   font-size: 13px;
   line-height: 1.6;
   word-break: break-word;
@@ -151,7 +145,7 @@ body {
 
 .msg-system {
   align-self: center;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-muted);
   display: flex;
   align-items: center;
@@ -160,11 +154,11 @@ body {
 
 .msg-stream {
   align-self: flex-start;
-  max-width: min(88%, 680px);
+  max-width: min(88%, 720px);
   background: var(--bg-tertiary);
   border: 1px solid var(--border-light);
   border-radius: 3px 12px 12px 12px;
-  padding: 8px 12px;
+  padding: 10px 14px;
   font-size: 13px;
   line-height: 1.6;
   word-break: break-word;
@@ -179,19 +173,20 @@ body {
   margin-bottom: 3px;
 }
 
-/* ── Sidebar sections ───────────────────────────────────────────────────── */
+/* ── Sidebar ── */
 .sidebar-section {
   padding: 8px 10px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 
+/* Section header labels — bigger and brighter */
 .sidebar-label {
-  font-size: 10px;
-  font-weight: 600;
+  font-size: 11px;           /* was 10px */
+  font-weight: 700;          /* was 600 */
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--text-muted);
+  color: var(--text-secondary);  /* was text-muted */
   margin-bottom: 6px;
   display: flex;
   align-items: center;
@@ -239,7 +234,7 @@ body {
 .file-tree-item:hover { background: var(--bg-hover); color: var(--text-primary); }
 .file-tree-item.new   { color: var(--green); }
 
-/* ── Agent badges ──────────────────────────────────────────────────────── */
+/* ── Agent badges ── */
 .agent-badge {
   font-size: 10px;
   font-weight: 600;
@@ -254,13 +249,10 @@ body {
 .badge-test      { background: var(--red-dim);    color: var(--red); }
 .badge-review    { background: var(--accent-dim); color: var(--accent); }
 
-/* ── Progress bar ──────────────────────────────────────────────────────── */
 .progress-bar  { height: 2px; background: var(--border); border-radius: 1px; overflow: hidden; margin-top: 3px; }
 .progress-fill { height: 100%; background: var(--green); border-radius: 1px; transition: width 0.3s; }
 
-/* ── Animations ─────────────────────────────────────────────────────────── */
 .pulse { animation: pulse 2s ease-in-out infinite; }
 @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.4 } }
-
 @keyframes blink { 0%,100% { opacity:1 } 50% { opacity:0 } }
 @keyframes spin   { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }

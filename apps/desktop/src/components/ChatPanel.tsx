@@ -94,7 +94,8 @@ function MessageBubble({ msg, onEdit, onReload }: { msg: Message; onEdit?: (c: s
   if (isUser) return (
     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, alignItems: 'flex-end' }}
       onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3, maxWidth: '72%', minWidth: 0 }}>
+      {/* 60% max-width — matches .msg-user in CSS */}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3, maxWidth: '60%', minWidth: 0 }}>
         <MsgActions content={msg.content} isUser visible={hovered} onEdit={() => onEdit?.(msg.content)} />
         <div className="msg-user" style={{ width: '100%', boxSizing: 'border-box' }}>
           {isWebTrigger(msg.content)
@@ -120,8 +121,6 @@ function MessageBubble({ msg, onEdit, onReload }: { msg: Message; onEdit?: (c: s
   )
 }
 
-// ── RAG status bubble ─────────────────────────────────────────────────────────
-
 function RAGBubble({ status }: { status: string }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -132,8 +131,6 @@ function RAGBubble({ status }: { status: string }) {
     </div>
   )
 }
-
-// ── Source pills ──────────────────────────────────────────────────────────────
 
 function RAGSources({ sources }: { sources: RAGSource[] }) {
   if (sources.length === 0) return null
@@ -224,7 +221,6 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
       const useWebSearch = isWebTrigger(text)
 
       if (useWebSearch) {
-        // Web-augmented stream — RAG phase then model
         await api.streamChatWeb(
           text, session.id, history,
           (chunk) => {
@@ -235,7 +231,6 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
           (sources) => setRagSources(sources),
         )
       } else {
-        // Standard stream — no RAG, always fast
         await api.streamChat(text, session.id, history, streamTaskId, (chunk) => {
           if (firstChunk) { setSending(false); setStreaming(true); firstChunk = false }
           appendStream(session.id, streamTaskId, chunk)
@@ -270,11 +265,9 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
 
   const placeholder = !session
     ? 'Open a chat or project…'
-    : isWebMode
-    ? 'Web search enabled — ask anything…'
-    : isChat
-    ? 'Ask anything… (type @web for live data)'
-    : 'Ask about this project… (type @web for live data)'
+    : isWebMode ? 'Web search enabled — ask anything…'
+    : isChat    ? 'Ask anything… (type @web for live data)'
+    :             'Ask about this project… (type @web for live data)'
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', background: 'var(--bg-primary)' }}>
@@ -289,14 +282,14 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
           <div style={{ flex: 1, minWidth: 8 }} />
           {isProject && session.rootPath && onOpenTerminal && (
             <button onClick={() => onOpenTerminal(session.rootPath!)}
-              style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 8px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text-muted)', cursor: 'pointer', fontSize: 11, flexShrink: 0 }}
+              style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 8px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, flexShrink: 0 }}
               onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent)'; (e.currentTarget as HTMLElement).style.color = 'var(--accent)' }}
-              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLElement).style.color = 'var(--text-secondary)' }}
             >
-              <Terminal size={12} /><span>Terminal</span>
+              <Terminal size={13} /><span>Terminal</span>
             </button>
           )}
-          <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, fontWeight: 600, background: 'var(--accent-dim)', color: 'var(--accent)', flexShrink: 0 }}>{session.type}</span>
+          <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, fontWeight: 600, background: 'var(--accent-dim)', color: 'var(--accent)', flexShrink: 0 }}>{session.type}</span>
         </div>
       )}
 
@@ -304,21 +297,21 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
       {session && isProject && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 8px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)', flexShrink: 0, overflowX: 'auto', scrollbarWidth: 'none' }}>
           <div onClick={() => setActiveFile(session.id, null)}
-            style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 4, background: !currentActiveFile ? 'var(--bg-primary)' : 'transparent', border: `1px solid ${!currentActiveFile ? 'var(--border)' : 'transparent'}`, color: !currentActiveFile ? 'var(--accent)' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 11, fontWeight: 500, userSelect: 'none', flexShrink: 0 }}>
-            <Bot size={11} /><span>Chat</span>
+            style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 4, background: !currentActiveFile ? 'var(--bg-primary)' : 'transparent', border: `1px solid ${!currentActiveFile ? 'var(--border)' : 'transparent'}`, color: !currentActiveFile ? 'var(--accent)' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: 500, userSelect: 'none', flexShrink: 0 }}>
+            <Bot size={12} /><span>Chat</span>
           </div>
           {(openFiles[session.id] ?? []).map(file => {
             const isActive = currentActiveFile === file
             const name = file.replace(/\\/g, '/').split('/').pop() ?? 'file'
             return (
               <div key={file} onClick={() => setActiveFile(session.id, file)}
-                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 8px 3px 10px', borderRadius: 4, background: isActive ? 'var(--bg-primary)' : 'transparent', border: `1px solid ${isActive ? 'var(--border)' : 'transparent'}`, color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 11, userSelect: 'none', flexShrink: 0 }}>
+                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 8px 3px 10px', borderRadius: 4, background: isActive ? 'var(--bg-primary)' : 'transparent', border: `1px solid ${isActive ? 'var(--border)' : 'transparent'}`, color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, userSelect: 'none', flexShrink: 0 }}>
                 <span>{name}</span>
                 <button onClick={e => { e.stopPropagation(); closeFile(session.id, file) }}
                   style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', padding: 1, borderRadius: 3 }}
                   onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'}
                   onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'}
-                ><X size={10} /></button>
+                ><X size={11} /></button>
               </div>
             )
           })}
@@ -331,15 +324,13 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
       ) : (
         <>
           <div style={{ flex: 1, overflowY: 'auto', padding: '20px 5%', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
-
-            {/* Empty state */}
             {messages.length === 0 && !isBusy && !ragStatus && (
               <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--text-muted)' }}>
                 <Bot size={36} style={{ marginBottom: 10, opacity: 0.3 }} />
-                <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 6, color: 'var(--text-secondary)' }}>
+                <div style={{ fontSize: 15, fontWeight: 500, marginBottom: 6, color: 'var(--text-secondary)' }}>
                   {isChat ? 'Ask me anything' : 'Project assistant'}
                 </div>
-                <div style={{ fontSize: 12, lineHeight: 1.8 }}>
+                <div style={{ fontSize: 13, lineHeight: 1.8 }}>
                   {isChat
                     ? <>Explain concepts, review code, or answer questions.<br/>
                        Type <code style={{ fontFamily:'monospace', color:'#06b6d4', background:'rgba(6,182,212,0.1)', padding:'1px 5px', borderRadius:4 }}>@web</code> before your message for live web data.</>
@@ -356,19 +347,13 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
               />
             ))}
 
-            {/* Source pills — shown after last response */}
             {ragSources.length > 0 && !isBusy && <RAGSources sources={ragSources} />}
-
-            {/* RAG status — "Searching web…" */}
             {ragStatus && <RAGBubble status={ragStatus} />}
-
-            {/* Thinking bubble */}
             {sending && !streaming && !ragStatus && <ThinkingBubble />}
-
             <div ref={bottomRef} />
           </div>
 
-          {/* Input area */}
+          {/* Input */}
           <div style={{ flexShrink: 0, padding: '10px 5% 14px', background: 'var(--bg-primary)' }}>
             <div style={{ width: '100%', maxWidth: 860, margin: '0 auto' }}>
               <div style={{
@@ -382,10 +367,9 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
                   onKeyDown={onKeyDown} placeholder={placeholder} disabled={!session || isBusy} rows={1}
                   style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', resize: 'none', color: 'var(--text-primary)', fontSize: 13, lineHeight: 1.6, fontFamily: 'inherit', padding: '2px 0', maxHeight: 140, overflowY: 'auto' }}
                 />
-                {/* Web mode badge */}
                 {isWebMode && (
-                  <div style={{ display:'flex', alignItems:'center', gap:3, fontSize:10, color:'#06b6d4', flexShrink:0, marginBottom:2 }}>
-                    <Globe size={11}/><span>web</span>
+                  <div style={{ display:'flex', alignItems:'center', gap:3, fontSize:11, color:'#06b6d4', flexShrink:0, marginBottom:2 }}>
+                    <Globe size={12}/><span>web</span>
                   </div>
                 )}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0, marginBottom: 1 }}>
@@ -396,7 +380,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
                   </button>
                 </div>
               </div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', marginTop: 6 }}>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', marginTop: 6 }}>
                 {modelShortName}
                 {isWebMode && <span style={{ color:'#06b6d4' }}> · web search</span>}
                 {' · '}{ragStatus ?? (isBusy ? 'Generating…' : 'Enter to send · @web for live data')}

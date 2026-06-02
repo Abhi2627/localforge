@@ -11,6 +11,7 @@ export interface LocalForgeConfig {
   fallbackModels: string[]
   executionMode:  'sequential' | 'parallel'
   maxParallel:    number
+  ragModel?:      string   // optional dedicated model for RAG/factual queries
 }
 
 const DEFAULT_CONFIG: LocalForgeConfig = {
@@ -42,13 +43,13 @@ export function saveConfig(config: Partial<LocalForgeConfig>): LocalForgeConfig 
 }
 
 export interface ModelInfo {
-  name:        string
-  sizeGb:      string
-  sizeBytes:   number
-  modifiedAt:  string
-  isSelected:  boolean
-  isFallback:  boolean
-  // Runtime metrics (from ModelMetrics)
+  name:          string
+  sizeGb:        string
+  sizeBytes:     number
+  modifiedAt:    string
+  isSelected:    boolean
+  isFallback:    boolean
+  isRagModel:    boolean
   totalCalls:    number
   avgLatencyMs:  number
   avgTps:        number
@@ -56,27 +57,26 @@ export interface ModelInfo {
   lastTps:       number
   errorCount:    number
   lastUsed:      number
-  // Ollama metadata
   paramSize?:    string
   quantization?: string
   family?:       string
-  // Suggestion tags
-  tags:          string[]  // e.g. ['code', 'fast', 'large']
+  tags:          string[]
 }
 
 function tagModel(name: string, sizeBytes: number): string[] {
   const tags: string[] = []
   const n = name.toLowerCase()
 
-  // Task type
-  if (n.includes('coder') || n.includes('code') || n.includes('deepseek'))    tags.push('code')
-  if (n.includes('chat') || n.includes('llama') || n.includes('mistral'))     tags.push('chat')
-  if (n.includes('instruct'))                                                   tags.push('instruct')
-  if (n.includes('vision') || n.includes('llava'))                             tags.push('vision')
-  if (n.includes('embed'))                                                      tags.push('embedding')
-  if (n.includes('math') || n.includes('qwq') || n.includes('deepthink'))      tags.push('reasoning')
+  if (n.includes('coder') || n.includes('code') || n.includes('deepseek')) tags.push('code')
+  if (n.includes('chat') || n.includes('llama') || n.includes('mistral'))  tags.push('chat')
+  if (!n.includes('coder') && !n.includes('code') && (
+    n.includes('qwen') || n.includes('gemma') || n.includes('phi')
+  )) tags.push('chat')  // general qwen/gemma/phi are good for chat
+  if (n.includes('instruct'))  tags.push('instruct')
+  if (n.includes('vision') || n.includes('llava')) tags.push('vision')
+  if (n.includes('embed'))     tags.push('embedding')
+  if (n.includes('math') || n.includes('qwq') || n.includes('deepthink')) tags.push('reasoning')
 
-  // Size
   const gb = sizeBytes / 1024 / 1024 / 1024
   if (gb < 3)       tags.push('fast')
   else if (gb < 8)  tags.push('balanced')
@@ -85,16 +85,54 @@ function tagModel(name: string, sizeBytes: number): string[] {
   return tags
 }
 
+// ── Pick best model for RAG/factual queries ───────────────────────────────────
+// Prefers a non-coder general model; falls back to selected model
+
+export async function getBestRagModel(): Promise<string> {
+  const config = loadConfig()
+
+  // If user explicitly set a RAG model, use it
+  if (config.ragModel) {
+    const available = await isModelAvailable(config.ragModel)
+    if (available) return config.ragModel
+  }
+
+  // If the selected model is NOT a coder model, it's already good for RAG
+  const selectedName = config.selectedModel.toLowerCase()
+  if (!selectedName.includes('coder') && !selectedName.includes('code') && !selectedName.includes('deepseek')) {
+    return config.selectedModel
+  }
+
+  // Selected model is a coder model — try to find a better general model
+  try {
+    const installed = await listModels()
+
+    // Prefer models in this order for factual/RAG use
+    const generalPreference = [
+      'llama3.2', 'llama3.1', 'llama3', 'llama2',
+      'qwen2.5:', 'qwen2:',   // qwen2.5 (non-coder)
+      'mistral',  'gemma2',   'gemma',
+      'phi3',     'phi',
+      'command-r', 'orca',
+    ]
+
+    for (const pref of generalPreference) {
+      const match = installed.find(m => m.name.toLowerCase().startsWith(pref))
+      if (match) {
+        console.log(`[RAG] Using general model ${match.name} instead of coder model ${config.selectedModel}`)
+        return match.name
+      }
+    }
+  } catch { }
+
+  // No better model found — fall back to selected (will still use the strong prompt)
+  return config.selectedModel
+}
+
 function suggestModel(models: ModelInfo[], task: 'code' | 'chat' | 'reasoning'): string | null {
   const eligible = models.filter(m => m.tags.includes(task))
   if (eligible.length === 0) return null
-
-  // Rank: prefer models with good TPS and low error rate
-  return eligible.sort((a, b) => {
-    const scoreA = a.avgTps - a.errorCount * 10
-    const scoreB = b.avgTps - b.errorCount * 10
-    return scoreB - scoreA
-  })[0].name
+  return eligible.sort((a, b) => (b.avgTps - b.errorCount * 10) - (a.avgTps - a.errorCount * 10))[0].name
 }
 
 export async function getInstalledModels(): Promise<ModelInfo[]> {
@@ -104,8 +142,8 @@ export async function getInstalledModels(): Promise<ModelInfo[]> {
   const metricMap = Object.fromEntries(metrics.map(m => [m.name, m]))
 
   return models.map(m => {
-    const stat  = metricMap[m.name]
-    const tags  = tagModel(m.name, m.size)
+    const stat = metricMap[m.name]
+    const tags = tagModel(m.name, m.size)
     return {
       name:         m.name,
       sizeGb:       (m.size / 1024 / 1024 / 1024).toFixed(1) + ' GB',
@@ -113,6 +151,7 @@ export async function getInstalledModels(): Promise<ModelInfo[]> {
       modifiedAt:   m.modified_at,
       isSelected:   m.name === config.selectedModel,
       isFallback:   config.fallbackModels.includes(m.name),
+      isRagModel:   m.name === config.ragModel,
       totalCalls:   stat?.totalCalls    ?? 0,
       avgLatencyMs: stat ? avgLatency(stat) : 0,
       avgTps:       stat ? avgTps(stat)     : 0,
@@ -135,9 +174,10 @@ export async function getModelStats() {
 
   return {
     models,
-    selected:   config.selectedModel,
-    fallbacks:  config.fallbackModels,
-    errors:     metrics.flatMap(m => m.errors.map(e => ({ model: m.name, ...e }))).sort((a, b) => b.ts - a.ts).slice(0, 50),
+    selected:    config.selectedModel,
+    ragModel:    config.ragModel,
+    fallbacks:   config.fallbackModels,
+    errors:      metrics.flatMap(m => m.errors.map(e => ({ model: m.name, ...e }))).sort((a, b) => b.ts - a.ts).slice(0, 50),
     suggestions: {
       code:      suggestModel(models, 'code'),
       chat:      suggestModel(models, 'chat'),
@@ -151,6 +191,14 @@ export async function selectModel(modelName: string): Promise<{ success: boolean
   if (!available) return { success: false, message: `Model "${modelName}" is not installed. Run: ollama pull ${modelName}` }
   saveConfig({ selectedModel: modelName })
   return { success: true, message: `Model set to ${modelName}` }
+}
+
+export async function selectRagModel(modelName: string | null): Promise<{ success: boolean }> {
+  if (!modelName) { saveConfig({ ragModel: undefined }); return { success: true } }
+  const available = await isModelAvailable(modelName)
+  if (!available) return { success: false }
+  saveConfig({ ragModel: modelName })
+  return { success: true }
 }
 
 export async function setFallbackModels(models: string[]): Promise<LocalForgeConfig> {
