@@ -3,6 +3,7 @@ import cors from '@fastify/cors'
 import websocket from '@fastify/websocket'
 import pty from 'node-pty'
 import os from 'os'
+import path from 'path'
 import fs from 'fs'
 import { execSync } from 'child_process'
 import { randomUUID } from 'crypto'
@@ -64,22 +65,54 @@ function broadcast(data: object) {
   wsClients.forEach(ws => { try { ws.send(msg) } catch { wsClients.delete(ws) } })
 }
 
-function buildSystemPrompt(modelName: string, summary?: string | null, knowledgeCtx?: string, contractCtx?: string, extra?: string): string {
+function buildSystemPrompt(modelName: string, summary?: string | null, knowledgeCtx?: string, contractCtx?: string, extra?: string, fileContents?: Record<string, string>): string {
+  // Build a block of actual file contents so the model reads real data, not hallucinations
+  const fileBlock = fileContents && Object.keys(fileContents).length > 0
+    ? '\n\nProject files (read these carefully before answering):\n' +
+      Object.entries(fileContents)
+        .map(([name, content]) => `\n--- ${name} ---\n${content}`)
+        .join('\n')
+    : ''
+
   return (
     `You are a helpful AI coding assistant inside LocalForge, powered by ${modelName}. ` +
     `Format rules: use plain readable text. For math or formulas, write them out in plain text (e.g. "x squared" not LaTeX). ` +
     `Do NOT use LaTeX syntax (no \\[, \\(, \\frac, \\begin etc). ` +
     `Use Markdown only for code blocks, headers, and lists. Do not use ** for bold in prose — use plain emphasis instead. ` +
     `Do not add filler phrases. When uncertain, say so rather than guessing.` +
-    (extra       ? `\n\n${extra}`               : '') +
-    (summary     ? `\n\nProject context:\n${summary}` : '') +
-    (knowledgeCtx ? `\n\n${knowledgeCtx}`        : '') +
-    (contractCtx  ? `\n\n${contractCtx}`         : '')
+    (extra        ? `\n\n${extra}`                    : '') +
+    (summary      ? `\n\nProject summary:\n${summary}` : '') +
+    fileBlock +
+    (knowledgeCtx ? `\n\n${knowledgeCtx}`              : '') +
+    (contractCtx  ? `\n\n${contractCtx}`               : '')
   )
 }
 
 function mapHistory(h: Array<{ role: string; content: string }>) {
   return h.slice(-20).map(x => ({ role: x.role as ChatRole, content: x.content }))
+}
+
+// Read key project files (README, package.json etc) to inject as real content into context
+// Capped so we don't blow the context window. README gets up to 8000 chars, others 1500 each.
+const KEY_FILES_FOR_CONTEXT = [
+  'README.md', 'readme.md', 'README.txt',
+  'package.json', 'tsconfig.json', 'vite.config.ts',
+  'pyproject.toml', 'Cargo.toml', 'go.mod',
+]
+
+function readProjectFilesForContext(rootPath: string): Record<string, string> {
+  const result: Record<string, string> = {}
+  if (!rootPath || !fs.existsSync(rootPath)) return result
+  for (const name of KEY_FILES_FOR_CONTEXT) {
+    const full = path.join(rootPath, name)
+    if (!fs.existsSync(full)) continue
+    try {
+      const raw   = fs.readFileSync(full, 'utf8')
+      const limit = name.toLowerCase().startsWith('readme') ? 8000 : 1500
+      result[name] = raw.length > limit ? raw.slice(0, limit) + '\n[... truncated ...]' : raw
+    } catch { }
+  }
+  return result
 }
 
 function setupSSE(reply: any) {
@@ -329,7 +362,9 @@ async function bootstrap() {
         if (!getSession(sessionId)) upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: loadConfig().selectedModel })
         const session = getSession(sessionId)
         const modelName = s.activeProvider === 'ollama' ? loadConfig().selectedModel : (s.cloudModels[s.activeProvider as CloudProvider] ?? '')
-        const sysPrompt = buildSystemPrompt(modelName, session?.summary, isProject ? buildAgentContext(sessionId) : undefined, isProject ? buildContractContext(sessionId) : undefined, s.llmDefaults.systemPrompt || undefined)
+        // Inject real file contents for project sessions — prevents hallucination
+        const fileContents = isProject && session?.rootPath ? readProjectFilesForContext(session.rootPath) : undefined
+        const sysPrompt = buildSystemPrompt(modelName, session?.summary, isProject ? buildAgentContext(sessionId) : undefined, isProject ? buildContractContext(sessionId) : undefined, s.llmDefaults.systemPrompt || undefined, fileContents)
         const msgs = [{ role: 'system' as ChatRole, content: sysPrompt }, ...mapHistory(history), { role: 'user' as ChatRole, content: message }]
         send({ type: 'provider', provider: s.activeProvider, model: modelName })
         let full = ''
@@ -354,7 +389,9 @@ async function bootstrap() {
         if (!getSession(sessionId)) upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: loadConfig().selectedModel })
         const session   = getSession(sessionId)
         const modelName = s.activeProvider === 'ollama' ? loadConfig().selectedModel : (s.cloudModels[s.activeProvider as CloudProvider] ?? '')
-        let sysPrompt   = buildSystemPrompt(modelName, session?.summary, isProject ? buildAgentContext(sessionId) : undefined, isProject ? buildContractContext(sessionId) : undefined, s.llmDefaults.systemPrompt || undefined)
+        // Inject real file contents for project sessions — prevents hallucination
+        const fileContents = isProject && session?.rootPath ? readProjectFilesForContext(session.rootPath) : undefined
+        let sysPrompt   = buildSystemPrompt(modelName, session?.summary, isProject ? buildAgentContext(sessionId) : undefined, isProject ? buildContractContext(sessionId) : undefined, s.llmDefaults.systemPrompt || undefined, fileContents)
         const rag = await runRAG(message, forceWeb, (status) => send({ type: 'rag_status', status }))
         if (rag.didSearch) {
           sysPrompt = injectRAGContext(sysPrompt, rag)
