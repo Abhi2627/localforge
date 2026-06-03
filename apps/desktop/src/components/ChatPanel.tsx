@@ -10,47 +10,49 @@ import FileEditorPanel from './FileEditorPanel'
 import SettingsModal from './SettingsModal'
 
 interface ChatPanelProps { onOpenTerminal?: (cwd: string) => void }
-
-interface AttachedFile {
-  id: string; name: string; path: string
-  size: number; content: string; isImage: boolean
-}
+interface AttachedFile { id: string; name: string; path: string; size: number; content: string; isImage: boolean }
 
 function roleBadgeClass(role?: AgentRole) { return `badge-${role ?? 'fullstack'}` }
 function formatTime(ts: number) { return new Date(ts).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) }
 function formatBytes(n: number) { return n < 1024 ? `${n}B` : n < 1048576 ? `${(n/1024).toFixed(1)}KB` : `${(n/1048576).toFixed(1)}MB` }
 function cleanTitle(raw: string) {
   return raw.replace(/\*\*/g,'').replace(/\*/g,'').replace(/`/g,'')
-    .replace(/#{1,6}\s?/g,'').replace(/[_~]/g,'')
-    .replace(/^["'`[\]()]+|["'`[\]()]+$/g,'')
+    .replace(/#{1,6}\s?/g,'').replace(/[_~]/g,'').replace(/^["'`[\]()]+|["'`[\]()]+$/g,'')
     .replace(/[^\w\s-]/g,' ').replace(/\s+/g,' ').trim()
 }
 function classifyError(message: string): 'ram' | 'timeout' | 'generic' {
   const m = message.toLowerCase()
-  if (m.includes('out of memory') || m.includes('cannot allocate') || m.includes('ggml_') ||
-      m.includes('metal') || m.includes('allocation') || m.includes('enomem') ||
-      m.includes('memory') || m.includes('resource')) return 'ram'
-  if (m.includes('fetch') || m.includes('timeout') || m.includes('abort') ||
-      m.includes('network') || m.includes('connect')) return 'timeout'
+  if (m.includes('out of memory')||m.includes('cannot allocate')||m.includes('ggml_')||m.includes('metal')||m.includes('allocation')||m.includes('enomem')||m.includes('memory')||m.includes('resource')) return 'ram'
+  if (m.includes('fetch')||m.includes('timeout')||m.includes('abort')||m.includes('network')||m.includes('connect')) return 'timeout'
   return 'generic'
 }
 
-// ── Strip markdown for plain-text copy ───────────────────────────────────────
+// Strip markdown for clean plain-text copy
 function stripMarkdown(text: string): string {
   return text
-    .replace(/\*\*(.+?)\*\*/gs, '$1')
-    .replace(/\*(.+?)\*/gs,     '$1')
-    .replace(/_{2}(.+?)_{2}/gs, '$1')
-    .replace(/_(.+?)_/gs,       '$1')
-    .replace(/~~(.+?)~~/gs,     '$1')
+    .replace(/\*\*(.+?)\*\*/gs, '$1').replace(/\*(.+?)\*/gs, '$1')
+    .replace(/_{2}(.+?)_{2}/gs, '$1').replace(/_(.+?)_/gs, '$1')
+    .replace(/~~(.+?)~~/gs, '$1')
     .replace(/```[\s\S]*?```/g, m => m.replace(/```\w*\n?/, '').replace(/\n?```$/, ''))
-    .replace(/`(.+?)`/g,        '$1')
-    .replace(/^#{1,6}\s/gm,     '')
-    .replace(/^[-*]\s/gm,       '')
-    .replace(/^\d+\.\s/gm,      '')
-    .replace(/\[(.+?)\]\(.+?\)/g, '$1')
-    .replace(/^>\s/gm,          '')
+    .replace(/`(.+?)`/g, '$1').replace(/^#{1,6}\s/gm, '').replace(/^[-*]\s/gm, '')
+    .replace(/^\d+\.\s/gm, '').replace(/\[(.+?)\]\(.+?\)/g, '$1').replace(/^>\s/gm, '')
     .trim()
+}
+
+// Recover clean display text from a message that may have injected file context
+function extractDisplayContent(content: string): string {
+  return content
+    .replace(/<file name="[^"]*">[\s\S]*?<\/file>/g, '')
+    .replace(/\[Attached image: [^\]]+\]/g, '')
+    .replace(/^\n+/, '').trim()
+}
+
+// Extract a specific file's content for preview
+function extractFileContent(msgContent: string, fileName: string): string {
+  const escaped = fileName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const re = new RegExp(`<file name="${escaped}">[\\s\\S]*?<\\/file>`)
+  const m  = msgContent.match(re)
+  return m ? m[0].replace(/<file name="[^"]*">\n?/, '').replace(/\n?<\/file>$/, '') : ''
 }
 
 const TEXT_EXTS  = new Set(['ts','tsx','js','jsx','mjs','cjs','vue','svelte','py','rb','go','rs','java','kt','swift','c','cpp','h','cs','php','html','css','scss','sass','less','json','yaml','yml','toml','xml','env','md','mdx','txt','csv','sh','bash','zsh','fish','sql','graphql','proto','dockerfile'])
@@ -64,7 +66,7 @@ function getFileIcon(name: string) {
   return <File size={12}/>
 }
 
-// ── Attachment strip ──────────────────────────────────────────────────────────
+// Attachment strip (pre-send)
 function AttachmentStrip({ files, onRemove }: { files: AttachedFile[]; onRemove: (id: string) => void }) {
   if (!files.length) return null
   return (
@@ -84,7 +86,29 @@ function AttachmentStrip({ files, onRemove }: { files: AttachedFile[]; onRemove:
   )
 }
 
-// ── Markdown renderer ─────────────────────────────────────────────────────────
+// File preview popup — opens on file chip click
+function FilePreviewPopup({ name, content, onClose }: { name: string; content: string; onClose: () => void }) {
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:600, display:'flex', alignItems:'center', justifyContent:'center' }} onClick={onClose}>
+      <div style={{ background:'var(--bg-secondary)', border:'1px solid var(--border)', borderRadius:12, width:'min(700px, 90vw)', maxHeight:'75vh', display:'flex', flexDirection:'column', overflow:'hidden', boxShadow:'0 24px 64px rgba(0,0,0,0.7)' }} onClick={e => e.stopPropagation()}>
+        <div style={{ display:'flex', alignItems:'center', gap:10, padding:'12px 16px', borderBottom:'1px solid var(--border)', flexShrink:0, background:'var(--bg-tertiary)' }}>
+          <FileText size={15} style={{ color:'var(--accent)', flexShrink:0 }}/>
+          <span style={{ flex:1, fontSize:13, fontWeight:600, color:'var(--text-primary)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{name}</span>
+          <span style={{ fontSize:11, color:'var(--text-muted)' }}>{formatBytes(content.length)}</span>
+          <button onClick={onClose} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', display:'flex', padding:4, borderRadius:4 }}
+            onMouseEnter={e => (e.currentTarget as HTMLElement).style.color='var(--text-primary)'}
+            onMouseLeave={e => (e.currentTarget as HTMLElement).style.color='var(--text-muted)'}
+          ><X size={15}/></button>
+        </div>
+        <div style={{ flex:1, overflowY:'auto', padding:'14px 16px' }}>
+          <pre style={{ margin:0, fontSize:12, fontFamily:'monospace', color:'var(--text-primary)', lineHeight:1.7, whiteSpace:'pre-wrap', wordBreak:'break-all' }}>{content}</pre>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Markdown renderer
 function MarkdownContent({ content }: { content: string }) {
   return (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
@@ -114,12 +138,11 @@ function MarkdownContent({ content }: { content: string }) {
   )
 }
 
-// ── Message action buttons ────────────────────────────────────────────────────
+// Message action buttons
 function MsgActions({ content, onEdit, onReload, isUser, visible }: {
   content: string; onEdit?: () => void; onReload?: () => void; isUser: boolean; visible: boolean
 }) {
   const [copied, setCopied] = useState(false)
-  // FIX: strip markdown before copying so user gets plain text, not **bold**
   const copy = () => navigator.clipboard.writeText(stripMarkdown(content)).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
   const btn: React.CSSProperties = { background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', padding:'3px 4px', borderRadius:4, display:'flex' }
   return (
@@ -140,9 +163,13 @@ function MsgActions({ content, onEdit, onReload, isUser, visible }: {
   )
 }
 
-// ── Message bubble ────────────────────────────────────────────────────────────
+// Message bubble
 function MessageBubble({ msg, onEdit, onReload }: { msg: Message; onEdit?: (c: string) => void; onReload?: () => void }) {
-  const [hovered, setHovered] = useState(false)
+  const [hovered,     setHovered]     = useState(false)
+  const [previewFile, setPreviewFile] = useState<{ name: string; content: string } | null>(null)
+  // Always recover clean display text — works even after DB reload (no displayContent persisted)
+  const cleanDisplay = msg.displayContent ?? extractDisplayContent(msg.content)
+
   if (msg.type === 'system') {
     const isError = msg.content.startsWith('⚠')
     return (
@@ -165,25 +192,36 @@ function MessageBubble({ msg, onEdit, onReload }: { msg: Message; onEdit?: (c: s
   const isUser = msg.type === 'user'
   const time   = formatTime(msg.timestamp)
   if (isUser) return (
-    <div style={{ display:'flex', justifyContent:'flex-end', width:'100%' }}
-      onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
-      <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:3, maxWidth:'60%', minWidth:0 }}>
-        <MsgActions content={msg.displayContent ?? msg.content} isUser visible={hovered} onEdit={() => onEdit?.(msg.displayContent ?? msg.content)}/>
-        <div className="msg-user">
-          {msg.filePaths && msg.filePaths.length > 0 && (
-            <div style={{ display:'flex', gap:4, flexWrap:'wrap', marginBottom:6 }}>
-              {msg.filePaths.map((p: string, i: number) => (
-                <span key={i} style={{ display:'inline-flex', alignItems:'center', gap:3, fontSize:10, padding:'2px 6px', borderRadius:4, background:'rgba(139,92,246,0.2)', color:'var(--accent)' }}>
-                  <Paperclip size={9}/>{p.split('/').pop()}
-                </span>
-              ))}
-            </div>
-          )}
-          {msg.displayContent ?? msg.content}
+    <>
+      {previewFile && <FilePreviewPopup name={previewFile.name} content={previewFile.content} onClose={() => setPreviewFile(null)}/>}
+      <div style={{ display:'flex', justifyContent:'flex-end', width:'100%' }}
+        onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
+        <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:3, maxWidth:'70%', minWidth:0 }}>
+          <MsgActions content={cleanDisplay} isUser visible={hovered} onEdit={() => onEdit?.(cleanDisplay)}/>
+          <div className="msg-user">
+            {/* Clickable file chips — click opens preview popup */}
+            {msg.filePaths && msg.filePaths.length > 0 && (
+              <div style={{ display:'flex', gap:5, flexWrap:'wrap', marginBottom: cleanDisplay ? 6 : 0 }}>
+                {msg.filePaths.map((p: string, i: number) => {
+                  const name = p.split('/').pop() ?? p
+                  return (
+                    <button key={i}
+                      onClick={() => setPreviewFile({ name, content: extractFileContent(msg.content, name) || '(No preview — content not stored)' })}
+                      style={{ display:'inline-flex', alignItems:'center', gap:4, fontSize:11, padding:'3px 8px', borderRadius:5, background:'rgba(139,92,246,0.15)', color:'var(--accent)', border:'1px solid rgba(139,92,246,0.3)', cursor:'pointer', fontFamily:'inherit', fontWeight:500 }}
+                      onMouseEnter={e => (e.currentTarget as HTMLElement).style.background='rgba(139,92,246,0.3)'}
+                      onMouseLeave={e => (e.currentTarget as HTMLElement).style.background='rgba(139,92,246,0.15)'}
+                    ><Paperclip size={10}/>{name}</button>
+                  )
+                })}
+              </div>
+            )}
+            {/* Clean display text — no raw file content */}
+            {cleanDisplay}
+          </div>
+          <span style={{fontSize:10,color:'var(--text-muted)',paddingRight:2}}>{time}</span>
         </div>
-        <span style={{fontSize:10,color:'var(--text-muted)',paddingRight:2}}>{time}</span>
       </div>
-    </div>
+    </>
   )
   return (
     <div style={{display:'flex',flexDirection:'column',gap:3}}
@@ -203,13 +241,13 @@ function ThinkingBubble() {
     <div style={{display:'flex',alignItems:'center'}}>
       <div style={{background:'var(--bg-tertiary)',border:'1px solid var(--border)',borderRadius:'3px 12px 12px 12px',padding:'10px 14px',display:'flex',alignItems:'center',gap:8}}>
         <Loader size={13} style={{color:'var(--accent)',animation:'spin 1s linear infinite',flexShrink:0}}/>
-        <span style={{fontSize:12,color:'var(--text-muted)'}}>Thinking…</span>
+        <span style={{fontSize:12,color:'var(--text-muted)'}}>Thinking...</span>
       </div>
     </div>
   )
 }
 
-// ── Model selector ────────────────────────────────────────────────────────────
+// Model selector pill
 function ModelSelector({ selectedModel, models, activeProvider, cloudModel, isOnline, apiKeyStatus, onOpenSettings, onChange }: {
   selectedModel: string; models: any[]; activeProvider: string; cloudModel: string
   isOnline: boolean; apiKeyStatus: Record<string, boolean>
@@ -229,7 +267,6 @@ function ModelSelector({ selectedModel, models, activeProvider, cloudModel, isOn
     : (selectedModel?.split(':')[0] ?? 'No model')
   const COLORS: Record<string,string> = { ollama:'#3dd68c', openai:'#10b981', gemini:'#4285f4', claude:'#d97706', groq:'#8b5cf6', custom:'#94a3b8' }
   const color = COLORS[activeProvider] ?? '#888'
-
   return (
     <div ref={ref} style={{ position:'relative', flexShrink:0 }}>
       <button onClick={() => setOpen(v => !v)} title="Switch model"
@@ -280,13 +317,13 @@ function ModelSelector({ selectedModel, models, activeProvider, cloudModel, isOn
               ))}
             </>
           })()}
-          {!isOnline && <div style={{ padding:'7px 10px', fontSize:11, color:'var(--text-muted)', borderTop:'1px solid var(--border)', marginTop:4 }}>⚠ Offline — cloud providers unavailable</div>}
+          {!isOnline && <div style={{ padding:'7px 10px', fontSize:11, color:'var(--text-muted)', borderTop:'1px solid var(--border)', marginTop:4 }}>Offline - cloud providers unavailable</div>}
           <div style={{ height:1, background:'var(--border)', margin:'6px 4px' }}/>
           <button onClick={() => { setOpen(false); onOpenSettings() }}
             style={{ display:'flex', alignItems:'center', gap:6, width:'100%', padding:'7px 10px', background:'transparent', border:'none', borderRadius:6, cursor:'pointer', color:'var(--text-secondary)', fontSize:12, textAlign:'left' }}
             onMouseEnter={e => (e.currentTarget as HTMLElement).style.background='var(--bg-hover)'}
             onMouseLeave={e => (e.currentTarget as HTMLElement).style.background='transparent'}>
-            ⚙ Configure API keys in Settings
+            Configure API keys in Settings
           </button>
         </div>
       )}
@@ -294,7 +331,6 @@ function ModelSelector({ selectedModel, models, activeProvider, cloudModel, isOn
   )
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
 export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
   const {
     sessions, activeSessionId,
@@ -315,10 +351,8 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
   const [isAtBottom,     setIsAtBottom]     = useState(true)
   const [toast,          setToast]          = useState<{ msg: string; type: 'info'|'success'|'error' } | null>(null)
 
-  // Show a temporary toast notification
   const showToast = useCallback((msg: string, type: 'info'|'success'|'error' = 'info', ms = 3000) => {
-    setToast({ msg, type })
-    setTimeout(() => setToast(null), ms)
+    setToast({ msg, type }); setTimeout(() => setToast(null), ms)
   }, [])
 
   const scrollRef       = useRef<HTMLDivElement>(null)
@@ -335,7 +369,6 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
   const isStreaming       = streamingSessionId === activeSessionId
   const isBusy            = isSending || isStreaming
 
-  // Smart scroll
   const scrollToBottom = useCallback((force = false) => {
     const el = scrollRef.current; if (!el) return
     if (force || !userScrolledRef.current) el.scrollTop = el.scrollHeight
@@ -349,7 +382,6 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
   const lastContent = messages[messages.length - 1]?.content
   useEffect(() => { if (!userScrolledRef.current) scrollToBottom() }, [lastContent])
   useEffect(() => { userScrolledRef.current = false; setIsAtBottom(true); setTimeout(() => scrollToBottom(true), 50) }, [activeSessionId])
-
   useEffect(() => {
     const ta = textareaRef.current; if (!ta) return
     ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 140) + 'px'
@@ -370,7 +402,6 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
     return () => window.removeEventListener('provider-changed', loadProvider)
   }, [])
 
-  // File attach
   async function handleAttach() {
     try {
       const selected = await open({ multiple: true, filters: [{ name: 'Supported files', extensions: [...TEXT_EXTS, ...IMAGE_EXTS] }] })
@@ -386,14 +417,8 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
             if (!res.ok) continue
             const data    = await res.json()
             const content = (data.content ?? '') as string
-            const truncated = content.length > MAX_FILE_SIZE
-              ? content.slice(0, MAX_FILE_SIZE) + '\n\n[... file truncated at 500 KB ...]'
-              : content
-            setAttachments(prev => [...prev, {
-              id: nanoid(), name, path: filePath,
-              size: content.length, content: truncated,
-              isImage: IMAGE_EXTS.has(ext),
-            }])
+            const truncated = content.length > MAX_FILE_SIZE ? content.slice(0, MAX_FILE_SIZE) + '\n\n[... file truncated at 500 KB ...]' : content
+            setAttachments(prev => [...prev, { id: nanoid(), name, path: filePath, size: content.length, content: truncated, isImage: IMAGE_EXTS.has(ext) }])
           }
         } catch { }
       }
@@ -408,10 +433,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
 
   async function generateTitle(sessionId: string, sessionType: string, rootPath: string | undefined, firstMsg: string) {
     try {
-      const res = await fetch('http://localhost:3001/chat/title', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ message: firstMsg.slice(0, 150) }),
-      })
+      const res = await fetch('http://localhost:3001/chat/title', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ message: firstMsg.slice(0, 150) }) })
       if (!res.ok) return
       const data  = await res.json()
       const title = cleanTitle(data.title?.trim() ?? '') || firstMsg.slice(0, 40)
@@ -428,54 +450,31 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
     } catch { }
   }
 
-  // Export: show save dialog, write via server (avoids NSURLErrorDomain -999)
+  // Export as .txt — opens on every system
   async function exportChat() {
     if (!session || !messages.length) return
-    const lines: string[] = [
-      `# ${session.title}`,
-      `Exported from LocalForge — ${new Date().toLocaleString()}`,
-      '',
-    ]
+    const lines: string[] = [session.title, `Exported from LocalForge - ${new Date().toLocaleString()}`, '-'.repeat(60), '']
     for (const m of messages) {
-      if (m.type === 'user')   lines.push(`You: ${stripMarkdown(m.displayContent ?? m.content)}`, '')
-      if (m.type === 'agent')  lines.push(`AI: ${stripMarkdown(m.content)}`, '')
-      if (m.type === 'system') lines.push(`Note: ${stripMarkdown(m.content)}`, '')
+      if (m.type === 'user')   lines.push('You:', stripMarkdown(m.displayContent ?? extractDisplayContent(m.content)), '')
+      if (m.type === 'agent')  lines.push('AI:', stripMarkdown(m.content), '')
+      if (m.type === 'system') lines.push(`[Note: ${stripMarkdown(m.content)}]`, '')
     }
     const text     = lines.join('\n')
-    const fileName = session.title.replace(/[^a-z0-9]/gi, '_').toLowerCase() + '.md'
-
-    showToast('Opening save dialog…', 'info')
-
+    const fileName = session.title.replace(/[^a-z0-9]/gi, '_').toLowerCase() + '.txt'
+    showToast('Opening save dialog...', 'info')
     try {
-      // Show native macOS Save As picker
-      const filePath = await save({
-        defaultPath: fileName,
-        filters: [{ name: 'Markdown', extensions: ['md'] }],
-      })
-      if (!filePath) { setToast(null); return }  // user cancelled
-
-      showToast('Saving…', 'info')
-
-      // Write via agent server — avoids Tauri FS plugin dependency and -999 errors
-      const res = await fetch('http://localhost:3001/project/file', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ path: filePath, content: text }),
-      })
-
-      if (res.ok) {
-        showToast(`Saved to ${filePath.split('/').pop()}`, 'success', 4000)
-      } else {
-        throw new Error(`Server returned ${res.status}`)
-      }
-    } catch (err: any) {
-      // Final fallback: browser blob download (works in web mode)
-      showToast('Using browser download instead…', 'info')
-      const blob = new Blob([text], { type: 'text/markdown' })
+      const filePath = await save({ defaultPath: fileName, filters: [{ name: 'Text file', extensions: ['txt'] }] })
+      if (!filePath) { setToast(null); return }
+      showToast('Saving...', 'info')
+      const res = await fetch('http://localhost:3001/project/file', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ path: filePath, content: text }) })
+      if (res.ok) showToast(`Saved - ${filePath.split('/').pop()}`, 'success', 4000)
+      else throw new Error(`Server returned ${res.status}`)
+    } catch {
+      showToast('Downloading...', 'info')
+      const blob = new Blob([text], { type: 'text/plain' })
       const url  = URL.createObjectURL(blob)
       const a    = document.createElement('a')
-      a.href = url; a.download = fileName; a.click()
-      URL.revokeObjectURL(url)
+      a.href = url; a.download = fileName; a.click(); URL.revokeObjectURL(url)
       showToast(`Downloaded as ${fileName}`, 'success', 3000)
     }
   }
@@ -527,17 +526,22 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
     if (!session || isBusy) return
     const userMsgs = messages.filter(m => m.type==='user')
     if (!userMsgs.length) return
-    await send(userMsgs[userMsgs.length-1].displayContent ?? userMsgs[userMsgs.length-1].content)
+    const last = userMsgs[userMsgs.length-1]
+    await send(last.displayContent ?? extractDisplayContent(last.content))
   }
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }
   const canSend     = !!input.trim() && !!session && !isBusy
-  const placeholder = !session ? 'Open a chat or project to start…' : isChat ? 'Ask anything…' : 'Ask about this project…'
+  const placeholder = !session ? 'Open a chat or project to start...' : isChat ? 'Ask anything...' : 'Ask about this project...'
 
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%', overflow:'hidden', background:'var(--bg-primary)' }}>
-      <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}@keyframes toastIn{from{opacity:0;transform:translateX(-50%) translateY(10px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}`}</style>
+      <style>{`
+        @keyframes spin  { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }
+        @keyframes blink { 0%,100% { opacity:1 } 50% { opacity:0 } }
+        @keyframes toastIn { from { opacity:0; transform: translateX(-50%) translateY(10px) } to { opacity:1; transform: translateX(-50%) translateY(0) } }
+      `}</style>
 
       {/* Title bar */}
       {session && (
@@ -546,7 +550,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
           {isProject && session.rootPath && <span style={{ fontSize:10, color:'var(--text-muted)', fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flexShrink:1, minWidth:0 }}>{session.rootPath}</span>}
           <div style={{ flex:1, minWidth:8 }}/>
           {messages.length > 0 && (
-            <button onClick={exportChat} title="Export chat as Markdown"
+            <button onClick={exportChat}
               style={{ display:'flex', alignItems:'center', gap:4, padding:'3px 8px', background:'transparent', border:'1px solid var(--border)', borderRadius:5, color:'var(--text-secondary)', cursor:'pointer', fontSize:11, flexShrink:0 }}
               onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor='var(--accent)'; (e.currentTarget as HTMLElement).style.color='var(--accent)' }}
               onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor='var(--border)'; (e.currentTarget as HTMLElement).style.color='var(--text-secondary)' }}
@@ -599,7 +603,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
                 <div style={{ fontSize:13, lineHeight:1.8, color:'var(--text-muted)' }}>
                   {isChat
                     ? <>Explain concepts, review code, write drafts, or answer questions.<br/>Click <Paperclip size={11} style={{display:'inline',verticalAlign:'middle'}}/> to attach files.</>
-                    : <>Ask about the codebase, request code changes, or instruct agents.<br/>Click <Paperclip size={11} style={{display:'inline',verticalAlign:'middle'}}/> to attach files.</>
+                    : <>Ask about the codebase, request changes, or instruct agents.<br/>Click <Paperclip size={11} style={{display:'inline',verticalAlign:'middle'}}/> to attach files.</>
                   }
                 </div>
               </div>
@@ -616,9 +620,9 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
           {!isAtBottom && (
             <div style={{ position:'absolute', bottom: attachments.length > 0 ? 130 : 100, left:'50%', transform:'translateX(-50%)', zIndex:20 }}>
               <button onClick={() => { userScrolledRef.current=false; scrollToBottom(true) }}
-                style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', borderRadius:20, background:'var(--bg-secondary)', border:'1px solid var(--border-light)', color:'var(--text-primary)', fontSize:12, fontWeight:500, cursor:'pointer', boxShadow:'0 4px 16px rgba(0,0,0,0.4)', backdropFilter:'blur(8px)' }}
+                style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', borderRadius:20, background:'var(--bg-secondary)', border:'1px solid var(--border)', color:'var(--text-primary)', fontSize:12, fontWeight:500, cursor:'pointer', boxShadow:'0 4px 16px rgba(0,0,0,0.4)', backdropFilter:'blur(8px)' }}
                 onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor='var(--accent)'; (e.currentTarget as HTMLElement).style.background='var(--bg-hover)' }}
-                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor='var(--border-light)'; (e.currentTarget as HTMLElement).style.background='var(--bg-secondary)' }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor='var(--border)'; (e.currentTarget as HTMLElement).style.background='var(--bg-secondary)' }}
               ><ArrowDown size={13} style={{color:'var(--accent)'}}/> Scroll to bottom</button>
             </div>
           )}
@@ -646,7 +650,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
               </div>
             </div>
             <div style={{ fontSize:11, color:'var(--text-muted)', textAlign:'center', marginTop:5 }}>
-              {isBusy ? 'Generating…' : attachments.length ? `${attachments.length} file${attachments.length>1?'s':''} attached · Enter to send` : 'AI can make mistakes. Double-check important responses.'}
+              {isBusy ? 'Generating...' : attachments.length ? `${attachments.length} file${attachments.length>1?'s':''} attached - Enter to send` : 'AI can make mistakes. Double-check important responses.'}
             </div>
           </div>
         </>
@@ -654,33 +658,20 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
 
       {showSettings && <SettingsModal onClose={() => { setShowSettings(false); window.dispatchEvent(new CustomEvent('provider-changed')) }}/>}
 
-      {/* Toast notification */}
       {toast && (
         <div style={{
-          position: 'fixed', bottom: 80, left: '50%', transform: 'translateX(-50%)',
-          zIndex: 999, pointerEvents: 'none',
-          display: 'flex', alignItems: 'center', gap: 8,
-          padding: '10px 18px', borderRadius: 10,
-          background: toast.type === 'success' ? 'rgba(16,185,129,0.15)'
-            : toast.type === 'error' ? 'rgba(239,68,68,0.15)'
-            : 'rgba(139,92,246,0.15)',
-          border: `1px solid ${
-            toast.type === 'success' ? 'rgba(16,185,129,0.4)'
-            : toast.type === 'error' ? 'rgba(239,68,68,0.4)'
-            : 'rgba(139,92,246,0.4)'
-          }`,
-          backdropFilter: 'blur(12px)',
-          boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
-          fontSize: 13, fontWeight: 500,
-          color: toast.type === 'success' ? 'var(--green)'
-            : toast.type === 'error' ? 'var(--red)'
-            : 'var(--accent)',
-          whiteSpace: 'nowrap',
-          animation: 'toastIn 0.2s ease',
+          position:'fixed', bottom:80, left:'50%', transform:'translateX(-50%)',
+          zIndex:999, pointerEvents:'none', display:'flex', alignItems:'center', gap:8,
+          padding:'10px 18px', borderRadius:10,
+          background: toast.type==='success'?'rgba(16,185,129,0.15)':toast.type==='error'?'rgba(239,68,68,0.15)':'rgba(139,92,246,0.15)',
+          border:`1px solid ${toast.type==='success'?'rgba(16,185,129,0.4)':toast.type==='error'?'rgba(239,68,68,0.4)':'rgba(139,92,246,0.4)'}`,
+          backdropFilter:'blur(12px)', boxShadow:'0 4px 20px rgba(0,0,0,0.4)', fontSize:13, fontWeight:500,
+          color:toast.type==='success'?'var(--green)':toast.type==='error'?'var(--red)':'var(--accent)',
+          whiteSpace:'nowrap', animation:'toastIn 0.2s ease',
         }}>
-          {toast.type === 'success' && <Check size={14}/>}
-          {toast.type === 'error'   && <X size={14}/>}
-          {toast.type === 'info'    && <Loader size={14} style={{ animation: 'spin 1s linear infinite' }}/>}
+          {toast.type==='success' && <Check size={14}/>}
+          {toast.type==='error'   && <X size={14}/>}
+          {toast.type==='info'    && <Loader size={14} style={{animation:'spin 1s linear infinite'}}/>}
           {toast.msg}
         </div>
       )}
