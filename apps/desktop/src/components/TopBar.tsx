@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Wifi, WifiOff, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Smartphone } from 'lucide-react'
+import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Smartphone } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import QRPreview from './QRPreview'
 
@@ -16,22 +16,18 @@ export default function TopBar() {
   const activeSession    = sessions.find(s => s.id === activeSessionId)
   const isProjectSession = screen === 'session' && activeSession?.type === 'project'
 
-  // Show red if either server is disconnected OR internet is offline
-  // Green only when both are fine
-  const serverOk  = isConnected
-  const netOk     = isOnline
-
   const btnBase: React.CSSProperties = {
-    background:'none', border:'none', cursor:'pointer',
-    color:'var(--text-muted)', display:'flex', alignItems:'center',
-    padding:4, borderRadius:4, flexShrink:0,
+    background: 'none', border: 'none', cursor: 'pointer',
+    color: 'var(--text-muted)', display: 'flex', alignItems: 'center',
+    padding: 4, borderRadius: 4, flexShrink: 0,
   }
 
   return (
     <>
       <div className="topbar">
         {/* Left sidebar toggle */}
-        <button style={btnBase} title={leftExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
+        <button style={btnBase}
+          title={leftExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
           onClick={() => setLeftExpanded(!leftExpanded)}
           onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'}
           onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'}
@@ -40,47 +36,72 @@ export default function TopBar() {
         </button>
 
         {/* App name */}
-        <span style={{ fontSize:15, fontWeight:700, color:'var(--accent)', letterSpacing:'-0.3px', flexShrink:0 }}>
+        <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--accent)', letterSpacing: '-0.3px', flexShrink: 0 }}>
           LocalForge
         </span>
 
-        <span style={{ flex:1, minWidth:0 }}/>
+        <span style={{ flex: 1, minWidth: 0 }}/>
 
-        {/* QR Preview — only useful when online */}
+        {/* QR preview — disabled when offline */}
         <button
-          onClick={() => netOk && setQrOpen(true)}
-          title={netOk ? 'Preview on device' : 'No internet connection'}
+          onClick={() => isOnline && setQrOpen(true)}
+          title={isOnline ? 'Preview on device' : 'No internet connection'}
           style={{
-            ...btnBase, padding:'4px 6px',
-            opacity: netOk ? 1 : 0.35,
-            cursor:  netOk ? 'pointer' : 'not-allowed',
+            ...btnBase, padding: '4px 6px',
+            opacity: isOnline ? 1 : 0.35,
+            cursor:  isOnline ? 'pointer' : 'not-allowed',
           }}
-          onMouseEnter={e => { if (netOk) (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)' }}
+          onMouseEnter={e => { if (isOnline) (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)' }}
           onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'}
         >
           <Smartphone size={15}/>
         </button>
 
-        {/* Connectivity indicator — two-state: server + internet */}
-        <div style={{ display:'flex', alignItems:'center', gap:5, flexShrink:0 }}>
-          {/* Internet */}
-          <div
-            title={netOk ? 'Internet connected' : 'No internet — cloud providers unavailable'}
-            style={{ display:'flex', alignItems:'center', color: netOk ? 'var(--green)' : 'var(--red)' }}
-          >
-            {netOk ? <Wifi size={15}/> : <WifiOff size={15}/>}
-          </div>
-          {/* Server — small dot beside the wifi icon */}
-          <div
-            title={serverOk ? 'Agent server connected' : 'Agent server disconnected'}
-            style={{ width:6, height:6, borderRadius:'50%', background: serverOk ? 'var(--green)' : 'var(--red)', flexShrink:0,
-              boxShadow: serverOk ? '0 0 4px var(--green)' : 'none' }}
-          />
+        {/* ── Connectivity card ── */}
+        {/* Internet status */}
+        <div
+          title={isOnline ? 'Internet connected' : 'No internet — cloud providers disabled'}
+          style={{
+            display: 'flex', alignItems: 'center',
+            padding: '3px 9px', borderRadius: 6,
+            background: isOnline ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)',
+            border: `1px solid ${isOnline ? 'rgba(16,185,129,0.35)' : 'rgba(239,68,68,0.35)'}`,
+            flexShrink: 0,
+          }}
+        >
+          <span style={{
+            fontSize: 11, fontWeight: 600,
+            color: isOnline ? 'var(--green)' : 'var(--red)',
+            letterSpacing: '0.02em',
+          }}>
+            {isOnline ? 'Online' : 'Offline'}
+          </span>
+        </div>
+
+        {/* Server status — separate small pill */}
+        <div
+          title={isConnected ? 'Agent server running' : 'Agent server disconnected'}
+          style={{
+            display: 'flex', alignItems: 'center',
+            padding: '3px 9px', borderRadius: 6,
+            background: isConnected ? 'rgba(139,92,246,0.12)' : 'rgba(239,68,68,0.12)',
+            border: `1px solid ${isConnected ? 'rgba(139,92,246,0.35)' : 'rgba(239,68,68,0.35)'}`,
+            flexShrink: 0,
+          }}
+        >
+          <span style={{
+            fontSize: 11, fontWeight: 600,
+            color: isConnected ? 'var(--accent)' : 'var(--red)',
+            letterSpacing: '0.02em',
+          }}>
+            {isConnected ? 'Server' : 'No server'}
+          </span>
         </div>
 
         {/* Right sidebar toggle */}
         {isProjectSession && (
-          <button style={btnBase} title={rightExpanded ? 'Collapse right bar' : 'Expand right bar'}
+          <button style={btnBase}
+            title={rightExpanded ? 'Collapse right bar' : 'Expand right bar'}
             onClick={() => setRightExpanded(!rightExpanded)}
             onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'}
             onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'}

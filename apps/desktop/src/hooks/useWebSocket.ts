@@ -2,14 +2,10 @@ import { useEffect, useRef } from 'react'
 import { useAppStore } from '../store/appStore'
 
 const WS_URL = 'ws://localhost:3001/ws'
-// A lightweight endpoint to verify actual internet connectivity
-// Using a well-known reliable URL (Cloudflare DNS over HTTPS)
-const CONNECTIVITY_CHECK_URL = 'https://1.1.1.1/cdn-cgi/trace'
 
 export function useWebSocket() {
   const ws             = useRef<WebSocket | null>(null)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const onlineTimer    = useRef<ReturnType<typeof setInterval> | null>(null)
   const mountedRef     = useRef(false)
   const {
     setConnected, setOnline,
@@ -17,26 +13,10 @@ export function useWebSocket() {
     updateAgent, addWrittenFile, setSessionSummary, setAllFiles,
   } = useAppStore()
 
-  // ── Real internet check ────────────────────────────────────────────────────
-  async function checkOnline() {
-    // navigator.onLine is unreliable — it returns true even on captive portals
-    // We do a real fetch to confirm actual internet access
-    try {
-      const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), 3000)
-      const res = await fetch(CONNECTIVITY_CHECK_URL, {
-        method: 'HEAD',
-        cache:  'no-store',
-        signal: controller.signal,
-      })
-      clearTimeout(timer)
-      setOnline(res.ok)
-    } catch {
-      setOnline(false)
-    }
+  function updateOnlineStatus() {
+    setOnline(navigator.onLine)
   }
 
-  // ── WebSocket ──────────────────────────────────────────────────────────────
   function connect() {
     if (!mountedRef.current) return
     if (ws.current?.readyState === WebSocket.OPEN) return
@@ -91,26 +71,22 @@ export function useWebSocket() {
   useEffect(() => {
     mountedRef.current = true
 
-    // Initial online check + WS connect
-    checkOnline()
+    // Set initial state
+    updateOnlineStatus()
+
+    // Listen to native browser online/offline events — fires instantly when network changes
+    window.addEventListener('online',  updateOnlineStatus)
+    window.addEventListener('offline', updateOnlineStatus)
+
+    // Start WS
     const t = setTimeout(connect, 100)
-
-    // Listen to native online/offline events for instant feedback
-    const handleOnline  = () => checkOnline()
-    const handleOffline = () => setOnline(false)
-    window.addEventListener('online',  handleOnline)
-    window.addEventListener('offline', handleOffline)
-
-    // Periodic connectivity check every 15s — catches wifi-on-but-no-internet
-    onlineTimer.current = setInterval(checkOnline, 15000)
 
     return () => {
       mountedRef.current = false
       clearTimeout(t)
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
-      if (onlineTimer.current)    clearInterval(onlineTimer.current)
-      window.removeEventListener('online',  handleOnline)
-      window.removeEventListener('offline', handleOffline)
+      window.removeEventListener('online',  updateOnlineStatus)
+      window.removeEventListener('offline', updateOnlineStatus)
       ws.current?.close()
       ws.current = null
     }
