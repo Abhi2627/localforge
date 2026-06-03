@@ -1,6 +1,6 @@
 # LocalForge
 
-> Local-first AI coding agent desktop app — multi-agent orchestration, offline inference, and now cloud LLM integration. Runs on your machine, scales to the cloud.
+> Local-first AI coding agent desktop app — multi-agent orchestration, offline inference, and cloud LLM integration. Runs on your machine, scales to the cloud.
 
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)
@@ -26,11 +26,10 @@ LocalForge is a purpose-built desktop IDE for AI-assisted development. It combin
 | Desktop app | Tauri 2.0 (Rust) + React + TypeScript |
 | Agent server | Fastify + TypeScript |
 | Persistence | SQLite via better-sqlite3 |
-| MCP | @modelcontextprotocol/sdk |
 | Local inference | Ollama (OpenAI-compatible API) |
-| Cloud inference | OpenAI API-compatible (Gemini, Claude, OpenAI, Groq) |
+| Cloud inference | OpenAI-compatible (Gemini, Claude, OpenAI, Groq) |
 | Terminal | xterm.js + node-pty |
-| Hardware detection | systeminformation |
+| MCP | @modelcontextprotocol/sdk |
 
 ---
 
@@ -49,94 +48,114 @@ cd apps/desktop && npm run dev
 # Open http://localhost:1420
 ```
 
-**Prerequisites:** Node.js 20+. For local inference: Ollama with at least one model pulled (`ollama pull qwen2.5-coder`).
+**Prerequisites:** Node.js 20+. For local inference: Ollama with at least one model pulled.
+
+**Low RAM?** Pull a smaller model: `ollama pull qwen2.5-coder:1.5b` (1.1 GB, works on 8 GB RAM).
 
 ---
 
 ## What's Built ✅
 
 ### Core infrastructure
-- Project scaffold, monorepo setup
-- Agent core: TaskQueue + write-ahead log + crash recovery
+- Tauri 2.0 monorepo (apps/desktop + packages/agent-core)
+- Fastify agent server with full TypeScript
+- SQLite session persistence (chats + projects survive restart)
 - Ollama client with model fallback chain
+- Hardware-aware task scheduler (auto sequential/parallel)
 - MCP filesystem integration
-- Hardware-aware scheduler (auto parallel/sequential)
-- Session persistence (SQLite — chats + projects survive restart)
+
+### Cloud LLM Integration
+- Unified LLM client routing to Ollama or cloud transparently
+- Supported providers: Gemini, OpenAI, Claude, Groq, Custom (OpenAI-compatible)
+- Settings page: API key management, temperature, max tokens, system prompt, context length
+- Per-chat model selector in the input bar — only shows providers with saved API keys
+- Internet connectivity detection — cloud providers auto-disabled when offline
 
 ### Desktop UI
-- VSCode-style layout: TopBar, LeftBar, TabStrip, ChatPanel, RightSidebar, TerminalPanel
-- Chat mode with SSE streaming responses and Markdown rendering
-- Auto-generated session titles, timestamps, copy/edit/reload per message
-- Tab strip with auto-evict and dismiss
-- Left sidebar: Chats + Projects history, rename, delete
-- Right sidebar: Explorer, Git panel, API Contracts, Agents, Knowledge Graph, Project Graph
-- Auto project onboarding (file scan + AI summary)
-- Native folder picker (Tauri dialog plugin)
-- Integrated terminal (xterm.js + node-pty PTY, multi-tab)
-- Project flow graph (SVG, zoom/pan, fullscreen)
+- VSCode-style layout: TopBar, LeftBar, ChatPanel, RightSidebar, TerminalPanel
+- Chat mode with SSE streaming, Markdown rendering, per-message copy/edit/regenerate
+- Auto-generated session titles, timestamps
+- Per-session model selector beside the mic button (like Claude)
+- Tab strip with auto-evict
+- Left sidebar: Chats + Projects history, rename, delete (persists across restarts via localStorage)
+- Right sidebar: File Explorer, Git panel, API Contracts, Agents, Knowledge Graph, Project Graph
+- Integrated terminal (xterm.js + node-pty, multi-tab)
 - Responsive layout (auto-collapse sidebars on resize)
 
 ### Intelligence layer
-- Internet RAG pipeline (DuckDuckGo, `@web` prefix trigger, source pills)
-- Model Advisor (latency/TPS tracking, error log, smart suggestions, TopBar chip)
 - Knowledge Graph (TS/JS/Python/Rust symbol extractor, conflict detection, agent context injection)
-- API Contract Enforcer (fetch/axios/SWR calls vs Express/Fastify/FastAPI routes, violation detection)
+- API Contract Enforcer (fetch/axios calls vs Express/Fastify routes, violation detection)
+- Model Advisor (latency/TPS tracking, error log, smart suggestions)
 
-### Polish
-- Git panel (status/staged/unstaged, commit log, branch view, inline diff viewer)
-- QR preview (LAN IP detection, port picker, canvas QR code)
+### UX & Polish
+- RAM error detection: shows actionable in-chat message when Ollama runs out of memory
+- Real internet connectivity via `navigator.onLine` + native events (instant, no external fetch)
+- Deleted sessions blacklisted in localStorage — never reappear after restart
+- Git panel (status, staged/unstaged, commit log, branch view, inline diff)
+- QR preview (LAN IP detection, port picker)
+- "Scroll to bottom" button appears when user scrolls up during streaming
 
 ---
 
-## Roadmap — Phase 4: Level Up
+## Roadmap
 
-### 4A — Cloud LLM Integration 🔥
-- [ ] Provider settings page (API key management for Gemini, Claude, OpenAI, Groq, custom OpenAI-compatible)
-- [ ] Per-session model selector: choose Ollama model OR cloud provider per chat
-- [ ] Unified LLM client that routes to Ollama or cloud transparently
-- [ ] Streaming support for all cloud providers
-- [ ] Fallback chain: cloud → Ollama if API key missing or rate-limited
-- [ ] Token usage display per response (cloud only)
+### Phase 4 — In Progress 🔥
 
-### 4B — File Attach & Multimodal Input
-- [ ] Attach files to chat (read content into context: .ts, .py, .md, .json, .txt)
-- [ ] Attach images (vision-capable models: LLaVA, Gemini Vision, GPT-4o)
-- [ ] Drag-and-drop file attach in input area
-- [ ] File preview before send (show name, size, type)
-- [ ] Context-aware attachment: auto-inject file content into system prompt
+#### 4B — File Attach
+- [ ] Drag-and-drop files into chat (read content into context: .ts, .py, .md, .json, .txt)
+- [ ] Image attach for vision-capable models (LLaVA, Gemini Vision, GPT-4o)
+- [ ] File preview before send (name, size, type)
+- [ ] Context-aware injection into system prompt
 
-### 4C — Agent File Write + Apply
-- [ ] Agents can write files to disk autonomously (with confirmation modal)
-- [ ] Diff preview before applying: show what the agent wants to change
-- [ ] Apply / Reject / Edit per file change
-- [ ] Multi-file patch: agent proposes changes to N files, user reviews batch
-- [ ] Write history: log of all agent-applied changes with undo
+#### 4C — Agent File Write + Apply
+- [ ] Agents propose file changes with full diff preview
+- [ ] Apply / Reject / Edit per file before writing to disk
+- [ ] Multi-file patch: agent proposes N files, user reviews batch
+- [ ] Write history log with undo
 
-### 4D — Ollama Model Management UI
-- [ ] List installed models with size, quantization, and last used
+#### 4D — Ollama Model Management UI
+- [ ] List installed models with size and quantization
 - [ ] Pull new models from within the app (`ollama pull <model>`)
-- [ ] Download progress bar (streaming pull progress)
-- [ ] Delete models from within the app
-- [ ] Model tags and search (filter by code/chat/vision/reasoning)
+- [ ] Real-time download progress bar
+- [ ] Delete models, filter by capability (code/chat/vision)
 
-### 4E — Settings Page
-- [ ] Model defaults (temperature, top-p, context length, system prompt)
-- [ ] Execution mode (sequential / parallel, max parallel agents)
-- [ ] Appearance (font size, theme, sidebar widths)
-- [ ] API keys (Gemini, Claude, OpenAI, Groq)
-- [ ] Keyboard shortcuts reference
-- [ ] Data: clear sessions, export all chats, reset knowledge graph
+#### 4E — Right Sidebar Redesign
+- [ ] Replace accordion sections with 4 horizontal icon buttons below project name
+- [ ] Each icon opens a floating modal (Project Graph, Knowledge Graph, Agents, API Contracts)
+- [ ] Modals are resizable and dismissable
 
-### 4F — Export & Sharing
-- [ ] Export single chat as Markdown (.md)
-- [ ] Export single chat as PDF
-- [ ] Export project session (chat + agent log + file changes) as ZIP
-- [ ] Copy formatted conversation to clipboard
+#### 4F — Export Chat
+- [ ] Export chat as Markdown (.md)
+- [ ] Export chat as PDF
+- [ ] Copy full conversation to clipboard
 
-### 4G — RAG Quality (model-agnostic)
-- [ ] Use cloud LLM (Gemini Flash / Claude Haiku) for factual @web queries — solves hallucination permanently
-- [ ] Brave Search API as alternative to DuckDuckGo (more reliable, rate-limited free tier)
-- [ ] Source citation inline in responses (not just as pills)
+#### 4G — Settings: Local vs Cloud Split
+- [ ] Separate "Local Models" section (Ollama only) from "Cloud Providers" in Settings
+- [ ] Local Models section shows installed models, usage tips, RAM requirements
+
+---
+
+### Phase 5 — Future (Parked)
+
+These are real features but require significant infrastructure or third-party dependencies that are not yet stable enough in this environment:
+
+#### 5A — Math Rendering
+- LaTeX equation rendering via KaTeX (remark-math + rehype-katex)
+- Requires: CSS loading order fix in Vite/Tauri, font path resolution
+- Blocked by: KaTeX CSS not loading correctly in Tauri webview
+
+#### 5B — Web Search / RAG
+- `@web` trigger for live data queries
+- Blocked by: small local models (qwen2.5-coder) hallucinate party names and facts regardless of retrieved context
+- Real fix: use Gemini Flash or GPT-4o-mini for RAG queries — revisit after cloud providers are stable
+
+#### 5C — Graph Visualization
+- Draw charts and graphs from data (like Gemini does)
+- Requires: chart.js or D3 integration, agent output parsing for structured data
+
+#### 5D — File Output (docx, drive)
+- Export responses as Word documents, save to Google Drive
+- Requires: docx generation library, OAuth integration
 
 ---
 

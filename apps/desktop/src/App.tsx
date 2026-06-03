@@ -9,6 +9,7 @@ import RightSidebar from './components/RightSidebar'
 import WelcomeScreen from './components/WelcomeScreen'
 import TabStrip from './components/TabStrip'
 import TerminalPanel from './components/TerminalPanel'
+import { getDeletedIds, markDeleted } from './hooks/deletedSessions'
 import './index.css'
 
 const BP_LEFT_COLLAPSE  = 700
@@ -31,11 +32,11 @@ async function waitForServer(maxAttempts = 20): Promise<boolean> {
   return false
 }
 
-// Session IDs that should never be loaded (title-gen temps, invalid, etc.)
+// Session IDs that should never be loaded
 function isGarbageSession(s: any): boolean {
   if (!s?.id || !s?.title) return true
   if (s.title.trim() === '') return true
-  if (s.title === 'Chat' && !s.rootPath) return true   // untitled chats with no content
+  if (getDeletedIds().has(s.id)) return true
   return false
 }
 
@@ -115,9 +116,10 @@ export default function App() {
         .then(async ({ sessions: saved }) => {
           const all = saved ?? []
 
-          // Delete garbage sessions from DB on startup so they don't come back
+          // Mark garbage sessions as deleted in localStorage so they never reload
           const garbage = all.filter(isGarbageSession)
           for (const s of garbage) {
+            markDeleted(s.id)
             api.deleteSession(s.id).catch(() => {})
           }
 

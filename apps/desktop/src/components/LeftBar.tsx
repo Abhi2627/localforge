@@ -6,6 +6,7 @@ import { nanoid } from '../hooks/nanoid'
 import NewProjectModal from './NewProjectModal'
 import AccountModal from './AccountModal'
 import SettingsModal from './SettingsModal'
+import { markDeleted } from '../hooks/deletedSessions'
 
 const STORAGE_KEY = 'localforge_username'
 
@@ -52,15 +53,14 @@ function SessionItem({ session }: { session: any }) {
     if (e.key === 'Escape') setRenaming(false)
   }
 
-  // Bug 2 fix: await the server delete before removing from store
   async function handleDelete() {
     setShowMenu(false)
     setDeleting(true)
+    // Mark deleted in localStorage FIRST — survives restarts even if server call fails
+    markDeleted(session.id)
     try {
       await api.deleteSession(session.id)
-    } catch {
-      // Server delete failed — still remove from UI to avoid zombie sessions
-    }
+    } catch { /* server delete failed but localStorage mark ensures it won't reload */ }
     closeSession(session.id)
     setDeleting(false)
   }
