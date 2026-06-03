@@ -8,6 +8,7 @@ import { api } from '../hooks/useApi'
 import { nanoid } from '../hooks/nanoid'
 import FileEditorPanel from './FileEditorPanel'
 import SettingsModal from './SettingsModal'
+import { FilePatchCard, type FilePatch } from './FilePatchCard'
 
 interface ChatPanelProps { onOpenTerminal?: (cwd: string) => void; terminalOpen?: boolean }
 interface AttachedFile { id: string; name: string; path: string; size: number; content: string; isImage: boolean }
@@ -27,7 +28,6 @@ function classifyError(message: string): 'ram' | 'timeout' | 'generic' {
   return 'generic'
 }
 
-// Strip markdown for clean plain-text copy
 function stripMarkdown(text: string): string {
   return text
     .replace(/\*\*(.+?)\*\*/gs, '$1').replace(/\*(.+?)\*/gs, '$1')
@@ -39,7 +39,6 @@ function stripMarkdown(text: string): string {
     .trim()
 }
 
-// Recover clean display text from a message that may have injected file context
 function extractDisplayContent(content: string): string {
   return content
     .replace(/<file name="[^"]*">[\s\S]*?<\/file>/g, '')
@@ -47,12 +46,21 @@ function extractDisplayContent(content: string): string {
     .replace(/^\n+/, '').trim()
 }
 
-// Extract a specific file's content for preview
 function extractFileContent(msgContent: string, fileName: string): string {
   const escaped = fileName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const re = new RegExp(`<file name="${escaped}">[\\s\\S]*?<\\/file>`)
   const m  = msgContent.match(re)
   return m ? m[0].replace(/<file name="[^"]*">\n?/, '').replace(/\n?<\/file>$/, '') : ''
+}
+
+// Parse ```write:path\ncontent\n``` blocks from agent output
+function extractPatches(content: string, rootPath?: string): { patches: FilePatch[]; cleanContent: string } {
+  const patches: FilePatch[] = []
+  const cleanContent = content.replace(/```write:([^\n]+)\n([\s\S]*?)```/g, (_m, fp: string, fc: string) => {
+    patches.push({ id: nanoid(), path: fp.trim(), content: fc.trimEnd(), rootPath })
+    return `[File proposal: ${fp.trim()}]`
+  })
+  return { patches, cleanContent: cleanContent.trim() }
 }
 
 const TEXT_EXTS  = new Set(['ts','tsx','js','jsx','mjs','cjs','vue','svelte','py','rb','go','rs','java','kt','swift','c','cpp','h','cs','php','html','css','scss','sass','less','json','yaml','yml','toml','xml','env','md','mdx','txt','csv','sh','bash','zsh','fish','sql','graphql','proto','dockerfile'])
@@ -66,7 +74,6 @@ function getFileIcon(name: string) {
   return <File size={12}/>
 }
 
-// Attachment strip (pre-send)
 function AttachmentStrip({ files, onRemove }: { files: AttachedFile[]; onRemove: (id: string) => void }) {
   if (!files.length) return null
   return (
@@ -86,7 +93,6 @@ function AttachmentStrip({ files, onRemove }: { files: AttachedFile[]; onRemove:
   )
 }
 
-// File preview popup — opens on file chip click
 function FilePreviewPopup({ name, content, onClose }: { name: string; content: string; onClose: () => void }) {
   return (
     <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:600, display:'flex', alignItems:'center', justifyContent:'center' }} onClick={onClose}>
@@ -108,7 +114,6 @@ function FilePreviewPopup({ name, content, onClose }: { name: string; content: s
   )
 }
 
-// Markdown renderer
 function MarkdownContent({ content }: { content: string }) {
   return (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
@@ -138,7 +143,6 @@ function MarkdownContent({ content }: { content: string }) {
   )
 }
 
-// Message action buttons
 function MsgActions({ content, onEdit, onReload, isUser, visible }: {
   content: string; onEdit?: () => void; onReload?: () => void; isUser: boolean; visible: boolean
 }) {
@@ -163,11 +167,50 @@ function MsgActions({ content, onEdit, onReload, isUser, visible }: {
   )
 }
 
-// Message bubble
-function MessageBubble({ msg, onEdit, onReload }: { msg: Message; onEdit?: (c: string) => void; onReload?: () => void }) {
+// Agent message with file-patch card support
+function AgentBubble({ msg, onReload, rootPath }: { msg: Message; onReload?: () => void; rootPath?: string }) {
+  const [hovered, setHovered] = useState(false)
+  const [patches, setPatches] = useState<FilePatch[]>([])
+
+  const { patches: parsed, cleanContent } = extractPatches(msg.content, rootPath)
+
+  useEffect(() => {
+    if (msg.type === 'agent' && parsed.length > 0) setPatches(parsed)
+  }, [msg.content, msg.type]) // eslint-disable-line
+
+  async function handleApply(patch: FilePatch) {
+    const fullPath = patch.path.startsWith('/') ? patch.path
+      : patch.rootPath ? `${patch.rootPath}/${patch.path}` : patch.path
+    const res = await fetch('http://localhost:3001/project/file', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ path: fullPath, content: patch.content }),
+    })
+    if (!res.ok) throw new Error(`Write failed: ${res.status}`)
+  }
+
+  const displayContent = parsed.length > 0 ? cleanContent : msg.content
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:3}}
+      onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
+      {msg.agentName && <div className={`agent-badge ${roleBadgeClass(msg.agentRole)}`} style={{display:'inline-block',fontSize:10,alignSelf:'flex-start'}}>{msg.agentName}</div>}
+      {displayContent && <div className="msg-agent"><MarkdownContent content={displayContent}/></div>}
+      {patches.map(p => (
+        <FilePatchCard key={p.id} patch={p} onApply={handleApply} onReject={id => setPatches(ps => ps.filter(x => x.id !== id))}/>
+      ))}
+      <div style={{display:'flex',alignItems:'center',gap:6}}>
+        <span style={{fontSize:10,color:'var(--text-muted)',paddingLeft:2}}>{formatTime(msg.timestamp)}</span>
+        <MsgActions content={msg.content} isUser={false} visible={hovered} onReload={onReload}/>
+      </div>
+    </div>
+  )
+}
+
+function MessageBubble({ msg, onEdit, onReload, rootPath }: {
+  msg: Message; onEdit?: (c: string) => void; onReload?: () => void; rootPath?: string
+}) {
   const [hovered,     setHovered]     = useState(false)
   const [previewFile, setPreviewFile] = useState<{ name: string; content: string } | null>(null)
-  // Always recover clean display text — works even after DB reload (no displayContent persisted)
   const cleanDisplay = msg.displayContent ?? extractDisplayContent(msg.content)
 
   if (msg.type === 'system') {
@@ -189,9 +232,11 @@ function MessageBubble({ msg, onEdit, onReload }: { msg: Message; onEdit?: (c: s
       </div>
     </div>
   )
-  const isUser = msg.type === 'user'
-  const time   = formatTime(msg.timestamp)
-  if (isUser) return (
+  if (msg.type === 'agent') return <AgentBubble msg={msg} onReload={onReload} rootPath={rootPath}/>
+
+  // User bubble
+  const time = formatTime(msg.timestamp)
+  return (
     <>
       {previewFile && <FilePreviewPopup name={previewFile.name} content={previewFile.content} onClose={() => setPreviewFile(null)}/>}
       <div style={{ display:'flex', justifyContent:'flex-end', width:'100%' }}
@@ -199,14 +244,13 @@ function MessageBubble({ msg, onEdit, onReload }: { msg: Message; onEdit?: (c: s
         <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:3, maxWidth:'70%', minWidth:0 }}>
           <MsgActions content={cleanDisplay} isUser visible={hovered} onEdit={() => onEdit?.(cleanDisplay)}/>
           <div className="msg-user">
-            {/* Clickable file chips — click opens preview popup */}
             {msg.filePaths && msg.filePaths.length > 0 && (
               <div style={{ display:'flex', gap:5, flexWrap:'wrap', marginBottom: cleanDisplay ? 6 : 0 }}>
                 {msg.filePaths.map((p: string, i: number) => {
                   const name = p.split('/').pop() ?? p
                   return (
                     <button key={i}
-                      onClick={() => setPreviewFile({ name, content: extractFileContent(msg.content, name) || '(No preview — content not stored)' })}
+                      onClick={() => setPreviewFile({ name, content: extractFileContent(msg.content, name) || '(No preview)' })}
                       style={{ display:'inline-flex', alignItems:'center', gap:4, fontSize:11, padding:'3px 8px', borderRadius:5, background:'rgba(139,92,246,0.15)', color:'var(--accent)', border:'1px solid rgba(139,92,246,0.3)', cursor:'pointer', fontFamily:'inherit', fontWeight:500 }}
                       onMouseEnter={e => (e.currentTarget as HTMLElement).style.background='rgba(139,92,246,0.3)'}
                       onMouseLeave={e => (e.currentTarget as HTMLElement).style.background='rgba(139,92,246,0.15)'}
@@ -215,24 +259,12 @@ function MessageBubble({ msg, onEdit, onReload }: { msg: Message; onEdit?: (c: s
                 })}
               </div>
             )}
-            {/* Clean display text — no raw file content */}
             {cleanDisplay}
           </div>
           <span style={{fontSize:10,color:'var(--text-muted)',paddingRight:2}}>{time}</span>
         </div>
       </div>
     </>
-  )
-  return (
-    <div style={{display:'flex',flexDirection:'column',gap:3}}
-      onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
-      {msg.agentName && <div className={`agent-badge ${roleBadgeClass(msg.agentRole)}`} style={{display:'inline-block',fontSize:10,alignSelf:'flex-start'}}>{msg.agentName}</div>}
-      <div className="msg-agent"><MarkdownContent content={msg.content}/></div>
-      <div style={{display:'flex',alignItems:'center',gap:6}}>
-        <span style={{fontSize:10,color:'var(--text-muted)',paddingLeft:2}}>{time}</span>
-        <MsgActions content={msg.content} isUser={false} visible={hovered} onReload={onReload}/>
-      </div>
-    </div>
   )
 }
 
@@ -247,7 +279,6 @@ function ThinkingBubble() {
   )
 }
 
-// Model selector pill
 function ModelSelector({ selectedModel, models, activeProvider, cloudModel, isOnline, apiKeyStatus, onOpenSettings, onChange }: {
   selectedModel: string; models: any[]; activeProvider: string; cloudModel: string
   isOnline: boolean; apiKeyStatus: Record<string, boolean>
@@ -269,7 +300,7 @@ function ModelSelector({ selectedModel, models, activeProvider, cloudModel, isOn
   const color = COLORS[activeProvider] ?? '#888'
   return (
     <div ref={ref} style={{ position:'relative', flexShrink:0 }}>
-      <button onClick={() => setOpen(v => !v)} title="Switch model"
+      <button onClick={() => setOpen(v => !v)}
         style={{ display:'flex', alignItems:'center', gap:4, padding:'3px 8px', borderRadius:7, background:`${color}15`, border:`1px solid ${color}35`, color, fontSize:11, fontWeight:500, cursor:'pointer', whiteSpace:'nowrap', maxWidth:160, overflow:'hidden' }}>
         <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:120 }}>{displayName}</span>
         <ChevronDown size={10} style={{ flexShrink:0 }}/>
@@ -291,10 +322,10 @@ function ModelSelector({ selectedModel, models, activeProvider, cloudModel, isOn
           </>}
           {isOnline && (() => {
             const CLOUD = [
-              { id:'gemini', label:'Gemini Flash',     color:'#4285f4' },
-              { id:'openai', label:'GPT-4o',           color:'#10b981' },
-              { id:'claude', label:'Claude',           color:'#d97706' },
-              { id:'groq',   label:'Groq (free tier)', color:'#8b5cf6' },
+              { id:'gemini', label:'Gemini Flash', color:'#4285f4' },
+              { id:'openai', label:'GPT-4o',       color:'#10b981' },
+              { id:'claude', label:'Claude',        color:'#d97706' },
+              { id:'groq',   label:'Groq',          color:'#8b5cf6' },
             ] as const
             const available = CLOUD.filter(p => apiKeyStatus[p.id])
             if (!available.length) return null
@@ -403,7 +434,7 @@ export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: Chat
     return () => window.removeEventListener('provider-changed', loadProvider)
   }, [])
 
-  // MCP connection status — poll every 3s for project sessions, auto-connect if disconnected
+  // MCP status poll + auto-connect for project sessions
   useEffect(() => {
     if (!isProject || !session?.rootPath) { setMcpConnected(false); return }
     const rootPath = session.rootPath
@@ -414,18 +445,13 @@ export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: Chat
         const res  = await fetch(`http://localhost:3001/mcp/status?path=${encodeURIComponent(rootPath)}`)
         const data = await res.json()
         if (cancelled) return
-        if (data.connected) {
-          setMcpConnected(true)
-        } else {
-          // Not connected yet — try to connect
-          setMcpConnected(false)
-          const conn = await fetch('http://localhost:3001/mcp/connect', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: rootPath }),
-          })
-          const connData = await conn.json()
-          if (!cancelled) setMcpConnected(connData.connected === true)
-        }
+        if (data.connected) { setMcpConnected(true); return }
+        setMcpConnected(false)
+        const conn = await fetch('http://localhost:3001/mcp/connect', {
+          method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ path: rootPath }),
+        })
+        const cd = await conn.json()
+        if (!cancelled) setMcpConnected(cd.connected === true)
       } catch { if (!cancelled) setMcpConnected(false) }
     }
 
@@ -445,12 +471,12 @@ export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: Chat
         if (attachments.find(a => a.path === filePath)) continue
         try {
           if (IMAGE_EXTS.has(ext) || TEXT_EXTS.has(ext)) {
-            const res = await fetch(`http://localhost:3001/project/file?path=${encodeURIComponent(filePath)}`)
+            const res  = await fetch(`http://localhost:3001/project/file?path=${encodeURIComponent(filePath)}`)
             if (!res.ok) continue
-            const data    = await res.json()
-            const content = (data.content ?? '') as string
-            const truncated = content.length > MAX_FILE_SIZE ? content.slice(0, MAX_FILE_SIZE) + '\n\n[... file truncated at 500 KB ...]' : content
-            setAttachments(prev => [...prev, { id: nanoid(), name, path: filePath, size: content.length, content: truncated, isImage: IMAGE_EXTS.has(ext) }])
+            const data = await res.json()
+            const raw  = (data.content ?? '') as string
+            const content = raw.length > MAX_FILE_SIZE ? raw.slice(0, MAX_FILE_SIZE) + '\n\n[... truncated ...]' : raw
+            setAttachments(prev => [...prev, { id: nanoid(), name, path: filePath, size: raw.length, content, isImage: IMAGE_EXTS.has(ext) }])
           }
         } catch { }
       }
@@ -482,7 +508,6 @@ export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: Chat
     } catch { }
   }
 
-  // Export as .txt — opens on every system
   async function exportChat() {
     if (!session || !messages.length) return
     const lines: string[] = [session.title, `Exported from LocalForge - ${new Date().toLocaleString()}`, '-'.repeat(60), '']
@@ -500,10 +525,9 @@ export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: Chat
       showToast('Saving...', 'info')
       const res = await fetch('http://localhost:3001/project/file', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ path: filePath, content: text }) })
       if (res.ok) showToast(`Saved - ${filePath.split('/').pop()}`, 'success', 4000)
-      else throw new Error(`Server returned ${res.status}`)
+      else throw new Error(`Server ${res.status}`)
     } catch {
-      showToast('Downloading...', 'info')
-      const blob = new Blob([text], { type: 'text/plain' })
+      const blob = new Blob([text], { type:'text/plain' })
       const url  = URL.createObjectURL(blob)
       const a    = document.createElement('a')
       a.href = url; a.download = fileName; a.click(); URL.revokeObjectURL(url)
@@ -523,10 +547,9 @@ export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: Chat
     if (!overrideText) setAttachments([])
     userScrolledRef.current = false; scrollToBottom(true)
     const fullContent    = buildMessageWithContext(text, currentAttachments)
-    const displayContent = text
     const filePaths      = currentAttachments.map(f => f.path)
     const msgId = nanoid()
-    addMessage(sessionId, { id:msgId, type:'user', content:fullContent, displayContent, filePaths, timestamp:Date.now() })
+    addMessage(sessionId, { id:msgId, type:'user', content:fullContent, displayContent:text, filePaths, timestamp:Date.now() })
     api.saveMessage(msgId, sessionId, 'user', fullContent).catch(() => {})
     setSendingSession(sessionId); setStreamingSession(null)
     const streamTaskId = nanoid(); let firstChunk = true
@@ -545,7 +568,7 @@ export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: Chat
     } catch (err: any) {
       const errType = classifyError(err.message)
       const msg = errType === 'ram'
-        ? '⚠ **Not enough memory.**\n\n- Close other apps\n- Pull a smaller model: `ollama pull qwen2.5-coder:1.5b`\n- Add a free cloud API key in Settings (Gemini or Groq)'
+        ? '⚠ **Not enough memory.**\n\n- Close other apps\n- Pull a smaller model: `ollama pull qwen2.5-coder:1.5b`\n- Add a free cloud API key in Settings'
         : errType === 'timeout'
         ? '⚠ **Connection failed.**\n\n- Check the agent server: `cd packages/agent-core && npm run dev`\n- Check Ollama: `ollama serve`'
         : `⚠ **Error:** ${err.message}`
@@ -570,30 +593,20 @@ export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: Chat
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%', overflow:'hidden', background:'var(--bg-primary)' }}>
       <style>{`
-        @keyframes spin  { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }
-        @keyframes blink { 0%,100% { opacity:1 } 50% { opacity:0 } }
-        @keyframes toastIn { from { opacity:0; transform: translateX(-50%) translateY(10px) } to { opacity:1; transform: translateX(-50%) translateY(0) } }
+        @keyframes spin    { from { transform:rotate(0deg) } to { transform:rotate(360deg) } }
+        @keyframes blink   { 0%,100% { opacity:1 } 50% { opacity:0 } }
+        @keyframes toastIn { from { opacity:0; transform:translateX(-50%) translateY(10px) } to { opacity:1; transform:translateX(-50%) translateY(0) } }
       `}</style>
 
-      {/* Title bar */}
       {session && (
         <div style={{ flexShrink:0, padding:'0 16px', height:36, borderBottom:'1px solid var(--border)', background:'var(--bg-secondary)', display:'flex', alignItems:'center', gap:8, overflow:'hidden' }}>
           <span style={{ fontSize:13, fontWeight:500, color:'var(--text-primary)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flexShrink:1, minWidth:0 }}>{session.title}</span>
           {isProject && session.rootPath && <span style={{ fontSize:10, color:'var(--text-muted)', fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flexShrink:1, minWidth:0 }}>{session.rootPath}</span>}
           <div style={{ flex:1, minWidth:8 }}/>
-          {/* MCP connection indicator — project sessions only */}
           {isProject && (
-            <div
-              title={mcpConnected ? 'MCP filesystem connected — project files are in context' : 'MCP disconnected — connecting...'}
-              style={{ display:'flex', alignItems:'center', gap:4, padding:'2px 8px', borderRadius:8, fontSize:10, fontWeight:600, flexShrink:0,
-                background: mcpConnected ? 'rgba(61,214,140,0.12)' : 'rgba(239,68,68,0.10)',
-                border: `1px solid ${mcpConnected ? 'rgba(61,214,140,0.35)' : 'rgba(239,68,68,0.3)'}`,
-                color: mcpConnected ? '#3dd68c' : 'var(--red)',
-              }}>
-              <div style={{ width:6, height:6, borderRadius:'50%', background: mcpConnected ? '#3dd68c' : 'var(--red)',
-                boxShadow: mcpConnected ? '0 0 5px #3dd68c88' : 'none',
-                animation: mcpConnected ? 'none' : 'blink 1.5s step-end infinite',
-              }}/>
+            <div title={mcpConnected ? 'MCP connected — project files in context' : 'MCP connecting...'}
+              style={{ display:'flex', alignItems:'center', gap:4, padding:'2px 8px', borderRadius:8, fontSize:10, fontWeight:600, flexShrink:0, background:mcpConnected?'rgba(61,214,140,0.12)':'rgba(239,68,68,0.10)', border:`1px solid ${mcpConnected?'rgba(61,214,140,0.35)':'rgba(239,68,68,0.3)'}`, color:mcpConnected?'#3dd68c':'var(--red)' }}>
+              <div style={{ width:6, height:6, borderRadius:'50%', background:mcpConnected?'#3dd68c':'var(--red)', boxShadow:mcpConnected?'0 0 5px #3dd68c88':'none', animation:mcpConnected?'none':'blink 1.5s step-end infinite' }}/>
               {mcpConnected ? 'MCP' : 'MCP...'}
             </div>
           )}
@@ -615,7 +628,6 @@ export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: Chat
         </div>
       )}
 
-      {/* File tabs */}
       {session && isProject && (
         <div style={{ display:'flex', alignItems:'center', gap:4, padding:'4px 8px', background:'var(--bg-secondary)', borderBottom:'1px solid var(--border)', flexShrink:0, overflowX:'auto', scrollbarWidth:'none' }}>
           <div onClick={() => setActiveFile(session.id, null)}
@@ -650,14 +662,14 @@ export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: Chat
                 <div style={{ fontSize:15, fontWeight:500, marginBottom:6, color:'var(--text-secondary)' }}>{isChat ? 'Ask me anything' : 'Project assistant'}</div>
                 <div style={{ fontSize:13, lineHeight:1.8, color:'var(--text-muted)' }}>
                   {isChat
-                    ? <>Explain concepts, review code, write drafts, or answer questions.<br/>Click <Paperclip size={11} style={{display:'inline',verticalAlign:'middle'}}/> to attach files.</>
-                    : <>Ask about the codebase, request changes, or instruct agents.<br/>Click <Paperclip size={11} style={{display:'inline',verticalAlign:'middle'}}/> to attach files.</>
+                    ? <>Explain concepts, review code, write drafts, answer questions.<br/>Click <Paperclip size={11} style={{display:'inline',verticalAlign:'middle'}}/> to attach files.</>
+                    : <>Ask about the codebase, request code changes, or say "write X file" to get an Apply button.<br/>Click <Paperclip size={11} style={{display:'inline',verticalAlign:'middle'}}/> to attach files.</>
                   }
                 </div>
               </div>
             )}
             {messages.map((msg, i) => (
-              <MessageBubble key={msg.id} msg={msg} onEdit={handleEdit}
+              <MessageBubble key={msg.id} msg={msg} onEdit={handleEdit} rootPath={session?.rootPath}
                 onReload={i===messages.length-1 && msg.type==='agent' ? handleReload : undefined}
               />
             ))}
@@ -666,8 +678,6 @@ export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: Chat
           </div>
 
           {!isAtBottom && (
-            // Positioned relative to the chat+input area, above the input bar
-            // Uses bottom offset that accounts for terminal being open
             <div style={{ position:'absolute', bottom: terminalOpen ? 270 : (attachments.length > 0 ? 130 : 100), left:'50%', transform:'translateX(-50%)', zIndex:20 }}>
               <button onClick={() => { userScrolledRef.current=false; scrollToBottom(true) }}
                 style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', borderRadius:20, background:'var(--bg-secondary)', border:'1px solid var(--border)', color:'var(--text-primary)', fontSize:12, fontWeight:500, cursor:'pointer', boxShadow:'0 4px 16px rgba(0,0,0,0.4)', backdropFilter:'blur(8px)' }}
@@ -709,16 +719,7 @@ export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: Chat
       {showSettings && <SettingsModal onClose={() => { setShowSettings(false); window.dispatchEvent(new CustomEvent('provider-changed')) }}/>}
 
       {toast && (
-        <div style={{
-          position:'fixed', bottom:80, left:'50%', transform:'translateX(-50%)',
-          zIndex:999, pointerEvents:'none', display:'flex', alignItems:'center', gap:8,
-          padding:'10px 18px', borderRadius:10,
-          background: toast.type==='success'?'rgba(16,185,129,0.15)':toast.type==='error'?'rgba(239,68,68,0.15)':'rgba(139,92,246,0.15)',
-          border:`1px solid ${toast.type==='success'?'rgba(16,185,129,0.4)':toast.type==='error'?'rgba(239,68,68,0.4)':'rgba(139,92,246,0.4)'}`,
-          backdropFilter:'blur(12px)', boxShadow:'0 4px 20px rgba(0,0,0,0.4)', fontSize:13, fontWeight:500,
-          color:toast.type==='success'?'var(--green)':toast.type==='error'?'var(--red)':'var(--accent)',
-          whiteSpace:'nowrap', animation:'toastIn 0.2s ease',
-        }}>
+        <div style={{ position:'fixed', bottom:80, left:'50%', transform:'translateX(-50%)', zIndex:999, pointerEvents:'none', display:'flex', alignItems:'center', gap:8, padding:'10px 18px', borderRadius:10, background:toast.type==='success'?'rgba(16,185,129,0.15)':toast.type==='error'?'rgba(239,68,68,0.15)':'rgba(139,92,246,0.15)', border:`1px solid ${toast.type==='success'?'rgba(16,185,129,0.4)':toast.type==='error'?'rgba(239,68,68,0.4)':'rgba(139,92,246,0.4)'}`, backdropFilter:'blur(12px)', boxShadow:'0 4px 20px rgba(0,0,0,0.4)', fontSize:13, fontWeight:500, color:toast.type==='success'?'var(--green)':toast.type==='error'?'var(--red)':'var(--accent)', whiteSpace:'nowrap', animation:'toastIn 0.2s ease' }}>
           {toast.type==='success' && <Check size={14}/>}
           {toast.type==='error'   && <X size={14}/>}
           {toast.type==='info'    && <Loader size={14} style={{animation:'spin 1s linear infinite'}}/>}

@@ -76,10 +76,16 @@ function buildSystemPrompt(modelName: string, summary?: string | null, knowledge
 
   return (
     `You are a helpful AI coding assistant inside LocalForge, powered by ${modelName}. ` +
-    `Format rules: use plain readable text. For math or formulas, write them out in plain text (e.g. "x squared" not LaTeX). ` +
-    `Do NOT use LaTeX syntax (no \\[, \\(, \\frac, \\begin etc). ` +
-    `Use Markdown only for code blocks, headers, and lists. Do not use ** for bold in prose — use plain emphasis instead. ` +
-    `Do not add filler phrases. When uncertain, say so rather than guessing.` +
+    `Format rules: use plain readable text. Do NOT use LaTeX syntax. ` +
+    `Use Markdown only for code blocks, headers, and lists. Do not use ** for bold in prose. ` +
+    `Do not add filler phrases. When uncertain, say so rather than guessing.\n\n` +
+    `IMPORTANT — proposing file changes: when you want to create or modify a file, use this exact format:\n` +
+    `\`\`\`write:path/to/file\n` +
+    `...full file content...\n` +
+    `\`\`\`\n` +
+    `Rules: use the relative path from project root. Always write the COMPLETE file content, not just the changed lines. ` +
+    `Only use this format when the user asks you to write, create, update, or fix a file. ` +
+    `After proposing, briefly explain what changed and why.` +
     (extra        ? `\n\n${extra}`                    : '') +
     (summary      ? `\n\nProject summary:\n${summary}` : '') +
     fileBlock +
