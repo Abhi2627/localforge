@@ -157,6 +157,16 @@ These are real features but require significant infrastructure or third-party de
 - Export responses as Word documents, save to Google Drive
 - Requires: docx generation library, OAuth integration
 
+#### 5E — Universal File Reading in Chat
+- Accept PDF, DOCX, XLSX, images (PNG, JPG, WEBP), and any text file as chat attachments
+- PDF: extract text via pdf-parse or pdfjs-dist, inject into model context
+- DOCX: extract text via mammoth.js
+- XLSX/CSV: convert to readable table format before injection
+- Images: pass as base64 to vision-capable models (Gemini Vision, GPT-4o, LLaVA)
+- Currently blocked: Ollama local models (qwen2.5-coder) do not support vision; PDF/DOCX parsing requires additional server-side libraries
+- Current state: only plain text files and code files are supported as attachments
+- Fix path: add `pdf-parse` + `mammoth` to agent-core, add vision routing for cloud providers, extend file type filter in ChatPanel
+
 ---
 
 ## License
