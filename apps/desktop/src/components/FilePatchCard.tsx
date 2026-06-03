@@ -9,18 +9,22 @@ export interface FilePatch {
 }
 
 interface Props {
-  patch:    FilePatch
-  onApply:  (patch: FilePatch) => void
-  onReject: (id: string) => void
+  patch:         FilePatch
+  alreadyApplied?: boolean   // parent tells us this was already applied (survives re-render)
+  onApply:       (patch: FilePatch) => Promise<void>
+  onReject:      (id: string) => void
 }
 
-export function FilePatchCard({ patch, onApply, onReject }: Props) {
+export function FilePatchCard({ patch, alreadyApplied = false, onApply, onReject }: Props) {
   const [expanded,  setExpanded]  = useState(false)
   const [applying,  setApplying]  = useState(false)
-  const [applied,   setApplied]   = useState(false)
+  const [applied,   setApplied]   = useState(alreadyApplied)
   const [rejected,  setRejected]  = useState(false)
   const [existing,  setExisting]  = useState<string | null>(null)
   const [loadingEx, setLoadingEx] = useState(false)
+
+  // Sync applied state from parent (handles re-renders after apply)
+  useEffect(() => { if (alreadyApplied) setApplied(true) }, [alreadyApplied])
 
   const fileName = patch.path.replace(/\\/g, '/').split('/').pop() ?? patch.path
   const lines    = patch.content.split('\n')

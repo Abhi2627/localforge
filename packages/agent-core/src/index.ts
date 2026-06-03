@@ -79,13 +79,26 @@ function buildSystemPrompt(modelName: string, summary?: string | null, knowledge
     `Format rules: use plain readable text. Do NOT use LaTeX syntax. ` +
     `Use Markdown only for code blocks, headers, and lists. Do not use ** for bold in prose. ` +
     `Do not add filler phrases. When uncertain, say so rather than guessing.\n\n` +
-    `IMPORTANT — proposing file changes: when you want to create or modify a file, use this exact format:\n` +
-    `\`\`\`write:path/to/file\n` +
-    `...full file content...\n` +
-    `\`\`\`\n` +
-    `Rules: use the relative path from project root. Always write the COMPLETE file content, not just the changed lines. ` +
-    `Only use this format when the user asks you to write, create, update, or fix a file. ` +
-    `After proposing, briefly explain what changed and why.` +
+    `CRITICAL RULE — WRITING FILES: When the user asks you to write, create, edit, update, or fix ANY file, ` +
+    `you MUST use this EXACT format and NO OTHER format:\n\n` +
+    `\`\`\`write:path/to/filename.ext\n` +
+    `<complete file content here>\n` +
+    `\`\`\`\n\n` +
+    `IMPORTANT: The backtick fence MUST start with write: followed immediately by the file path. ` +
+    `DO NOT use \`\`\`typescript or \`\`\`javascript or any language tag when writing a file. ` +
+    `ALWAYS write the COMPLETE file content, never partial snippets. ` +
+    `Use the relative path from the project root. ` +
+    `After the write block, briefly explain what you wrote and why.\n\n` +
+    `Example of CORRECT format:\n` +
+    `\`\`\`write:src/utils/hello.ts\n` +
+    `export function hello(): string {\n` +
+    `  return 'Hello, world!'\n` +
+    `}\n` +
+    `\`\`\`\n\n` +
+    `Example of WRONG format (never do this):\n` +
+    `\`\`\`typescript\n` +
+    `export function hello() { ... }\n` +
+    `\`\`\`` +
     (extra        ? `\n\n${extra}`                    : '') +
     (summary      ? `\n\nProject summary:\n${summary}` : '') +
     fileBlock +

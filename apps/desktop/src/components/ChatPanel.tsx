@@ -53,14 +53,32 @@ function extractFileContent(msgContent: string, fileName: string): string {
   return m ? m[0].replace(/<file name="[^"]*">\n?/, '').replace(/\n?<\/file>$/, '') : ''
 }
 
-// Parse ```write:path\ncontent\n``` blocks from agent output
-function extractPatches(content: string, rootPath?: string): { patches: FilePatch[]; cleanContent: string } {
+// Parse ```write:path\ncontent\n``` blocks from agent output.
+// userPrompt: the user's message that triggered this response (for filename hints in fallback)
+function extractPatches(content: string, rootPath?: string, userPrompt?: string): { patches: FilePatch[]; cleanContent: string } {
   const patches: FilePatch[] = []
-  const cleanContent = content.replace(/```write:([^\n]+)\n([\s\S]*?)```/g, (_m, fp: string, fc: string) => {
+
+  // Primary: explicit write: blocks
+  const primary = content.replace(/```write:([^\n]+)\n([\s\S]*?)```/g, (_m, fp: string, fc: string) => {
     patches.push({ id: nanoid(), path: fp.trim(), content: fc.trimEnd(), rootPath })
     return `[File proposal: ${fp.trim()}]`
   })
-  return { patches, cleanContent: cleanContent.trim() }
+  if (patches.length > 0) return { patches, cleanContent: primary.trim() }
+
+  // Fallback: plain fenced code block — look for filename in agent content OR user prompt
+  const searchText = content + ' ' + (userPrompt ?? '')
+  const fileNameMatch = searchText.match(/([\w./-]+\.(?:ts|tsx|js|jsx|mjs|py|go|rs|css|scss|html|json|md|yaml|yml|sh|env|toml|txt|proto|sql|graphql|dockerfile))/i)
+  if (fileNameMatch) {
+    const codeMatch = content.match(/```(?:\w+)?\n([\s\S]*?)```/)
+    if (codeMatch) {
+      // Clean path: strip leading comment markers and spaces
+      const rawPath = fileNameMatch[1].replace(/^\/\/\s*/, '').trim()
+      patches.push({ id: nanoid(), path: rawPath, content: codeMatch[1].trimEnd(), rootPath })
+      return { patches, cleanContent: content }  // keep original display
+    }
+  }
+
+  return { patches, cleanContent: primary.trim() }
 }
 
 const TEXT_EXTS  = new Set(['ts','tsx','js','jsx','mjs','cjs','vue','svelte','py','rb','go','rs','java','kt','swift','c','cpp','h','cs','php','html','css','scss','sass','less','json','yaml','yml','toml','xml','env','md','mdx','txt','csv','sh','bash','zsh','fish','sql','graphql','proto','dockerfile'])
@@ -168,27 +186,47 @@ function MsgActions({ content, onEdit, onReload, isUser, visible }: {
 }
 
 // Agent message with file-patch card support
-function AgentBubble({ msg, onReload, rootPath }: { msg: Message; onReload?: () => void; rootPath?: string }) {
-  const [hovered, setHovered] = useState(false)
-  const [patches, setPatches] = useState<FilePatch[]>([])
+function AgentBubble({ msg, onReload, rootPath, userPrompt }: { msg: Message; onReload?: () => void; rootPath?: string; userPrompt?: string }) {
+  const [hovered,    setHovered]    = useState(false)
+  const appliedRef   = useRef<Set<string>>(new Set())
+  const [appliedIds, setAppliedIds] = useState<Set<string>>(new Set())
 
-  const { patches: parsed, cleanContent } = extractPatches(msg.content, rootPath)
+  // Patches derived once from content — stable reference prevents re-creation on every render
+  const patchesRef = useRef<FilePatch[] | null>(null)
+  if (patchesRef.current === null) {
+    patchesRef.current = extractPatches(msg.content, rootPath, userPrompt).patches
+  }
+  const [patches, setPatches] = useState<FilePatch[]>(patchesRef.current)
 
+  // Re-derive when streaming finalises (type changes stream → agent)
+  const prevTypeRef = useRef(msg.type)
   useEffect(() => {
-    if (msg.type === 'agent' && parsed.length > 0) setPatches(parsed)
-  }, [msg.content, msg.type]) // eslint-disable-line
+    if (prevTypeRef.current !== 'agent' && msg.type === 'agent') {
+      prevTypeRef.current = 'agent'
+      const { patches: fresh } = extractPatches(msg.content, rootPath, userPrompt)
+      if (fresh.length > 0) setPatches(fresh)
+    }
+  }, [msg.type]) // eslint-disable-line
+
+  const { cleanContent } = extractPatches(msg.content, rootPath, userPrompt)
+  const displayContent = patches.length > 0 ? cleanContent : msg.content
 
   async function handleApply(patch: FilePatch) {
-    const fullPath = patch.path.startsWith('/') ? patch.path
-      : patch.rootPath ? `${patch.rootPath}/${patch.path}` : patch.path
+    if (appliedRef.current.has(patch.id)) return   // guard: already applied — no duplicate writes
+    // Resolve full path: absolute paths used as-is; relative paths joined to project root
+    const fullPath = patch.path.startsWith('/')
+      ? patch.path
+      : rootPath
+        ? `${rootPath}/${patch.path}`
+        : patch.path
     const res = await fetch('http://localhost:3001/project/file', {
-      method:'POST', headers:{'Content-Type':'application/json'},
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: fullPath, content: patch.content }),
     })
     if (!res.ok) throw new Error(`Write failed: ${res.status}`)
+    appliedRef.current.add(patch.id)
+    setAppliedIds(new Set(appliedRef.current))  // trigger re-render with updated applied set
   }
-
-  const displayContent = parsed.length > 0 ? cleanContent : msg.content
 
   return (
     <div style={{display:'flex',flexDirection:'column',gap:3}}
@@ -196,7 +234,11 @@ function AgentBubble({ msg, onReload, rootPath }: { msg: Message; onReload?: () 
       {msg.agentName && <div className={`agent-badge ${roleBadgeClass(msg.agentRole)}`} style={{display:'inline-block',fontSize:10,alignSelf:'flex-start'}}>{msg.agentName}</div>}
       {displayContent && <div className="msg-agent"><MarkdownContent content={displayContent}/></div>}
       {patches.map(p => (
-        <FilePatchCard key={p.id} patch={p} onApply={handleApply} onReject={id => setPatches(ps => ps.filter(x => x.id !== id))}/>
+        <FilePatchCard key={p.id} patch={p}
+          alreadyApplied={appliedIds.has(p.id)}
+          onApply={handleApply}
+          onReject={id => setPatches(ps => ps.filter(x => x.id !== id))}
+        />
       ))}
       <div style={{display:'flex',alignItems:'center',gap:6}}>
         <span style={{fontSize:10,color:'var(--text-muted)',paddingLeft:2}}>{formatTime(msg.timestamp)}</span>
@@ -206,8 +248,8 @@ function AgentBubble({ msg, onReload, rootPath }: { msg: Message; onReload?: () 
   )
 }
 
-function MessageBubble({ msg, onEdit, onReload, rootPath }: {
-  msg: Message; onEdit?: (c: string) => void; onReload?: () => void; rootPath?: string
+function MessageBubble({ msg, onEdit, onReload, rootPath, userPrompt }: {
+  msg: Message; onEdit?: (c: string) => void; onReload?: () => void; rootPath?: string; userPrompt?: string
 }) {
   const [hovered,     setHovered]     = useState(false)
   const [previewFile, setPreviewFile] = useState<{ name: string; content: string } | null>(null)
@@ -232,7 +274,8 @@ function MessageBubble({ msg, onEdit, onReload, rootPath }: {
       </div>
     </div>
   )
-  if (msg.type === 'agent') return <AgentBubble msg={msg} onReload={onReload} rootPath={rootPath}/>
+  if (msg.type === 'agent') return <AgentBubble msg={msg} onReload={onReload} rootPath={rootPath} userPrompt={userPrompt}/>
+
 
   // User bubble
   const time = formatTime(msg.timestamp)
@@ -668,11 +711,17 @@ export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: Chat
                 </div>
               </div>
             )}
-            {messages.map((msg, i) => (
-              <MessageBubble key={msg.id} msg={msg} onEdit={handleEdit} rootPath={session?.rootPath}
-                onReload={i===messages.length-1 && msg.type==='agent' ? handleReload : undefined}
-              />
-            ))}
+            {messages.map((msg, i) => {
+              // Find the most recent user message before this one (for fallback filename detection)
+              const prevUserMsg = messages.slice(0, i).filter(m => m.type === 'user').pop()
+              return (
+                <MessageBubble key={msg.id} msg={msg} onEdit={handleEdit}
+                  rootPath={session?.rootPath}
+                  userPrompt={prevUserMsg?.displayContent ?? prevUserMsg?.content}
+                  onReload={i===messages.length-1 && msg.type==='agent' ? handleReload : undefined}
+                />
+              )
+            })}
             {isSending && !isStreaming && <ThinkingBubble/>}
             <div ref={bottomRef} style={{ height:1 }}/>
           </div>
