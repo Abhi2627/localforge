@@ -172,6 +172,28 @@ async function bootstrap() {
     } catch (err: any) { try { socket.send(`\r\n\x1b[31m[Failed: ${err.message}]\x1b[0m\r\n`) } catch { } try { socket.close() } catch { } }
   })
 
+  // ── MCP status ────────────────────────────────────────────────────────────
+  // Track which project paths have an active MCP connection
+  const mcpConnected = new Set<string>()
+
+  server.get<{ Querystring: { path?: string } }>('/mcp/status', async (req) => {
+    const projectPath = req.query.path
+    if (!projectPath) return { connected: false, error: 'No path provided' }
+    return { connected: mcpConnected.has(projectPath), path: projectPath }
+  })
+
+  server.post<{ Body: { path: string } }>('/mcp/connect', async (req) => {
+    const { path: projectPath } = req.body
+    if (!projectPath) return { success: false, error: 'No path provided' }
+    try {
+      await connectMCP(projectPath)
+      mcpConnected.add(projectPath)
+      return { success: true, connected: true }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
+  })
+
   // ── Health ─────────────────────────────────────────────────────────────────
   server.get('/health', async () => ({ status: 'ok', mode: taskQueue.currentMode, shell: DEFAULT_SHELL }))
   server.get('/system', async () => profileSystem())
@@ -243,7 +265,9 @@ async function bootstrap() {
   // ── Project ────────────────────────────────────────────────────────────────
   server.post<{ Body: { sessionId: string; rootPath: string } }>('/project/open', async (req) => {
     const { sessionId, rootPath } = req.body; if (!rootPath) return { success: false, message: 'rootPath required' }
-    await connectMCP(rootPath); const scan = scanProjectFiles(rootPath)
+    await connectMCP(rootPath)
+    mcpConnected.add(rootPath)   // mark as connected so /mcp/status reflects it
+    const scan = scanProjectFiles(rootPath)
     setImmediate(() => { scanProject(sessionId, rootPath); try { runEnforcer(sessionId, rootPath) } catch { } broadcast({ type: 'knowledge_ready', sessionId }) })
     generateProjectSummary(sessionId, rootPath, scan).then(summary => broadcast({ type: 'project_summary', sessionId, summary }))
     return { success: true, isEmpty: scan.isEmpty, fileList: scan.fileList, fileTree: scan.fileTree, fileCount: scan.fileList.length }

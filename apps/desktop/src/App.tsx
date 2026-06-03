@@ -216,7 +216,7 @@ export default function App() {
 
       <div style={{ display:'flex', flexDirection:'column', overflow:'hidden', minHeight:0, minWidth:0 }}>
         <TabStrip/>
-        {screen === 'welcome' ? <WelcomeScreen/> : <ChatPanel onOpenTerminal={openProjectTerminal}/>}
+        {screen === 'welcome' ? <WelcomeScreen/> : <ChatPanel onOpenTerminal={openProjectTerminal} terminalOpen={terminalOpen}/>}
       </div>
 
       {showRight && (

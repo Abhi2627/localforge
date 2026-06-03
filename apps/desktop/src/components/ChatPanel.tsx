@@ -9,7 +9,7 @@ import { nanoid } from '../hooks/nanoid'
 import FileEditorPanel from './FileEditorPanel'
 import SettingsModal from './SettingsModal'
 
-interface ChatPanelProps { onOpenTerminal?: (cwd: string) => void }
+interface ChatPanelProps { onOpenTerminal?: (cwd: string) => void; terminalOpen?: boolean }
 interface AttachedFile { id: string; name: string; path: string; size: number; content: string; isImage: boolean }
 
 function roleBadgeClass(role?: AgentRole) { return `badge-${role ?? 'fullstack'}` }
@@ -331,7 +331,7 @@ function ModelSelector({ selectedModel, models, activeProvider, cloudModel, isOn
   )
 }
 
-export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
+export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: ChatPanelProps) {
   const {
     sessions, activeSessionId,
     addMessage, appendStream, finalizeStream,
@@ -350,6 +350,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
   const [showSettings,   setShowSettings]   = useState(false)
   const [isAtBottom,     setIsAtBottom]     = useState(true)
   const [toast,          setToast]          = useState<{ msg: string; type: 'info'|'success'|'error' } | null>(null)
+  const [mcpConnected,   setMcpConnected]   = useState(false)
 
   const showToast = useCallback((msg: string, type: 'info'|'success'|'error' = 'info', ms = 3000) => {
     setToast({ msg, type }); setTimeout(() => setToast(null), ms)
@@ -401,6 +402,37 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
     window.addEventListener('provider-changed', loadProvider)
     return () => window.removeEventListener('provider-changed', loadProvider)
   }, [])
+
+  // MCP connection status — poll every 3s for project sessions, auto-connect if disconnected
+  useEffect(() => {
+    if (!isProject || !session?.rootPath) { setMcpConnected(false); return }
+    const rootPath = session.rootPath
+    let cancelled = false
+
+    async function checkAndConnect() {
+      try {
+        const res  = await fetch(`http://localhost:3001/mcp/status?path=${encodeURIComponent(rootPath)}`)
+        const data = await res.json()
+        if (cancelled) return
+        if (data.connected) {
+          setMcpConnected(true)
+        } else {
+          // Not connected yet — try to connect
+          setMcpConnected(false)
+          const conn = await fetch('http://localhost:3001/mcp/connect', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: rootPath }),
+          })
+          const connData = await conn.json()
+          if (!cancelled) setMcpConnected(connData.connected === true)
+        }
+      } catch { if (!cancelled) setMcpConnected(false) }
+    }
+
+    checkAndConnect()
+    const interval = setInterval(checkAndConnect, 4000)
+    return () => { cancelled = true; clearInterval(interval) }
+  }, [activeSessionId, isProject, session?.rootPath]) // eslint-disable-line
 
   async function handleAttach() {
     try {
@@ -549,6 +581,22 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
           <span style={{ fontSize:13, fontWeight:500, color:'var(--text-primary)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flexShrink:1, minWidth:0 }}>{session.title}</span>
           {isProject && session.rootPath && <span style={{ fontSize:10, color:'var(--text-muted)', fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flexShrink:1, minWidth:0 }}>{session.rootPath}</span>}
           <div style={{ flex:1, minWidth:8 }}/>
+          {/* MCP connection indicator — project sessions only */}
+          {isProject && (
+            <div
+              title={mcpConnected ? 'MCP filesystem connected — project files are in context' : 'MCP disconnected — connecting...'}
+              style={{ display:'flex', alignItems:'center', gap:4, padding:'2px 8px', borderRadius:8, fontSize:10, fontWeight:600, flexShrink:0,
+                background: mcpConnected ? 'rgba(61,214,140,0.12)' : 'rgba(239,68,68,0.10)',
+                border: `1px solid ${mcpConnected ? 'rgba(61,214,140,0.35)' : 'rgba(239,68,68,0.3)'}`,
+                color: mcpConnected ? '#3dd68c' : 'var(--red)',
+              }}>
+              <div style={{ width:6, height:6, borderRadius:'50%', background: mcpConnected ? '#3dd68c' : 'var(--red)',
+                boxShadow: mcpConnected ? '0 0 5px #3dd68c88' : 'none',
+                animation: mcpConnected ? 'none' : 'blink 1.5s step-end infinite',
+              }}/>
+              {mcpConnected ? 'MCP' : 'MCP...'}
+            </div>
+          )}
           {messages.length > 0 && (
             <button onClick={exportChat}
               style={{ display:'flex', alignItems:'center', gap:4, padding:'3px 8px', background:'transparent', border:'1px solid var(--border)', borderRadius:5, color:'var(--text-secondary)', cursor:'pointer', fontSize:11, flexShrink:0 }}
@@ -618,7 +666,9 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
           </div>
 
           {!isAtBottom && (
-            <div style={{ position:'absolute', bottom: attachments.length > 0 ? 130 : 100, left:'50%', transform:'translateX(-50%)', zIndex:20 }}>
+            // Positioned relative to the chat+input area, above the input bar
+            // Uses bottom offset that accounts for terminal being open
+            <div style={{ position:'absolute', bottom: terminalOpen ? 270 : (attachments.length > 0 ? 130 : 100), left:'50%', transform:'translateX(-50%)', zIndex:20 }}>
               <button onClick={() => { userScrolledRef.current=false; scrollToBottom(true) }}
                 style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', borderRadius:20, background:'var(--bg-secondary)', border:'1px solid var(--border)', color:'var(--text-primary)', fontSize:12, fontWeight:500, cursor:'pointer', boxShadow:'0 4px 16px rgba(0,0,0,0.4)', backdropFilter:'blur(8px)' }}
                 onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor='var(--accent)'; (e.currentTarget as HTMLElement).style.background='var(--bg-hover)' }}
