@@ -233,7 +233,6 @@ export default function SettingsModal({ onClose }: Props) {
   const [tab,      setTab]      = useState<Tab>('providers')
   const [settings, setSettings] = useState<PublicSettings | null>(null)
   const [loading,  setLoading]  = useState(true)
-  const [saving,   setSaving]   = useState(false)
   const [ollamaModels, setOllamaModels] = useState<string[]>([])
 
   const load = useCallback(async () => {
@@ -254,14 +253,13 @@ export default function SettingsModal({ onClose }: Props) {
   useEffect(() => { load() }, [load])
 
   async function setProvider(provider: Provider, model?: string) {
-    setSaving(true)
     try {
       await fetch('http://localhost:3001/settings/provider', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ activeProvider: provider, cloudModel: model }),
       })
       await load()
-    } finally { setSaving(false) }
+    } catch { }
   }
 
   async function saveApiKey(provider: string, apiKey: string, baseUrl?: string) {

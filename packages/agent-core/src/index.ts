@@ -64,14 +64,14 @@ function broadcast(data: object) {
   wsClients.forEach(ws => { try { ws.send(msg) } catch { wsClients.delete(ws) } })
 }
 
-function buildSystemPrompt(modelName: string, summary?: string | null, knowledgeCtx?: string, contractCtx?: string, extraSystemPrompt?: string): string {
+function buildSystemPrompt(modelName: string, summary?: string | null, knowledgeCtx?: string, contractCtx?: string, extra?: string): string {
   return (
     `You are a helpful AI coding assistant inside LocalForge, powered by ${modelName}. ` +
-    `Always use clean Markdown. Do not add filler phrases. When uncertain, say so explicitly rather than guessing.` +
-    (extraSystemPrompt ? `\n\n${extraSystemPrompt}` : '') +
-    (summary           ? `\n\nProject context:\n${summary}` : '') +
-    (knowledgeCtx      ? `\n\n${knowledgeCtx}` : '') +
-    (contractCtx       ? `\n\n${contractCtx}`  : '')
+    `Always use clean Markdown. Do not add filler phrases. When uncertain, say so rather than guessing.` +
+    (extra       ? `\n\n${extra}`               : '') +
+    (summary     ? `\n\nProject context:\n${summary}` : '') +
+    (knowledgeCtx ? `\n\n${knowledgeCtx}`        : '') +
+    (contractCtx  ? `\n\n${contractCtx}`         : '')
   )
 }
 
@@ -90,42 +90,41 @@ function setupSSE(reply: any) {
   return (data: object) => { try { reply.raw.write(`data: ${JSON.stringify(data)}\n\n`) } catch { } }
 }
 
-// ── Unified chat function — routes to Ollama or cloud ────────────────────────
+// ── Unified chat — routes to Ollama or cloud provider ────────────────────────
 
 async function routedChat(
-  messages: Array<{ role: ChatRole; content: string }>,
-  onChunk?: (chunk: string) => void
+  messages:  Array<{ role: ChatRole; content: string }>,
+  onChunk?:  (chunk: string) => void,
+  settings?: ReturnType<typeof loadSettings>
 ): Promise<{ content: string; modelUsed: string; provider: string }> {
-  const settings = loadSettings()
-  const provider = settings.activeProvider
+  const s        = settings ?? loadSettings()
+  const provider = s.activeProvider
 
   if (provider === 'ollama') {
     const { selectedModel } = loadConfig()
+    if (!selectedModel) throw new Error('No Ollama model selected. Go to the Model Advisor to select one.')
     const content = await ollamaChat(selectedModel, messages, onChunk ? (c) => onChunk(c.content) : undefined)
     return { content, modelUsed: selectedModel, provider: 'ollama' }
   }
 
-  // Cloud provider
-  const apiKeys  = settings.apiKeys
-  const model    = settings.cloudModels[provider as CloudProvider] ?? ''
-  const defaults = settings.llmDefaults
-
-  let apiKey = ''
+  const model  = s.cloudModels[provider as CloudProvider] ?? ''
+  const keys   = s.apiKeys
+  let apiKey   = ''
   let baseUrl: string | undefined
-  if (provider === 'openai')  apiKey = apiKeys.openai  ?? ''
-  if (provider === 'gemini')  apiKey = apiKeys.gemini  ?? ''
-  if (provider === 'claude')  apiKey = apiKeys.claude  ?? ''
-  if (provider === 'groq')    apiKey = apiKeys.groq    ?? ''
-  if (provider === 'custom') { apiKey = apiKeys.customKey ?? ''; baseUrl = apiKeys.customUrl }
 
-  if (!apiKey) throw new Error(`No API key configured for ${provider}. Go to Settings → Cloud Providers.`)
+  if (provider === 'openai') apiKey = keys.openai  ?? ''
+  if (provider === 'gemini') apiKey = keys.gemini  ?? ''
+  if (provider === 'claude') apiKey = keys.claude  ?? ''
+  if (provider === 'groq')   apiKey = keys.groq    ?? ''
+  if (provider === 'custom') { apiKey = keys.customKey ?? ''; baseUrl = keys.customUrl }
+
+  if (!apiKey) throw new Error(`No API key for ${provider}. Go to Settings → Cloud Providers.`)
 
   const config: CloudProviderConfig = { provider: provider as CloudProvider, apiKey, model, baseUrl }
   const content = await cloudChat(config, messages, onChunk ? (c) => onChunk(c.content) : undefined, {
-    temperature: defaults.temperature,
-    maxTokens:   defaults.maxTokens,
+    temperature: s.llmDefaults.temperature,
+    maxTokens:   s.llmDefaults.maxTokens,
   })
-
   return { content, modelUsed: model, provider }
 }
 
@@ -176,22 +175,8 @@ async function bootstrap() {
   server.post<{ Body: { mode: 'sequential'|'parallel'; maxParallel?: number } }>('/system/mode', async (req) => { taskQueue.setMode(req.body.mode, req.body.maxParallel); saveConfig({ executionMode: req.body.mode, maxParallel: req.body.maxParallel ?? 1 }); return { success: true } })
   server.get('/network/info', async () => ({ lanIp: LAN_IP, hostname: os.hostname(), platform: os.platform() }))
 
-  // ── Settings endpoints ─────────────────────────────────────────────────────
+  // ── Settings ───────────────────────────────────────────────────────────────
   server.get('/settings', async () => getPublicSettings())
-  server.post<{ Body: Partial<import('./settings/SettingsStore.js').AppSettings> }>('/settings', async (req) => {
-    // Never accept raw API keys from the body if they look masked
-    const body = { ...req.body }
-    if (body.apiKeys) {
-      const cleaned: Record<string, string> = {}
-      for (const [k, v] of Object.entries(body.apiKeys)) {
-        // Only save if it doesn't look like a masked value (doesn't start with •)
-        if (v && !String(v).startsWith('•')) cleaned[k] = String(v)
-      }
-      body.apiKeys = cleaned as any
-    }
-    return { success: true, settings: getPublicSettings() }
-  })
-  // Separate endpoint for updating API keys (avoids accidental masking)
   server.post<{ Body: { provider: string; apiKey: string; baseUrl?: string } }>('/settings/apikey', async (req) => {
     const { provider, apiKey, baseUrl } = req.body
     if (!provider || !apiKey) return { success: false, error: 'provider and apiKey required' }
@@ -206,37 +191,25 @@ async function bootstrap() {
   })
   server.post<{ Body: { provider: string } }>('/settings/apikey/delete', async (req) => {
     const { provider } = req.body
-    const cur = loadSettings()
-    const keys = { ...cur.apiKeys }
+    const cur  = loadSettings(); const keys = { ...cur.apiKeys }
     if (provider === 'openai') delete keys.openai
     else if (provider === 'gemini') delete keys.gemini
     else if (provider === 'claude') delete keys.claude
     else if (provider === 'groq')   delete keys.groq
     else if (provider === 'custom') { delete keys.customKey; delete keys.customUrl }
-    saveSettings({ apiKeys: keys })
-    return { success: true }
+    saveSettings({ apiKeys: keys }); return { success: true }
   })
-  // Validate an API key
   server.post<{ Body: { provider: CloudProvider; apiKey: string; model: string; baseUrl?: string } }>('/settings/apikey/validate', async (req) => {
-    const { provider, apiKey, model, baseUrl } = req.body
-    const result = await validateApiKey({ provider, apiKey, model, baseUrl })
-    return result
+    return validateApiKey({ provider: req.body.provider, apiKey: req.body.apiKey, model: req.body.model, baseUrl: req.body.baseUrl })
   })
-  // Update active provider + cloud model
   server.post<{ Body: { activeProvider: string; cloudModel?: string } }>('/settings/provider', async (req) => {
     const { activeProvider, cloudModel } = req.body
     const update: any = { activeProvider }
-    if (cloudModel) {
-      const cur = loadSettings()
-      update.cloudModels = { ...cur.cloudModels, [activeProvider]: cloudModel }
-    }
-    saveSettings(update)
-    return { success: true, settings: getPublicSettings() }
+    if (cloudModel) { const cur = loadSettings(); update.cloudModels = { ...cur.cloudModels, [activeProvider]: cloudModel } }
+    saveSettings(update); return { success: true, settings: getPublicSettings() }
   })
-  // Update LLM defaults
-  server.post<{ Body: Partial<import('./settings/SettingsStore.js').AppSettings['llmDefaults']> }>('/settings/llm', async (req) => {
-    saveSettings({ llmDefaults: req.body as any })
-    return { success: true }
+  server.post<{ Body: Partial<ReturnType<typeof loadSettings>['llmDefaults']> }>('/settings/llm', async (req) => {
+    saveSettings({ llmDefaults: req.body as any }); return { success: true }
   })
 
   // ── Models (Ollama) ────────────────────────────────────────────────────────
@@ -250,8 +223,14 @@ async function bootstrap() {
   // ── Sessions ───────────────────────────────────────────────────────────────
   server.get('/sessions', async () => ({ sessions: getAllSessions() }))
   server.get<{ Params: { id: string } }>('/sessions/:id', async (req) => { const s = getSession(req.params.id); return s ? { session: s, messages: getSessionMessages(req.params.id) } : { error: 'Not found' } })
-  server.post<{ Body: { id: string; type: string; title: string; rootPath?: string; modelName?: string } }>('/sessions', async (req) => { const { id, type, title, rootPath, modelName } = req.body; return { success: true, session: upsertSession({ id, type: type as any, title, rootPath, modelName }) } })
-  server.delete<{ Params: { id: string } }>('/sessions/:id', async (req) => { deleteSession(req.params.id); clearGraph(req.params.id); clearReport(req.params.id); return { success: true } })
+  server.post<{ Body: { id: string; type: string; title: string; rootPath?: string; modelName?: string } }>('/sessions', async (req) => {
+    const { id, type, title, rootPath, modelName } = req.body
+    return { success: true, session: upsertSession({ id, type: type as any, title, rootPath, modelName }) }
+  })
+  server.delete<{ Params: { id: string } }>('/sessions/:id', async (req) => {
+    deleteSession(req.params.id); clearGraph(req.params.id); clearReport(req.params.id)
+    return { success: true }
+  })
   server.post<{ Body: { id: string; sessionId: string; role: string; content: string; agentName?: string } }>('/sessions/message', async (req) => {
     const { id, sessionId, role, content, agentName } = req.body
     if (!getSession(sessionId)) upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: loadConfig().selectedModel })
@@ -267,8 +246,15 @@ async function bootstrap() {
     return { success: true, isEmpty: scan.isEmpty, fileList: scan.fileList, fileTree: scan.fileTree, fileCount: scan.fileList.length }
   })
   server.get<{ Params: { sessionId: string } }>('/project/:sessionId/summary', async (req) => ({ summary: getSession(req.params.sessionId)?.summary ?? null }))
-  server.get<{ Querystring: { path: string } }>('/project/file', async (req, reply) => { const p = req.query.path; if (!p) { reply.status(400).send({ error: 'path required' }); return } if (!fs.existsSync(p)) { reply.status(404).send({ error: 'not found' }); return } try { return { content: fs.readFileSync(p, 'utf8') } } catch (e: any) { reply.status(500).send({ error: e.message }) } })
-  server.post<{ Body: { path: string; content: string } }>('/project/file', async (req, reply) => { const { path: p, content } = req.body; if (!p) { reply.status(400).send({ error: 'path required' }); return } try { fs.writeFileSync(p, content ?? '', 'utf8'); return { success: true } } catch (e: any) { reply.status(500).send({ error: e.message }) } })
+  server.get<{ Querystring: { path: string } }>('/project/file', async (req, reply) => {
+    const p = req.query.path; if (!p) { reply.status(400).send({ error: 'path required' }); return }
+    if (!fs.existsSync(p)) { reply.status(404).send({ error: 'not found' }); return }
+    try { return { content: fs.readFileSync(p, 'utf8') } } catch (e: any) { reply.status(500).send({ error: e.message }) }
+  })
+  server.post<{ Body: { path: string; content: string } }>('/project/file', async (req, reply) => {
+    const { path: p, content } = req.body; if (!p) { reply.status(400).send({ error: 'path required' }); return }
+    try { fs.writeFileSync(p, content ?? '', 'utf8'); return { success: true } } catch (e: any) { reply.status(500).send({ error: e.message }) }
+  })
 
   // ── Knowledge Graph ────────────────────────────────────────────────────────
   server.get<{ Params: { sessionId: string } }>('/project/:sessionId/symbols', async (req) => ({ symbols: getSymbols(req.params.sessionId) }))
@@ -288,6 +274,22 @@ async function bootstrap() {
   server.get<{ Params: { sessionId: string }; Querystring: { file?: string; staged?: string } }>('/project/:sessionId/git/diff', async (req) => { const s = getSession(req.params.sessionId); if (!s?.rootPath) return { diffs: [] }; return { diffs: getDiff(s.rootPath, req.query.file, req.query.staged === 'true') } })
   server.get<{ Params: { sessionId: string; hash: string } }>('/project/:sessionId/git/commit/:hash', async (req) => { const s = getSession(req.params.sessionId); if (!s?.rootPath) return { diffs: [] }; return { diffs: getCommitDiff(s.rootPath, req.params.hash) } })
 
+  // ── Chat: title generation (no session required, no history) ───────────────
+  // Dedicated lightweight endpoint — avoids the 400 from session-less /chat calls
+  server.post<{ Body: { message: string } }>('/chat/title', async (req) => {
+    const { message } = req.body
+    if (!message) return { success: false, title: '' }
+    try {
+      const s = loadSettings()
+      const msgs: Array<{ role: ChatRole; content: string }> = [
+        { role: 'system', content: 'Generate a 3-5 word plain text chat title. Reply with ONLY the title — no markdown, no quotes, no punctuation.' },
+        { role: 'user',   content: `Chat starts with: "${message.slice(0, 150)}"` },
+      ]
+      const { content } = await routedChat(msgs, undefined, s)
+      return { success: true, title: content.trim() }
+    } catch { return { success: false, title: '' } }
+  })
+
   // ── Chat streaming (no RAG) ────────────────────────────────────────────────
   server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>(
     '/chat/stream', async (req, reply) => {
@@ -295,30 +297,18 @@ async function bootstrap() {
       if (!message) { reply.status(400).send('No message'); return }
       const send = setupSSE(reply)
       try {
-        const settings  = loadSettings()
+        const s         = loadSettings()
         const isProject = getSession(sessionId)?.type === 'project'
         if (!getSession(sessionId)) upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: loadConfig().selectedModel })
         const session = getSession(sessionId)
-
-        const activeModelName = settings.activeProvider === 'ollama'
-          ? loadConfig().selectedModel
-          : (settings.cloudModels[settings.activeProvider as CloudProvider] ?? settings.activeProvider)
-
-        const systemPrompt = buildSystemPrompt(activeModelName, session?.summary, isProject ? buildAgentContext(sessionId) : undefined, isProject ? buildContractContext(sessionId) : undefined, settings.llmDefaults.systemPrompt || undefined)
-        const msgs = [
-          { role: 'system' as ChatRole, content: systemPrompt },
-          ...mapHistory(history),
-          { role: 'user' as ChatRole, content: message },
-        ]
-
-        // Send provider info to client
-        send({ type: 'provider', provider: settings.activeProvider, model: activeModelName })
-
+        const modelName = s.activeProvider === 'ollama' ? loadConfig().selectedModel : (s.cloudModels[s.activeProvider as CloudProvider] ?? '')
+        const sysPrompt = buildSystemPrompt(modelName, session?.summary, isProject ? buildAgentContext(sessionId) : undefined, isProject ? buildContractContext(sessionId) : undefined, s.llmDefaults.systemPrompt || undefined)
+        const msgs = [{ role: 'system' as ChatRole, content: sysPrompt }, ...mapHistory(history), { role: 'user' as ChatRole, content: message }]
+        send({ type: 'provider', provider: s.activeProvider, model: modelName })
         let full = ''
-        const { modelUsed, provider } = await routedChat(msgs, (chunk) => { full += chunk; send({ chunk }) })
+        await routedChat(msgs, (chunk) => { full += chunk; send({ chunk }) }, s)
         reply.raw.write('data: [DONE]\n\n'); reply.raw.end()
         try { saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: full }) } catch { }
-        console.log(`[Chat] ${provider}/${modelUsed} → ${full.length} chars`)
       } catch (err: any) {
         try { send({ chunk: `\n\n⚠️ **Error:** ${err.message}` }); reply.raw.write('data: [DONE]\n\n'); reply.raw.end() } catch { }
       }
@@ -332,35 +322,23 @@ async function bootstrap() {
       if (!message) { reply.status(400).send('No message'); return }
       const send = setupSSE(reply); const forceWeb = hasWebTrigger(message)
       try {
-        const settings  = loadSettings()
+        const s         = loadSettings()
         const isProject = getSession(sessionId)?.type === 'project'
         if (!getSession(sessionId)) upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: loadConfig().selectedModel })
-        const session = getSession(sessionId)
-
-        const activeModelName = settings.activeProvider === 'ollama'
-          ? loadConfig().selectedModel
-          : (settings.cloudModels[settings.activeProvider as CloudProvider] ?? settings.activeProvider)
-
-        let systemPrompt = buildSystemPrompt(activeModelName, session?.summary, isProject ? buildAgentContext(sessionId) : undefined, isProject ? buildContractContext(sessionId) : undefined, settings.llmDefaults.systemPrompt || undefined)
+        const session   = getSession(sessionId)
+        const modelName = s.activeProvider === 'ollama' ? loadConfig().selectedModel : (s.cloudModels[s.activeProvider as CloudProvider] ?? '')
+        let sysPrompt   = buildSystemPrompt(modelName, session?.summary, isProject ? buildAgentContext(sessionId) : undefined, isProject ? buildContractContext(sessionId) : undefined, s.llmDefaults.systemPrompt || undefined)
         const rag = await runRAG(message, forceWeb, (status) => send({ type: 'rag_status', status }))
-
         if (rag.didSearch) {
-          systemPrompt = injectRAGContext(systemPrompt, rag)
-          if (rag.sources.length > 0) send({ type: 'rag_sources', sources: rag.sources.map(s => ({ title: s.title, url: s.url })) })
+          sysPrompt = injectRAGContext(sysPrompt, rag)
+          if (rag.sources.length > 0) send({ type: 'rag_sources', sources: rag.sources.map(r => ({ title: r.title, url: r.url })) })
           if (rag.extractedFacts && !rag.ragFailed) send({ chunk: rag.extractedFacts + '\n' })
         }
-
-        send({ type: 'provider', provider: settings.activeProvider, model: activeModelName })
-
-        const cleanMessage = message.replace(/^@web\s*/i, '').trim()
-        const msgs = [
-          { role: 'system' as ChatRole, content: systemPrompt },
-          ...mapHistory(history),
-          { role: 'user' as ChatRole, content: cleanMessage },
-        ]
-
+        send({ type: 'provider', provider: s.activeProvider, model: modelName })
+        const cleanMsg = message.replace(/^@web\s*/i, '').trim()
+        const msgs = [{ role: 'system' as ChatRole, content: sysPrompt }, ...mapHistory(history), { role: 'user' as ChatRole, content: cleanMsg }]
         let full = rag.extractedFacts ?? ''
-        await routedChat(msgs, (chunk) => { full += chunk; send({ chunk }) })
+        await routedChat(msgs, (chunk) => { full += chunk; send({ chunk }) }, s)
         reply.raw.write('data: [DONE]\n\n'); reply.raw.end()
         try { saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: full }) } catch { }
       } catch (err: any) {
@@ -369,13 +347,13 @@ async function bootstrap() {
     }
   )
 
-  // ── Chat non-streaming ─────────────────────────────────────────────────────
+  // ── Chat non-streaming (generic, not for title gen) ────────────────────────
   server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>('/chat', async (req) => {
     const { message, sessionId, history = [] } = req.body; if (!message) return { success: false, reply: 'No message' }
-    const settings = loadSettings(); const session = getSession(sessionId)
-    const modelName = settings.activeProvider === 'ollama' ? loadConfig().selectedModel : (settings.cloudModels[settings.activeProvider as CloudProvider] ?? '')
+    const s = loadSettings(); const session = getSession(sessionId)
+    const modelName = s.activeProvider === 'ollama' ? loadConfig().selectedModel : (s.cloudModels[s.activeProvider as CloudProvider] ?? '')
     const msgs = [{ role: 'system' as ChatRole, content: buildSystemPrompt(modelName, session?.summary) }, ...mapHistory(history), { role: 'user' as ChatRole, content: message }]
-    const { content } = await routedChat(msgs)
+    const { content } = await routedChat(msgs, undefined, s)
     return { success: true, reply: content }
   })
 
@@ -383,14 +361,21 @@ async function bootstrap() {
   server.get('/projects', async () => ({ projects: orchestrator.listProjects() }))
   server.post<{ Body: { name: string; rootPath: string } }>('/projects', async (req) => { const { name, rootPath } = req.body; if (!name || !rootPath) return { success: false }; const p = await orchestrator.createProject({ name, rootPath }); return { success: true, project: { id: p.id, name: p.name, rootPath: p.rootPath } } })
   server.get<{ Params: { projectId: string } }>('/projects/:projectId/agents', async (req) => ({ agents: orchestrator.listAgents(req.params.projectId) }))
-  server.post<{ Params: { projectId: string }; Body: { name: string; role: string; allowedPaths?: string[] } }>('/projects/:projectId/agents', async (req) => { const { name, role, allowedPaths } = req.body; if (!name || !role) return { success: false }; const agent = orchestrator.addAgent(req.params.projectId, { name, role: role as any, allowedPaths: allowedPaths ?? [], projectPath: orchestrator.getProject(req.params.projectId).rootPath }); return { success: true, agent: { id: agent.id, name: agent.config.name, role: agent.config.role } } })
-  server.post<{ Params: { projectId: string; agentId: string }; Body: { instruction: string; queue?: boolean } }>('/projects/:projectId/agents/:agentId/instruct', async (req) => { const { instruction, queue = true } = req.body; if (!instruction) return { success: false }; if (queue) { await orchestrator.runInstruction(req.params.projectId, req.params.agentId, instruction); return { success: true } }; await orchestrator.runInstructionDirect(req.params.projectId, req.params.agentId, instruction); return { success: true } })
+  server.post<{ Params: { projectId: string }; Body: { name: string; role: string; allowedPaths?: string[] } }>('/projects/:projectId/agents', async (req) => {
+    const { name, role, allowedPaths } = req.body; if (!name || !role) return { success: false }
+    const agent = orchestrator.addAgent(req.params.projectId, { name, role: role as any, allowedPaths: allowedPaths ?? [], projectPath: orchestrator.getProject(req.params.projectId).rootPath })
+    return { success: true, agent: { id: agent.id, name: agent.config.name, role: agent.config.role } }
+  })
+  server.post<{ Params: { projectId: string; agentId: string }; Body: { instruction: string; queue?: boolean } }>('/projects/:projectId/agents/:agentId/instruct', async (req) => {
+    const { instruction, queue = true } = req.body; if (!instruction) return { success: false }
+    if (queue) { await orchestrator.runInstruction(req.params.projectId, req.params.agentId, instruction); return { success: true } }
+    await orchestrator.runInstructionDirect(req.params.projectId, req.params.agentId, instruction); return { success: true }
+  })
 
   const PORT = Number(process.env.PORT ?? 3001)
   await server.listen({ port: PORT, host: '0.0.0.0' })
-  const settings = loadSettings()
-  console.log(`\n🔨 LocalForge  :${PORT}  |  Provider: ${settings.activeProvider}`)
-  console.log(`   Shell: ${DEFAULT_SHELL}  |  LAN: ${LAN_IP}\n`)
+  const s = loadSettings()
+  console.log(`\n🔨 LocalForge  :${PORT}  |  Provider: ${s.activeProvider}  |  LAN: ${LAN_IP}\n`)
 }
 
 process.on('SIGINT', async () => { await server.close(); closeDb(); process.exit(0) })

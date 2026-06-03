@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { GitBranch, RefreshCw, ChevronDown, ChevronRight, Clock, User, Tag, AlertCircle, Plus, Minus, Circle, ArrowUp, ArrowDown } from 'lucide-react'
+import { GitBranch, RefreshCw, User, Plus, Minus, Circle, ArrowUp, ArrowDown } from 'lucide-react'
 
 interface FileChange { status: string; file: string; oldFile?: string }
 interface GitStatus {
@@ -21,22 +21,19 @@ interface Commit {
   refs:    string[]
 }
 interface Branch {
-  name:       string
-  isCurrent:  boolean
-  isRemote:   boolean
-  upstream?:  string
+  name:        string
+  isCurrent:   boolean
+  isRemote:    boolean
+  upstream?:   string
   lastCommit?: string
 }
-interface DiffLine {
-  type:    'context' | 'added' | 'removed'
-  content: string
-}
+interface DiffLine  { type: 'context' | 'added' | 'removed'; content: string }
 interface DiffHunk  { header: string; lines: DiffLine[] }
 interface FileDiff  { file: string; status: string; hunks: DiffHunk[]; isBinary: boolean }
 
 const STATUS_COLOR: Record<string, string> = {
-  added:    'var(--green)', modified: '#f59e0b', deleted:  'var(--red)',
-  renamed:  '#06b6d4',      copied:   '#a78bfa', unmerged: '#ef4444',
+  added:'var(--green)', modified:'#f59e0b', deleted:'var(--red)',
+  renamed:'#06b6d4', copied:'#a78bfa', unmerged:'#ef4444',
 }
 const STATUS_LETTER: Record<string, string> = {
   added:'A', modified:'M', deleted:'D', renamed:'R', copied:'C', unmerged:'U',
@@ -55,15 +52,13 @@ function RefBadge({ ref }: { ref: string }) {
   const isHead   = ref.includes('HEAD')
   const isRemote = ref.includes('origin/')
   const bg = isHead ? 'var(--accent)' : isRemote ? '#f59e0b' : '#3dd68c'
-  const label = ref.replace('HEAD -> ', '').replace('tag: ', '')
+  const label = ref.replace('HEAD -> ','').replace('tag: ','')
   return (
     <span style={{ fontSize:9, padding:'1px 5px', borderRadius:4, background:`${bg}22`, color:bg, border:`1px solid ${bg}44`, fontWeight:600, flexShrink:0 }}>
       {label.length > 20 ? label.slice(0,18)+'…' : label}
     </span>
   )
 }
-
-// ── Diff viewer ───────────────────────────────────────────────────────────────
 
 function DiffViewer({ diffs, onClose }: { diffs: FileDiff[]; onClose: () => void }) {
   return (
@@ -88,9 +83,9 @@ function DiffViewer({ diffs, onClose }: { diffs: FileDiff[]; onClose: () => void
                       {hunk.header}
                     </div>
                     {hunk.lines.map((line, li) => {
-                      const bg = line.type === 'added' ? 'rgba(61,214,140,0.08)' : line.type === 'removed' ? 'rgba(245,101,101,0.08)' : 'transparent'
-                      const color = line.type === 'added' ? '#3dd68c' : line.type === 'removed' ? '#f56565' : 'var(--text-secondary)'
-                      const prefix = line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' '
+                      const bg     = line.type==='added' ? 'rgba(61,214,140,0.08)' : line.type==='removed' ? 'rgba(245,101,101,0.08)' : 'transparent'
+                      const color  = line.type==='added' ? '#3dd68c' : line.type==='removed' ? '#f56565' : 'var(--text-secondary)'
+                      const prefix = line.type==='added' ? '+' : line.type==='removed' ? '-' : ' '
                       return (
                         <div key={li} style={{ display:'flex', background:bg, minHeight:18 }}>
                           <span style={{ color, width:14, flexShrink:0, textAlign:'center', userSelect:'none', opacity:0.8 }}>{prefix}</span>
@@ -109,27 +104,23 @@ function DiffViewer({ diffs, onClose }: { diffs: FileDiff[]; onClose: () => void
   )
 }
 
-// ── Main Git panel ────────────────────────────────────────────────────────────
-
 interface Props { sessionId: string }
-
 type Tab = 'status' | 'log' | 'branches'
 
 export default function GitPanel({ sessionId }: Props) {
-  const [tab,     setTab]     = useState<Tab>('status')
-  const [status,  setStatus]  = useState<GitStatus | null>(null)
-  const [commits, setCommits] = useState<Commit[]>([])
-  const [branches,setBranches]= useState<Branch[]>([])
-  const [loading, setLoading] = useState(false)
-  const [isRepo,  setIsRepo]  = useState(true)
-  const [diffs,   setDiffs]   = useState<FileDiff[] | null>(null)
-  const [diffLabel,setDiffLabel]=useState('')
+  const [tab,      setTab]      = useState<Tab>('status')
+  const [status,   setStatus]   = useState<GitStatus | null>(null)
+  const [commits,  setCommits]  = useState<Commit[]>([])
+  const [branches, setBranches] = useState<Branch[]>([])
+  const [loading,  setLoading]  = useState(false)
+  const [isRepo,   setIsRepo]   = useState(true)
+  const [diffs,    setDiffs]    = useState<FileDiff[] | null>(null)
 
   const BASE = `http://localhost:3001/project/${sessionId}/git`
 
   const loadStatus = useCallback(async () => {
     try {
-      const res = await fetch(`${BASE}/status`)
+      const res  = await fetch(`${BASE}/status`)
       const data = await res.json()
       setIsRepo(data.isRepo)
       setStatus(data.status ?? null)
@@ -138,7 +129,7 @@ export default function GitPanel({ sessionId }: Props) {
 
   const loadLog = useCallback(async () => {
     try {
-      const res = await fetch(`${BASE}/log?limit=50`)
+      const res  = await fetch(`${BASE}/log?limit=50`)
       const data = await res.json()
       setCommits(data.commits ?? [])
     } catch { }
@@ -146,7 +137,7 @@ export default function GitPanel({ sessionId }: Props) {
 
   const loadBranches = useCallback(async () => {
     try {
-      const res = await fetch(`${BASE}/branches`)
+      const res  = await fetch(`${BASE}/branches`)
       const data = await res.json()
       setBranches(data.branches ?? [])
     } catch { }
@@ -161,17 +152,15 @@ export default function GitPanel({ sessionId }: Props) {
   useEffect(() => { reload() }, [reload])
 
   async function openFileDiff(file: string, staged: boolean) {
-    const res = await fetch(`${BASE}/diff?file=${encodeURIComponent(file)}&staged=${staged}`)
+    const res  = await fetch(`${BASE}/diff?file=${encodeURIComponent(file)}&staged=${staged}`)
     const data = await res.json()
     setDiffs(data.diffs ?? [])
-    setDiffLabel(file.split('/').pop() ?? file)
   }
 
-  async function openCommitDiff(hash: string, message: string) {
-    const res = await fetch(`${BASE}/commit/${hash}`)
+  async function openCommitDiff(hash: string) {
+    const res  = await fetch(`${BASE}/commit/${hash}`)
     const data = await res.json()
     setDiffs(data.diffs ?? [])
-    setDiffLabel(message.slice(0, 40))
   }
 
   if (!isRepo) return (
@@ -182,21 +171,19 @@ export default function GitPanel({ sessionId }: Props) {
     </div>
   )
 
-  const currentBranch = status?.branch ?? ''
+  const currentBranch  = status?.branch ?? ''
   const localBranches  = branches.filter(b => !b.isRemote)
   const remoteBranches = branches.filter(b => b.isRemote)
 
   return (
     <div style={{ display:'flex', flexDirection:'column', flex:1, overflow:'hidden', minHeight:0, position:'relative' }}>
+      {diffs && <DiffViewer diffs={diffs} onClose={() => setDiffs(null)}/>}
 
-      {/* Diff overlay */}
-      {diffs && <DiffViewer diffs={diffs} onClose={() => setDiffs(null)} />}
-
-      {/* Branch + sync bar */}
+      {/* Branch bar */}
       <div style={{ display:'flex', alignItems:'center', gap:6, padding:'5px 10px', borderBottom:'1px solid var(--border)', flexShrink:0, background:'var(--bg-tertiary)' }}>
         <GitBranch size={11} style={{ color:'var(--accent)', flexShrink:0 }}/>
         <span style={{ fontSize:11, fontWeight:500, color:'var(--accent)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1 }}>{currentBranch}</span>
-        {status && status.ahead > 0 && <span style={{ fontSize:10, color:'var(--green)', display:'flex', alignItems:'center', gap:2 }}><ArrowUp size={9}/>{status.ahead}</span>}
+        {status && status.ahead  > 0 && <span style={{ fontSize:10, color:'var(--green)', display:'flex', alignItems:'center', gap:2 }}><ArrowUp size={9}/>{status.ahead}</span>}
         {status && status.behind > 0 && <span style={{ fontSize:10, color:'#f59e0b', display:'flex', alignItems:'center', gap:2 }}><ArrowDown size={9}/>{status.behind}</span>}
         <button onClick={reload} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', display:'flex', padding:2 }}
           onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'}
@@ -208,8 +195,7 @@ export default function GitPanel({ sessionId }: Props) {
       <div style={{ display:'flex', borderBottom:'1px solid var(--border)', flexShrink:0 }}>
         {(['status','log','branches'] as Tab[]).map(t => (
           <button key={t} onClick={() => setTab(t)}
-            style={{ padding:'4px 10px', border:'none', background:'transparent', cursor:'pointer', fontSize:10, fontWeight:tab===t?600:400, color:tab===t?'var(--accent)':'var(--text-muted)', borderBottom:tab===t?'2px solid var(--accent)':'2px solid transparent', textTransform:'capitalize', flex:1 }}
-          >
+            style={{ padding:'4px 10px', border:'none', background:'transparent', cursor:'pointer', fontSize:10, fontWeight:tab===t?600:400, color:tab===t?'var(--accent)':'var(--text-muted)', borderBottom:tab===t?'2px solid var(--accent)':'2px solid transparent', textTransform:'capitalize', flex:1 }}>
             {t}
             {t==='status' && status && !status.isClean && (
               <span style={{ marginLeft:4, fontSize:9, background:'var(--accent)', color:'white', borderRadius:8, padding:'0 4px' }}>
@@ -220,97 +206,80 @@ export default function GitPanel({ sessionId }: Props) {
         ))}
       </div>
 
-      {/* Tab content */}
       <div style={{ flex:1, overflowY:'auto', minHeight:0 }}>
 
-        {/* ── Status tab ─────────────────────────────── */}
+        {/* Status */}
         {tab === 'status' && (
-          !status ? <div style={{ padding:'8px 12px', fontSize:11, color:'var(--text-muted)' }}>Loading…</div>
-          : status.isClean ? (
-            <div style={{ padding:'12px', fontSize:11, color:'var(--green)', display:'flex', alignItems:'center', gap:6 }}>
-              ✓ Working tree clean
-            </div>
-          ) : (
-            <>
-              {/* Staged */}
-              {status.staged.length > 0 && (
-                <div>
-                  <div style={{ padding:'5px 10px', fontSize:10, fontWeight:600, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.05em', background:'var(--bg-tertiary)', display:'flex', alignItems:'center', gap:4 }}>
-                    <Plus size={9}/> Staged ({status.staged.length})
-                  </div>
-                  {status.staged.map((f, i) => (
-                    <div key={i} style={{ display:'flex', alignItems:'center', gap:6, padding:'3px 10px', cursor:'pointer' }}
-                      onClick={() => openFileDiff(f.file, true)}
-                      onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)'}
-                      onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}
-                    >
-                      <span style={{ width:12, height:12, borderRadius:3, background:`${STATUS_COLOR[f.status]??'#888'}22`, color:STATUS_COLOR[f.status]??'#888', fontSize:8, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>{STATUS_LETTER[f.status]??'M'}</span>
-                      <span style={{ flex:1, fontSize:11, color:'var(--text-primary)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontFamily:'monospace' }}>{f.file.split('/').pop()}</span>
-                      <span style={{ fontSize:9, color:'var(--text-muted)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:80, fontFamily:'monospace' }}>{f.file.split('/').slice(0,-1).join('/')}</span>
+          !status
+            ? <div style={{ padding:'8px 12px', fontSize:11, color:'var(--text-muted)' }}>Loading…</div>
+            : status.isClean
+              ? <div style={{ padding:'12px', fontSize:11, color:'var(--green)' }}>✓ Working tree clean</div>
+              : <>
+                  {status.staged.length > 0 && (
+                    <div>
+                      <div style={{ padding:'5px 10px', fontSize:10, fontWeight:600, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.05em', background:'var(--bg-tertiary)', display:'flex', alignItems:'center', gap:4 }}>
+                        <Plus size={9}/> Staged ({status.staged.length})
+                      </div>
+                      {status.staged.map((f, i) => (
+                        <div key={i} style={{ display:'flex', alignItems:'center', gap:6, padding:'3px 10px', cursor:'pointer' }}
+                          onClick={() => openFileDiff(f.file, true)}
+                          onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)'}
+                          onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}>
+                          <span style={{ width:12, height:12, borderRadius:3, background:`${STATUS_COLOR[f.status]??'#888'}22`, color:STATUS_COLOR[f.status]??'#888', fontSize:8, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>{STATUS_LETTER[f.status]??'M'}</span>
+                          <span style={{ flex:1, fontSize:11, color:'var(--text-primary)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontFamily:'monospace' }}>{f.file.split('/').pop()}</span>
+                          <span style={{ fontSize:9, color:'var(--text-muted)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:80, fontFamily:'monospace' }}>{f.file.split('/').slice(0,-1).join('/')}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Unstaged */}
-              {status.unstaged.length > 0 && (
-                <div>
-                  <div style={{ padding:'5px 10px', fontSize:10, fontWeight:600, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.05em', background:'var(--bg-tertiary)', display:'flex', alignItems:'center', gap:4, marginTop:4 }}>
-                    <Minus size={9}/> Unstaged ({status.unstaged.length})
-                  </div>
-                  {status.unstaged.map((f, i) => (
-                    <div key={i} style={{ display:'flex', alignItems:'center', gap:6, padding:'3px 10px', cursor:'pointer' }}
-                      onClick={() => openFileDiff(f.file, false)}
-                      onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)'}
-                      onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}
-                    >
-                      <span style={{ width:12, height:12, borderRadius:3, background:`${STATUS_COLOR[f.status]??'#888'}22`, color:STATUS_COLOR[f.status]??'#888', fontSize:8, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>{STATUS_LETTER[f.status]??'M'}</span>
-                      <span style={{ flex:1, fontSize:11, color:'var(--text-secondary)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontFamily:'monospace' }}>{f.file.split('/').pop()}</span>
-                      <span style={{ fontSize:9, color:'var(--text-muted)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:80, fontFamily:'monospace' }}>{f.file.split('/').slice(0,-1).join('/')}</span>
+                  )}
+                  {status.unstaged.length > 0 && (
+                    <div>
+                      <div style={{ padding:'5px 10px', fontSize:10, fontWeight:600, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.05em', background:'var(--bg-tertiary)', display:'flex', alignItems:'center', gap:4, marginTop:4 }}>
+                        <Minus size={9}/> Unstaged ({status.unstaged.length})
+                      </div>
+                      {status.unstaged.map((f, i) => (
+                        <div key={i} style={{ display:'flex', alignItems:'center', gap:6, padding:'3px 10px', cursor:'pointer' }}
+                          onClick={() => openFileDiff(f.file, false)}
+                          onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)'}
+                          onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}>
+                          <span style={{ width:12, height:12, borderRadius:3, background:`${STATUS_COLOR[f.status]??'#888'}22`, color:STATUS_COLOR[f.status]??'#888', fontSize:8, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>{STATUS_LETTER[f.status]??'M'}</span>
+                          <span style={{ flex:1, fontSize:11, color:'var(--text-secondary)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontFamily:'monospace' }}>{f.file.split('/').pop()}</span>
+                          <span style={{ fontSize:9, color:'var(--text-muted)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:80, fontFamily:'monospace' }}>{f.file.split('/').slice(0,-1).join('/')}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Untracked */}
-              {status.untracked.length > 0 && (
-                <div>
-                  <div style={{ padding:'5px 10px', fontSize:10, fontWeight:600, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.05em', background:'var(--bg-tertiary)', display:'flex', alignItems:'center', gap:4, marginTop:4 }}>
-                    <Circle size={9}/> Untracked ({status.untracked.length})
-                  </div>
-                  {status.untracked.map((f, i) => (
-                    <div key={i} style={{ display:'flex', alignItems:'center', gap:6, padding:'3px 10px' }}>
-                      <span style={{ width:12, height:12, borderRadius:3, background:'#94a3b822', color:'#94a3b8', fontSize:8, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>?</span>
-                      <span style={{ flex:1, fontSize:11, color:'var(--text-muted)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontFamily:'monospace' }}>{f}</span>
+                  )}
+                  {status.untracked.length > 0 && (
+                    <div>
+                      <div style={{ padding:'5px 10px', fontSize:10, fontWeight:600, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.05em', background:'var(--bg-tertiary)', display:'flex', alignItems:'center', gap:4, marginTop:4 }}>
+                        <Circle size={9}/> Untracked ({status.untracked.length})
+                      </div>
+                      {status.untracked.map((f, i) => (
+                        <div key={i} style={{ display:'flex', alignItems:'center', gap:6, padding:'3px 10px' }}>
+                          <span style={{ width:12, height:12, borderRadius:3, background:'#94a3b822', color:'#94a3b8', fontSize:8, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>?</span>
+                          <span style={{ flex:1, fontSize:11, color:'var(--text-muted)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontFamily:'monospace' }}>{f}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              )}
-            </>
-          )
+                  )}
+                </>
         )}
 
-        {/* ── Log tab ────────────────────────────────── */}
+        {/* Log */}
         {tab === 'log' && (
           commits.length === 0
             ? <div style={{ padding:'8px 12px', fontSize:11, color:'var(--text-muted)' }}>No commits yet</div>
             : commits.map((c, i) => (
               <div key={i} style={{ padding:'7px 10px', borderBottom:'1px solid var(--border)', cursor:'pointer' }}
-                onClick={() => openCommitDiff(c.hash, c.message)}
+                onClick={() => openCommitDiff(c.hash)}
                 onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)'}
-                onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}
-              >
-                {/* Top row: hash + refs + time */}
+                onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}>
                 <div style={{ display:'flex', alignItems:'center', gap:5, marginBottom:3, flexWrap:'wrap' }}>
                   <code style={{ fontSize:10, color:'var(--accent)', fontFamily:'monospace', flexShrink:0 }}>{c.hash}</code>
-                  {c.refs.slice(0, 2).map((r, ri) => <RefBadge key={ri} ref={r}/>)}
+                  {c.refs.slice(0,2).map((r,ri) => <RefBadge key={ri} ref={r}/>)}
                   <span style={{ marginLeft:'auto', fontSize:10, color:'var(--text-muted)', flexShrink:0 }}>{formatRelTime(c.date)}</span>
                 </div>
-                {/* Message */}
-                <div style={{ fontSize:12, color:'var(--text-primary)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', marginBottom:2 }}>
-                  {c.message}
-                </div>
-                {/* Author */}
+                <div style={{ fontSize:12, color:'var(--text-primary)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', marginBottom:2 }}>{c.message}</div>
                 <div style={{ display:'flex', alignItems:'center', gap:4, fontSize:10, color:'var(--text-muted)' }}>
                   <User size={9}/>{c.author}
                 </div>
@@ -318,21 +287,20 @@ export default function GitPanel({ sessionId }: Props) {
             ))
         )}
 
-        {/* ── Branches tab ───────────────────────────── */}
+        {/* Branches */}
         {tab === 'branches' && (
           branches.length === 0
             ? <div style={{ padding:'8px 12px', fontSize:11, color:'var(--text-muted)' }}>No branches</div>
-            : (
-              <>
+            : <>
                 {localBranches.length > 0 && (
                   <div>
                     <div style={{ padding:'5px 10px', fontSize:10, fontWeight:600, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.05em', background:'var(--bg-tertiary)' }}>
                       Local ({localBranches.length})
                     </div>
-                    {localBranches.map((b, i) => (
-                      <div key={i} style={{ display:'flex', alignItems:'center', gap:6, padding:'5px 10px', background: b.isCurrent ? 'var(--accent-dim)' : 'transparent' }}>
-                        <GitBranch size={11} style={{ color: b.isCurrent ? 'var(--accent)' : 'var(--text-muted)', flexShrink:0 }}/>
-                        <span style={{ flex:1, fontSize:11, fontWeight: b.isCurrent ? 600 : 400, color: b.isCurrent ? 'var(--accent)' : 'var(--text-primary)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{b.name}</span>
+                    {localBranches.map((b,i) => (
+                      <div key={i} style={{ display:'flex', alignItems:'center', gap:6, padding:'5px 10px', background:b.isCurrent?'var(--accent-dim)':'transparent' }}>
+                        <GitBranch size={11} style={{ color:b.isCurrent?'var(--accent)':'var(--text-muted)', flexShrink:0 }}/>
+                        <span style={{ flex:1, fontSize:11, fontWeight:b.isCurrent?600:400, color:b.isCurrent?'var(--accent)':'var(--text-primary)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{b.name}</span>
                         {b.isCurrent && <span style={{ fontSize:9, color:'var(--accent)', flexShrink:0, fontWeight:600 }}>current</span>}
                         {b.upstream && <span style={{ fontSize:9, color:'var(--text-muted)', flexShrink:0 }}>→ {b.upstream.replace('origin/','')}</span>}
                       </div>
@@ -344,7 +312,7 @@ export default function GitPanel({ sessionId }: Props) {
                     <div style={{ padding:'5px 10px', fontSize:10, fontWeight:600, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.05em', background:'var(--bg-tertiary)' }}>
                       Remote ({remoteBranches.length})
                     </div>
-                    {remoteBranches.map((b, i) => (
+                    {remoteBranches.map((b,i) => (
                       <div key={i} style={{ display:'flex', alignItems:'center', gap:6, padding:'4px 10px' }}>
                         <GitBranch size={11} style={{ color:'#f59e0b', flexShrink:0 }}/>
                         <span style={{ flex:1, fontSize:11, color:'var(--text-secondary)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{b.name}</span>
@@ -353,7 +321,6 @@ export default function GitPanel({ sessionId }: Props) {
                   </div>
                 )}
               </>
-            )
         )}
       </div>
 

@@ -20,15 +20,22 @@ function safeTs(val: any): number {
   return isNaN(t) ? Date.now() : t
 }
 
-// Wait for the server to be reachable — retries every 800ms, up to 15 attempts
-async function waitForServer(maxAttempts = 15): Promise<boolean> {
+async function waitForServer(maxAttempts = 20): Promise<boolean> {
   for (let i = 0; i < maxAttempts; i++) {
     try {
-      const res = await fetch('http://localhost:3001/health', { signal: AbortSignal.timeout ? AbortSignal.timeout(1500) : undefined })
+      const res = await fetch('http://localhost:3001/health', { signal: AbortSignal.timeout(1500) })
       if (res.ok) return true
     } catch { }
     await new Promise(r => setTimeout(r, 800))
   }
+  return false
+}
+
+// Session IDs that should never be loaded (title-gen temps, invalid, etc.)
+function isGarbageSession(s: any): boolean {
+  if (!s?.id || !s?.title) return true
+  if (s.title.trim() === '') return true
+  if (s.title === 'Chat' && !s.rootPath) return true   // untitled chats with no content
   return false
 }
 
@@ -90,12 +97,8 @@ export default function App() {
     if (loadedRef.current) return
     loadedRef.current = true
 
-    // Wait for server before loading anything
     waitForServer().then(async (online) => {
-      if (!online) {
-        setServerError(true)
-        return
-      }
+      if (!online) { setServerError(true); return }
       setServerReady(true)
 
       // Load models
@@ -105,17 +108,20 @@ export default function App() {
           const selected = models.find((m: any) => m.isSelected)
           if (selected) setSelectedModel(selected.name)
         })
-        .catch(err => console.error('[App] getModels failed:', err))
+        .catch(err => console.error('[App] getModels:', err))
 
-      // Load sessions
+      // Load and clean sessions
       api.getSessions()
         .then(async ({ sessions: saved }) => {
-          const clean = (saved ?? []).filter((s: any) =>
-            s?.id && s?.title &&
-            s.title.trim() !== '' &&
-            s.title !== 'Chat' &&
-            !s.id.includes('titlegentmp')
-          )
+          const all = saved ?? []
+
+          // Delete garbage sessions from DB on startup so they don't come back
+          const garbage = all.filter(isGarbageSession)
+          for (const s of garbage) {
+            api.deleteSession(s.id).catch(() => {})
+          }
+
+          const clean = all.filter((s: any) => !isGarbageSession(s))
 
           for (const s of clean) {
             let messages: Message[] = []
@@ -133,35 +139,29 @@ export default function App() {
                   id:        m.id,
                   type:      (m.role === 'user' ? 'user' : 'agent') as Message['type'],
                   content:   m.content ?? '',
-                  agentName: m.agentName ?? undefined,
+                  agentName: m.agentName,
                   timestamp: safeTs(m.createdAt),
                 }))
-            } catch (e) {
-              console.warn(`[App] Failed to load session ${s.id}:`, e)
-            }
+            } catch { }
 
-            try {
-              loadSession({
-                id:             s.id,
-                type:           s.type ?? 'chat',
-                title:          s.title,
-                rootPath:       s.rootPath,
-                summary:        s.summary,
-                createdAt:      s.createdAt,
-                updatedAt:      s.updatedAt,
-                agents:         [],
-                messages,
-                allFiles:       [],
-                writtenFiles:   [],
-                lastAccessedAt: safeTs(s.updatedAt),
-                isActive:       false,
-              })
-            } catch (e) {
-              console.warn(`[App] Failed to load session into store ${s.id}:`, e)
-            }
+            loadSession({
+              id:             s.id,
+              type:           s.type ?? 'chat',
+              title:          s.title,
+              rootPath:       s.rootPath,
+              summary:        s.summary,
+              createdAt:      s.createdAt,
+              updatedAt:      s.updatedAt,
+              agents:         [],
+              messages,
+              allFiles:       [],
+              writtenFiles:   [],
+              lastAccessedAt: safeTs(s.updatedAt),
+              isActive:       false,
+            })
           }
         })
-        .catch(err => console.error('[App] getSessions failed:', err))
+        .catch(err => console.error('[App] getSessions:', err))
     })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -171,17 +171,16 @@ export default function App() {
   const cols     = showRight ? `${leftW} 1fr ${rightW}` : `${leftW} 1fr`
   const TERM_H   = 260
 
-  // Show loading screen while waiting for server
   if (!serverReady && !serverError) {
     return (
-      <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-primary)', gap: 16 }}>
-        <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-primary)' }}>LocalForge</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--text-muted)', fontSize: 13 }}>
-          <div style={{ width: 16, height: 16, border: '2px solid var(--accent)', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+      <div style={{ height:'100vh', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', background:'var(--bg-primary)', gap:16 }}>
+        <div style={{ fontSize:24, fontWeight:700, color:'var(--text-primary)' }}>LocalForge</div>
+        <div style={{ display:'flex', alignItems:'center', gap:10, color:'var(--text-muted)', fontSize:13 }}>
+          <div style={{ width:16, height:16, border:'2px solid var(--accent)', borderTopColor:'transparent', borderRadius:'50%', animation:'spin 0.8s linear infinite' }}/>
           Starting agent server…
         </div>
-        <div style={{ fontSize: 11, color: 'var(--text-muted)', opacity: 0.6 }}>
-          Make sure <code style={{ fontFamily: 'monospace', color: 'var(--accent)' }}>npm run dev</code> is running in packages/agent-core
+        <div style={{ fontSize:11, color:'var(--text-muted)', opacity:0.6 }}>
+          Make sure <code style={{ fontFamily:'monospace', color:'var(--accent)' }}>npm run dev</code> is running in packages/agent-core
         </div>
         <style>{`@keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }`}</style>
       </div>
@@ -190,19 +189,15 @@ export default function App() {
 
   if (serverError) {
     return (
-      <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-primary)', gap: 16 }}>
-        <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-primary)' }}>LocalForge</div>
-        <div style={{ color: 'var(--red)', fontSize: 13 }}>⚠ Cannot connect to agent server</div>
-        <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', maxWidth: 360, lineHeight: 1.7 }}>
-          Start the server first:<br />
-          <code style={{ fontFamily: 'monospace', color: 'var(--accent)', fontSize: 11 }}>
-            cd packages/agent-core && npm run dev
-          </code>
+      <div style={{ height:'100vh', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', background:'var(--bg-primary)', gap:16 }}>
+        <div style={{ fontSize:24, fontWeight:700, color:'var(--text-primary)' }}>LocalForge</div>
+        <div style={{ color:'var(--red)', fontSize:13 }}>⚠ Cannot connect to agent server</div>
+        <div style={{ fontSize:12, color:'var(--text-muted)', textAlign:'center', maxWidth:360, lineHeight:1.7 }}>
+          Start the server first:<br/>
+          <code style={{ fontFamily:'monospace', color:'var(--accent)', fontSize:11 }}>cd packages/agent-core && npm run dev</code>
         </div>
-        <button
-          onClick={() => { loadedRef.current = false; setServerError(false); setServerReady(false) }}
-          style={{ padding: '8px 20px', background: 'var(--accent)', border: 'none', borderRadius: 8, color: 'white', fontSize: 13, cursor: 'pointer', marginTop: 8 }}
-        >
+        <button onClick={() => { loadedRef.current=false; setServerError(false); setServerReady(false) }}
+          style={{ padding:'8px 20px', background:'var(--accent)', border:'none', borderRadius:8, color:'white', fontSize:13, cursor:'pointer', marginTop:8 }}>
           Retry
         </button>
       </div>
@@ -210,36 +205,27 @@ export default function App() {
   }
 
   return (
-    <div style={{
-      display: 'grid',
-      gridTemplateColumns: cols,
-      gridTemplateRows: `40px 1fr${terminalOpen ? ` ${TERM_H}px` : ''}`,
-      height: '100vh', width: '100vw', overflow: 'hidden',
-      transition: 'grid-template-columns 0.2s ease, grid-template-rows 0.2s ease',
-    }}>
-      <div style={{ gridColumn: '1 / -1', minWidth: 0 }}><TopBar /></div>
+    <div style={{ display:'grid', gridTemplateColumns:cols, gridTemplateRows:`40px 1fr${terminalOpen?` ${TERM_H}px`:''}`, height:'100vh', width:'100vw', overflow:'hidden', transition:'grid-template-columns 0.2s ease, grid-template-rows 0.2s ease' }}>
+      <div style={{ gridColumn:'1 / -1', minWidth:0 }}><TopBar /></div>
 
-      <div style={{ minWidth: 0, overflow: 'hidden' }}>
-        <LeftBar onOpenTerminal={openSystemTerminal} onOpenProjectTerminal={openProjectTerminal} />
+      <div style={{ minWidth:0, overflow:'hidden' }}>
+        <LeftBar onOpenTerminal={openSystemTerminal} onOpenProjectTerminal={openProjectTerminal}/>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0, minWidth: 0 }}>
-        <TabStrip />
-        {screen === 'welcome'
-          ? <WelcomeScreen />
-          : <ChatPanel onOpenTerminal={openProjectTerminal} />
-        }
+      <div style={{ display:'flex', flexDirection:'column', overflow:'hidden', minHeight:0, minWidth:0 }}>
+        <TabStrip/>
+        {screen === 'welcome' ? <WelcomeScreen/> : <ChatPanel onOpenTerminal={openProjectTerminal}/>}
       </div>
 
       {showRight && (
-        <div style={{ minWidth: 0, overflow: 'hidden' }}>
-          <RightSidebar onOpenTerminal={openProjectTerminal} />
+        <div style={{ minWidth:0, overflow:'hidden' }}>
+          <RightSidebar onOpenTerminal={openProjectTerminal}/>
         </div>
       )}
 
       {terminalOpen && (
-        <div style={{ gridColumn: '1 / -1', borderTop: '2px solid var(--accent)', minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          <TerminalPanel cwd={terminalCwd} onClose={() => setTerminalOpen(false)} />
+        <div style={{ gridColumn:'1 / -1', borderTop:'2px solid var(--accent)', minHeight:0, overflow:'hidden', display:'flex', flexDirection:'column' }}>
+          <TerminalPanel cwd={terminalCwd} onClose={() => setTerminalOpen(false)}/>
         </div>
       )}
     </div>

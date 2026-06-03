@@ -28,6 +28,7 @@ function SessionItem({ session }: { session: any }) {
   const [showMenu,  setShowMenu]  = useState(false)
   const [renaming,  setRenaming]  = useState(false)
   const [renameVal, setRenameVal] = useState(session.title)
+  const [deleting,  setDeleting]  = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const btnRef  = useRef<HTMLButtonElement>(null)
 
@@ -51,14 +52,21 @@ function SessionItem({ session }: { session: any }) {
     if (e.key === 'Escape') setRenaming(false)
   }
 
-  function handleDelete() {
-    api.deleteSession(session.id).catch(() => {})
-    closeSession(session.id)
+  // Bug 2 fix: await the server delete before removing from store
+  async function handleDelete() {
     setShowMenu(false)
+    setDeleting(true)
+    try {
+      await api.deleteSession(session.id)
+    } catch {
+      // Server delete failed — still remove from UI to avoid zombie sessions
+    }
+    closeSession(session.id)
+    setDeleting(false)
   }
 
   return (
-    <div style={{ position:'relative' }}>
+    <div style={{ position:'relative', opacity: deleting ? 0.4 : 1, transition: 'opacity 0.2s' }}>
       <div onClick={() => setActiveSession(session.id)}
         style={{ display:'flex', alignItems:'center', gap:6, padding:'6px 8px 6px 20px', borderRadius:6, background:isActive?'var(--accent-dim)':'transparent', color:isActive?'var(--accent)':'var(--text-secondary)', cursor:'pointer', fontSize:13, borderLeft:isActive?'2px solid var(--accent)':'2px solid transparent', transition:'background 0.15s' }}
         onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background='var(--bg-hover)' }}
@@ -213,7 +221,6 @@ export default function LeftBar({ onOpenTerminal, onOpenProjectTerminal }: LeftB
         )}
       </div>
 
-      {/* Bottom: Terminal / Account / Settings */}
       <div style={{ borderTop:'1px solid var(--border)', padding:'4px 0' }}>
         {bottomButtons.map(({ Icon, label, action }) => (
           <button key={label} onClick={action} title={!expanded ? label : undefined}

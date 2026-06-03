@@ -35,7 +35,7 @@ export type AppScreen = 'welcome' | 'session'
 interface AppState {
   screen: AppScreen; sessions: Session[]; activeSessionId: string | null
   models: OllamaModel[]; selectedModel: string; leftExpanded: boolean
-  rightExpanded: boolean; isConnected: boolean; userName: string
+  rightExpanded: boolean; isConnected: boolean; isOnline: boolean; userName: string
   openFiles:  Record<string, string[]>
   activeFile: Record<string, string | null>
 
@@ -68,13 +68,14 @@ interface AppState {
   setLeftExpanded:    (v: boolean) => void
   setRightExpanded:   (v: boolean) => void
   setConnected:       (v: boolean) => void
+  setOnline:          (v: boolean) => void
   setUserName:        (name: string) => void
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
   screen: 'welcome', sessions: [], activeSessionId: null,
   models: [], selectedModel: '', leftExpanded: true,
-  rightExpanded: true, isConnected: false, userName: '',
+  rightExpanded: true, isConnected: false, isOnline: navigator.onLine, userName: '',
   openFiles: {}, activeFile: {},
   sendingSessionId: null,
   streamingSessionId: null,
@@ -217,5 +218,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   setLeftExpanded:  (v) => set({ leftExpanded: v }),
   setRightExpanded: (v) => set({ rightExpanded: v }),
   setConnected:     (v) => set({ isConnected: v }),
+  setOnline:        (v) => set({ isOnline: v }),
   setUserName:      (name) => set({ userName: name }),
 }))

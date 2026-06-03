@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { X, Zap, AlertCircle, CheckCircle, Clock, Activity, ChevronDown, RefreshCw, Lightbulb } from 'lucide-react'
+import { X, AlertCircle, CheckCircle, Activity, RefreshCw, Lightbulb } from 'lucide-react'
 import { api } from '../hooks/useApi'
 import { useAppStore } from '../store/appStore'
 
