@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect } from 'react'
-import { MessageCircle, FolderOpen, Puzzle, Settings, User, ChevronDown, ChevronRight, MoreHorizontal, Terminal } from 'lucide-react'
+import { MessageCircle, FolderOpen, Puzzle, Settings, User, ChevronDown, ChevronRight, MoreHorizontal, Terminal, Cpu } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { api } from '../hooks/useApi'
 import { nanoid } from '../hooks/nanoid'
 import NewProjectModal from './NewProjectModal'
 import AccountModal from './AccountModal'
 import SettingsModal from './SettingsModal'
+import OllamaModelsModal from './OllamaModelsModal'
 import { markDeleted } from '../hooks/deletedSessions'
 
 const STORAGE_KEY = 'localforge_username'
@@ -183,6 +184,7 @@ export default function LeftBar({ onOpenTerminal, onOpenProjectTerminal }: LeftB
   const { sessions, leftExpanded: expanded, setUserName, activeSessionId } = useAppStore()
   const [showAccount,  setShowAccount]  = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [showModels,   setShowModels]   = useState(false)
   const activeSession = sessions.find(s => s.id === activeSessionId)
 
   useEffect(() => {
@@ -200,6 +202,7 @@ export default function LeftBar({ onOpenTerminal, onOpenProjectTerminal }: LeftB
 
   const bottomButtons = [
     { Icon: Terminal, label: 'Terminal', action: handleTerminalClick },
+    { Icon: Cpu,      label: 'Models',   action: () => setShowModels(true) },
     { Icon: User,     label: 'Account',  action: () => setShowAccount(true) },
     { Icon: Settings, label: 'Settings', action: () => setShowSettings(true) },
   ]
@@ -236,6 +239,7 @@ export default function LeftBar({ onOpenTerminal, onOpenProjectTerminal }: LeftB
 
       {showAccount  && <AccountModal  onClose={()=>setShowAccount(false)}/>}
       {showSettings && <SettingsModal onClose={()=>setShowSettings(false)}/>}
+      {showModels   && <OllamaModelsModal onClose={()=>setShowModels(false)}/>}
     </div>
   )
 }

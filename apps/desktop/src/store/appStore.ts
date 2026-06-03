@@ -15,6 +15,8 @@ function cleanTitleStr(raw: string): string {
 
 export interface Message {
   id: string; type: MessageType; content: string
+  displayContent?: string    // what to show in the bubble (strips injected file context)
+  filePaths?: string[]       // attached file paths shown as badges
   agentName?: string; agentRole?: AgentRole; taskId?: string; filePath?: string; timestamp: number
 }
 export interface Agent {
