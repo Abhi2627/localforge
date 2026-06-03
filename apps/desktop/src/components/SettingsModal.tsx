@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
-import { X, Check, AlertCircle, Loader, Eye, EyeOff, ExternalLink, ChevronDown } from 'lucide-react'
+import { X, Check, AlertCircle, Loader, Eye, EyeOff, ExternalLink, ChevronDown, Trash2, Download, HardDrive, Cpu, RefreshCw } from 'lucide-react'
 
-type Tab = 'providers' | 'defaults' | 'appearance'
+type Tab = 'local' | 'providers' | 'defaults' | 'appearance'
 
 type Provider = 'ollama' | 'openai' | 'gemini' | 'claude' | 'groq' | 'custom'
 
@@ -229,8 +229,202 @@ function ProviderCard({
   )
 }
 
+// ── Local Models Tab ─────────────────────────────────────────────────────────
+function LocalModelsTab({ selectedModel: _sel, onRefresh }: {
+  selectedModel: string; onRefresh: () => void
+}) {
+  const [models,     setModels]     = useState<any[]>([])
+  const [loading,    setLoading]    = useState(true)
+  const [pullInput,  setPullInput]  = useState('')
+  const [pulling,    setPulling]    = useState(false)
+  const [pullStatus, setPullStatus] = useState<{ status: string; percent: number; done: boolean; error: string | null } | null>(null)
+  const [deleting,   setDeleting]   = useState<string | null>(null)
+  const [activeModel, setActiveModel] = useState('')
+  const pullRef = { current: null as AbortController | null }
+
+  const POPULAR = [
+    { name:'qwen2.5-coder:1.5b', desc:'1.1 GB · Best for low RAM (8 GB)' },
+    { name:'llama3.2:3b',        desc:'2.0 GB · Good general purpose' },
+    { name:'codellama:7b',       desc:'3.8 GB · Specialised for code' },
+    { name:'mistral:7b',         desc:'4.1 GB · Fast and capable' },
+  ]
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [mRes, cRes] = await Promise.all([
+        fetch('http://localhost:3001/models'),
+        fetch('http://localhost:3001/models/config'),
+      ])
+      const mData = await mRes.json()
+      const cData = await cRes.json()
+      setActiveModel(cData.selectedModel ?? '')
+      setModels(mData.models ?? [])
+    } catch { }
+    setLoading(false)
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  async function selectModel(name: string) {
+    await fetch('http://localhost:3001/models/select', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ model: name }) })
+    setActiveModel(name); onRefresh()
+  }
+
+  async function deleteModel(name: string) {
+    setDeleting(name)
+    try {
+      await fetch('http://localhost:11434/api/delete', { method:'DELETE', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name }) })
+      await load()
+    } catch { }
+    setDeleting(null)
+  }
+
+  async function startPull() {
+    const name = pullInput.trim(); if (!name || pulling) return
+    setPulling(true); setPullStatus({ status:'Starting…', percent:0, done:false, error:null })
+    pullRef.current = new AbortController()
+    try {
+      const res = await fetch('http://localhost:11434/api/pull', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ name, stream:true }),
+        signal: pullRef.current.signal,
+      })
+      if (!res.ok) throw new Error(`Pull failed: ${res.statusText}`)
+      const reader = res.body?.getReader(); const decoder = new TextDecoder()
+      if (!reader) throw new Error('No response body')
+      while (true) {
+        const { done, value } = await reader.read(); if (done) break
+        for (const line of decoder.decode(value, { stream:true }).split('\n').filter(Boolean)) {
+          try {
+            const d = JSON.parse(line)
+            const percent = d.total > 0 ? Math.round((d.completed / d.total) * 100) : 0
+            setPullStatus({ status: d.status ?? '', percent, done:false, error:null })
+          } catch { }
+        }
+      }
+      setPullStatus(s => s ? { ...s, done:true } : null)
+      setPullInput(''); await load()
+    } catch (err: any) {
+      if (err?.name !== 'AbortError') setPullStatus(s => s ? { ...s, error: err.message } : null)
+    }
+    setPulling(false)
+  }
+
+  function formatSize(bytes: number) {
+    if (!bytes) return '?'
+    return bytes < 1e9 ? `${(bytes/1e6).toFixed(0)} MB` : `${(bytes/1e9).toFixed(1)} GB`
+  }
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
+      <p style={{ fontSize:12, color:'var(--text-muted)', lineHeight:1.6 }}>
+        Manage locally installed Ollama models. These run entirely offline — no API key or internet needed.
+        Lower parameter models (1.5b, 3b) run faster and need less RAM.
+      </p>
+
+      {/* Installed models */}
+      <div>
+        <div style={{ display:'flex', alignItems:'center', marginBottom:10 }}>
+          <span style={{ fontSize:12, fontWeight:600, color:'var(--text-primary)', flex:1 }}>Installed models ({models.length})</span>
+          <button onClick={load} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', display:'flex' }}>
+            <RefreshCw size={13} style={{ animation:loading?'spin 1s linear infinite':'none' }}/>
+          </button>
+        </div>
+        {loading ? (
+          <div style={{ fontSize:12, color:'var(--text-muted)', display:'flex', alignItems:'center', gap:6 }}><Loader size={13} style={{animation:'spin 1s linear infinite'}}/>Loading…</div>
+        ) : models.length === 0 ? (
+          <div style={{ fontSize:12, color:'var(--text-muted)' }}>No models installed. Pull one below.</div>
+        ) : models.map((m: any) => {
+          const isActive  = m.name === activeModel
+          const isDeleting = deleting === m.name
+          return (
+            <div key={m.name} style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 12px', marginBottom:6, borderRadius:8, background:isActive?'var(--accent-dim)':'var(--bg-tertiary)', border:`1px solid ${isActive?'var(--accent)':'var(--border)'}` }}>
+              <Cpu size={14} style={{ color:isActive?'var(--accent)':'var(--text-muted)', flexShrink:0 }}/>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                  <span style={{ fontSize:13, fontWeight:500, color:'var(--text-primary)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{m.name}</span>
+                  {isActive && <span style={{ fontSize:9, padding:'1px 6px', borderRadius:8, background:'var(--accent)', color:'white', fontWeight:600, flexShrink:0 }}>ACTIVE</span>}
+                </div>
+                <div style={{ display:'flex', gap:8, marginTop:2 }}>
+                  {m.details?.parameter_size && <span style={{ fontSize:10, color:'var(--text-muted)' }}>{m.details.parameter_size}</span>}
+                  {m.details?.quantization_level && <span style={{ fontSize:10, color:'var(--text-muted)' }}>{m.details.quantization_level}</span>}
+                  {m.size > 0 && <span style={{ fontSize:10, color:'var(--text-muted)', display:'flex', alignItems:'center', gap:2 }}><HardDrive size={9}/>{formatSize(m.size)}</span>}
+                </div>
+              </div>
+              {!isActive && (
+                <button onClick={() => selectModel(m.name)}
+                  style={{ padding:'4px 10px', background:'var(--accent)', border:'none', borderRadius:6, color:'white', fontSize:11, fontWeight:500, cursor:'pointer', flexShrink:0 }}>Use</button>
+              )}
+              <button onClick={() => deleteModel(m.name)} disabled={isDeleting || isActive} title={isActive?'Cannot delete active model':'Delete'}
+                style={{ background:'none', border:'none', cursor:isDeleting||isActive?'not-allowed':'pointer', color:isDeleting||isActive?'var(--text-muted)':'var(--red)', display:'flex', padding:4, opacity:isActive?0.3:1, flexShrink:0 }}>
+                {isDeleting ? <Loader size={13} style={{animation:'spin 1s linear infinite'}}/> : <Trash2 size={13}/>}
+              </button>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Pull new model */}
+      <div>
+        <div style={{ fontSize:12, fontWeight:600, color:'var(--text-primary)', marginBottom:8 }}>Pull a new model</div>
+        <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:10 }}>
+          {POPULAR.filter(p => !models.find((m:any) => m.name === p.name)).map(p => (
+            <button key={p.name} onClick={() => setPullInput(p.name)} title={p.desc}
+              style={{ padding:'4px 10px', background:'var(--bg-tertiary)', border:'1px solid var(--border)', borderRadius:6, color:'var(--text-secondary)', fontSize:11, cursor:'pointer' }}
+              onMouseEnter={e => (e.currentTarget as HTMLElement).style.borderColor='var(--accent)'}
+              onMouseLeave={e => (e.currentTarget as HTMLElement).style.borderColor='var(--border)'}>
+              {p.name}
+            </button>
+          ))}
+        </div>
+        <div style={{ display:'flex', gap:8 }}>
+          <input value={pullInput} onChange={e => setPullInput(e.target.value)}
+            onKeyDown={e => { if (e.key==='Enter') startPull() }}
+            placeholder="e.g. qwen2.5-coder:1.5b" disabled={pulling}
+            style={{ flex:1, background:'var(--bg-tertiary)', border:'1px solid var(--border)', borderRadius:6, padding:'7px 10px', color:'var(--text-primary)', fontSize:12, outline:'none', fontFamily:'monospace' }}/>
+          {pulling
+            ? <button onClick={() => { pullRef.current?.abort(); setPulling(false); setPullStatus(null) }}
+                style={{ padding:'0 12px', background:'var(--red)', border:'none', borderRadius:6, color:'white', fontSize:12, cursor:'pointer', flexShrink:0 }}>Cancel</button>
+            : <button onClick={startPull} disabled={!pullInput.trim()}
+                style={{ padding:'0 12px', background:'var(--accent)', border:'none', borderRadius:6, color:'white', fontSize:12, fontWeight:500, cursor:pullInput.trim()?'pointer':'not-allowed', flexShrink:0, opacity:pullInput.trim()?1:0.5, display:'flex', alignItems:'center', gap:5 }}>
+                <Download size={13}/> Pull
+              </button>
+          }
+        </div>
+        {pullStatus && (
+          <div style={{ marginTop:10, padding:'10px 12px', background:'var(--bg-tertiary)', border:'1px solid var(--border)', borderRadius:8 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom: pullStatus.done || pullStatus.error ? 0 : 6 }}>
+              {pullStatus.done ? <Check size={13} style={{color:'var(--green)',flexShrink:0}}/>
+                : pullStatus.error ? <AlertCircle size={13} style={{color:'var(--red)',flexShrink:0}}/>
+                : <Loader size={13} style={{color:'var(--accent)',animation:'spin 1s linear infinite',flexShrink:0}}/>}
+              <span style={{ fontSize:12, color:'var(--text-primary)', fontWeight:500, flex:1 }}>{pullInput || 'Pulling…'}</span>
+              {!pullStatus.done && !pullStatus.error && pullStatus.percent > 0 && (
+                <span style={{ fontSize:11, color:'var(--text-muted)' }}>{pullStatus.percent}%</span>
+              )}
+            </div>
+            {!pullStatus.done && !pullStatus.error && (
+              <div style={{ height:3, background:'var(--border)', borderRadius:2, overflow:'hidden', marginBottom:6 }}>
+                <div style={{ height:'100%', background:'var(--accent)', borderRadius:2, width:`${pullStatus.percent}%`, transition:'width 0.3s' }}/>
+              </div>
+            )}
+            <div style={{ fontSize:11, color: pullStatus.error ? 'var(--red)' : pullStatus.done ? 'var(--green)' : 'var(--text-muted)' }}>
+              {pullStatus.error ? pullStatus.error : pullStatus.done ? 'Pull complete — model is ready' : pullStatus.status}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div style={{ padding:12, background:'var(--bg-tertiary)', borderRadius:8, fontSize:11, color:'var(--text-muted)', lineHeight:1.7 }}>
+        Low on RAM? Use <code style={{fontFamily:'monospace',color:'var(--accent)'}}>qwen2.5-coder:1.5b</code> (1.1 GB).
+        It loads in seconds on 8 GB and handles most coding tasks well.
+      </div>
+    </div>
+  )
+}
+
 export default function SettingsModal({ onClose }: Props) {
-  const [tab,      setTab]      = useState<Tab>('providers')
+  const [tab,      setTab]      = useState<Tab>('local')
   const [settings, setSettings] = useState<PublicSettings | null>(null)
   const [loading,  setLoading]  = useState(true)
   const [ollamaModels, setOllamaModels] = useState<string[]>([])
@@ -313,9 +507,10 @@ export default function SettingsModal({ onClose }: Props) {
         {/* Tabs */}
         <div style={{ display:'flex', borderBottom:'1px solid var(--border)', padding:'0 20px', flexShrink:0 }}>
           {([
-            { id:'providers', label:'Cloud Providers' },
-            { id:'defaults',  label:'LLM Defaults' },
-            { id:'appearance',label:'Appearance' },
+            { id:'local',      label:'Local Models' },
+            { id:'providers',  label:'Cloud Providers' },
+            { id:'defaults',   label:'LLM Defaults' },
+            { id:'appearance', label:'Appearance' },
           ] as { id: Tab; label: string }[]).map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
               style={{ padding:'10px 16px', border:'none', background:'transparent', cursor:'pointer', fontSize:13, fontWeight:tab===t.id?600:400, color:tab===t.id?'var(--accent)':'var(--text-secondary)', borderBottom:tab===t.id?'2px solid var(--accent)':'2px solid transparent', transition:'color 0.15s' }}>
@@ -330,6 +525,8 @@ export default function SettingsModal({ onClose }: Props) {
             <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:200, gap:10, color:'var(--text-muted)' }}>
               <Loader size={16} style={{animation:'spin 1s linear infinite'}}/> Loading settings…
             </div>
+          ) : tab === 'local' ? (
+            <LocalModelsTab selectedModel={settings?.activeProvider==='ollama' ? (settings?.cloudModels?.['ollama'] ?? ollamaModels[0] ?? '') : ''} onRefresh={load}/>
           ) : tab === 'providers' ? (
             <>
               <p style={{ fontSize:12, color:'var(--text-muted)', marginBottom:14, lineHeight:1.6 }}>

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useAppStore } from '../store/appStore'
 import { api } from '../hooks/useApi'
 import { nanoid } from '../hooks/nanoid'
@@ -77,6 +77,15 @@ function ScrollRow({ items, direction }: { items: typeof ROWS[0]; direction: 'le
 export default function WelcomeScreen() {
   const { addSession, setActiveSession, isConnected, userName } = useAppStore()
   const [showProjectModal, setShowProjectModal] = useState(false)
+  const [isCompact, setIsCompact] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 980 : false)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onResize = () => setIsCompact(window.innerWidth < 980)
+    onResize()
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
   function newChat() {
     const id = nanoid()
@@ -124,9 +133,17 @@ export default function WelcomeScreen() {
 
       {/* Scrolling feature rows */}
       {isConnected ? (
-        <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
-          {ROWS.map((row, i) => <ScrollRow key={i} items={row} direction={DIRECTIONS[i]} />)}
-        </div>
+        isCompact ? (
+          <div style={{ width: '100%', padding: '0 16px 8px', maxWidth: 720 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              {FEATURES.slice(0, 8).map((f, i) => <FeatureCard key={i} {...f} width="100%" />)}
+            </div>
+          </div>
+        ) : (
+          <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
+            {ROWS.map((row, i) => <ScrollRow key={i} items={row} direction={DIRECTIONS[i]} />)}
+          </div>
+        )
       ) : (
         <div style={{ padding: '0 24px', maxWidth: 560, width: '100%' }}>
           <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', marginBottom: 14 }}>

@@ -2,7 +2,7 @@ import { useRef, useEffect, KeyboardEvent, useState, useCallback } from 'react'
 import { Send, Bot, Paperclip, Mic, Loader, Copy, Pencil, RefreshCw, Check, X, Terminal, ChevronDown, ArrowDown, FileText, Image, File, Download } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { open } from '@tauri-apps/plugin-dialog'
+import { open, save } from '@tauri-apps/plugin-dialog'
 import { useAppStore, type Message, type AgentRole } from '../store/appStore'
 import { api } from '../hooks/useApi'
 import { nanoid } from '../hooks/nanoid'
@@ -11,24 +11,19 @@ import SettingsModal from './SettingsModal'
 
 interface ChatPanelProps { onOpenTerminal?: (cwd: string) => void }
 
-// ── Attached file type ────────────────────────────────────────────────────────
 interface AttachedFile {
-  id:      string
-  name:    string
-  path:    string
-  size:    number
-  content: string   // text content (images stored as base64 data URL)
-  isImage: boolean
+  id: string; name: string; path: string
+  size: number; content: string; isImage: boolean
 }
 
 function roleBadgeClass(role?: AgentRole) { return `badge-${role ?? 'fullstack'}` }
-function formatTime(ts: number) { return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
+function formatTime(ts: number) { return new Date(ts).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) }
 function formatBytes(n: number) { return n < 1024 ? `${n}B` : n < 1048576 ? `${(n/1024).toFixed(1)}KB` : `${(n/1048576).toFixed(1)}MB` }
 function cleanTitle(raw: string) {
   return raw.replace(/\*\*/g,'').replace(/\*/g,'').replace(/`/g,'')
     .replace(/#{1,6}\s?/g,'').replace(/[_~]/g,'')
     .replace(/^["'`[\]()]+|["'`[\]()]+$/g,'')
-    .replace(/[^\w\s\-]/g,' ').replace(/\s+/g,' ').trim()
+    .replace(/[^\w\s-]/g,' ').replace(/\s+/g,' ').trim()
 }
 function classifyError(message: string): 'ram' | 'timeout' | 'generic' {
   const m = message.toLowerCase()
@@ -40,17 +35,27 @@ function classifyError(message: string): 'ram' | 'timeout' | 'generic' {
   return 'generic'
 }
 
-// Allowed text extensions for file context injection
-const TEXT_EXTS = new Set([
-  'ts','tsx','js','jsx','mjs','cjs','vue','svelte',
-  'py','rb','go','rs','java','kt','swift','c','cpp','h','cs','php',
-  'html','css','scss','sass','less',
-  'json','yaml','yml','toml','xml','env',
-  'md','mdx','txt','csv','sh','bash','zsh','fish',
-  'sql','graphql','proto','dockerfile',
-])
+// ── Strip markdown for plain-text copy ───────────────────────────────────────
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/gs, '$1')
+    .replace(/\*(.+?)\*/gs,     '$1')
+    .replace(/_{2}(.+?)_{2}/gs, '$1')
+    .replace(/_(.+?)_/gs,       '$1')
+    .replace(/~~(.+?)~~/gs,     '$1')
+    .replace(/```[\s\S]*?```/g, m => m.replace(/```\w*\n?/, '').replace(/\n?```$/, ''))
+    .replace(/`(.+?)`/g,        '$1')
+    .replace(/^#{1,6}\s/gm,     '')
+    .replace(/^[-*]\s/gm,       '')
+    .replace(/^\d+\.\s/gm,      '')
+    .replace(/\[(.+?)\]\(.+?\)/g, '$1')
+    .replace(/^>\s/gm,          '')
+    .trim()
+}
+
+const TEXT_EXTS  = new Set(['ts','tsx','js','jsx','mjs','cjs','vue','svelte','py','rb','go','rs','java','kt','swift','c','cpp','h','cs','php','html','css','scss','sass','less','json','yaml','yml','toml','xml','env','md','mdx','txt','csv','sh','bash','zsh','fish','sql','graphql','proto','dockerfile'])
 const IMAGE_EXTS = new Set(['png','jpg','jpeg','gif','webp','svg','bmp'])
-const MAX_FILE_SIZE = 500 * 1024  // 500 KB
+const MAX_FILE_SIZE = 500 * 1024
 
 function getFileIcon(name: string) {
   const ext = name.split('.').pop()?.toLowerCase() ?? ''
@@ -59,7 +64,7 @@ function getFileIcon(name: string) {
   return <File size={12}/>
 }
 
-// ── File attachment strip ─────────────────────────────────────────────────────
+// ── Attachment strip ──────────────────────────────────────────────────────────
 function AttachmentStrip({ files, onRemove }: { files: AttachedFile[]; onRemove: (id: string) => void }) {
   if (!files.length) return null
   return (
@@ -69,8 +74,7 @@ function AttachmentStrip({ files, onRemove }: { files: AttachedFile[]; onRemove:
           <span style={{ color:'var(--accent)', flexShrink:0 }}>{getFileIcon(f.name)}</span>
           <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1 }} title={f.name}>{f.name}</span>
           <span style={{ color:'var(--text-muted)', flexShrink:0, fontSize:10 }}>{formatBytes(f.size)}</span>
-          <button onClick={() => onRemove(f.id)}
-            style={{ background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', display:'flex', padding:0, flexShrink:0 }}
+          <button onClick={() => onRemove(f.id)} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', display:'flex', padding:0, flexShrink:0 }}
             onMouseEnter={e => (e.currentTarget as HTMLElement).style.color='var(--red)'}
             onMouseLeave={e => (e.currentTarget as HTMLElement).style.color='var(--text-muted)'}
           ><X size={11}/></button>
@@ -115,7 +119,8 @@ function MsgActions({ content, onEdit, onReload, isUser, visible }: {
   content: string; onEdit?: () => void; onReload?: () => void; isUser: boolean; visible: boolean
 }) {
   const [copied, setCopied] = useState(false)
-  const copy = () => navigator.clipboard.writeText(content).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
+  // FIX: strip markdown before copying so user gets plain text, not **bold**
+  const copy = () => navigator.clipboard.writeText(stripMarkdown(content)).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
   const btn: React.CSSProperties = { background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', padding:'3px 4px', borderRadius:4, display:'flex' }
   return (
     <div style={{ display:'flex', gap:2, opacity:visible?1:0, transition:'opacity 0.15s', alignItems:'center', pointerEvents:visible?'auto':'none' }}>
@@ -142,7 +147,7 @@ function MessageBubble({ msg, onEdit, onReload }: { msg: Message; onEdit?: (c: s
     const isError = msg.content.startsWith('⚠')
     return (
       <div style={{ display:'flex', justifyContent:'flex-start' }}>
-        <div style={{ background: isError?'rgba(239,68,68,0.08)':'var(--bg-tertiary)', border:`1px solid ${isError?'rgba(239,68,68,0.3)':'var(--border)'}`, borderRadius:8, padding:'10px 14px', fontSize:12, color:isError?'var(--red)':'var(--text-muted)', maxWidth:'80%', lineHeight:1.7 }}>
+        <div style={{ background:isError?'rgba(239,68,68,0.08)':'var(--bg-tertiary)', border:`1px solid ${isError?'rgba(239,68,68,0.3)':'var(--border)'}`, borderRadius:8, padding:'10px 14px', fontSize:12, color:isError?'var(--red)':'var(--text-muted)', maxWidth:'80%', lineHeight:1.7 }}>
           <MarkdownContent content={msg.content}/>
         </div>
       </div>
@@ -163,9 +168,8 @@ function MessageBubble({ msg, onEdit, onReload }: { msg: Message; onEdit?: (c: s
     <div style={{ display:'flex', justifyContent:'flex-end', width:'100%' }}
       onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
       <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:3, maxWidth:'60%', minWidth:0 }}>
-        <MsgActions content={msg.content} isUser visible={hovered} onEdit={() => onEdit?.(msg.content)}/>
+        <MsgActions content={msg.displayContent ?? msg.content} isUser visible={hovered} onEdit={() => onEdit?.(msg.displayContent ?? msg.content)}/>
         <div className="msg-user">
-          {/* Show attachment badges on user bubbles if message has [File: ...] markers */}
           {msg.filePaths && msg.filePaths.length > 0 && (
             <div style={{ display:'flex', gap:4, flexWrap:'wrap', marginBottom:6 }}>
               {msg.filePaths.map((p: string, i: number) => (
@@ -175,7 +179,6 @@ function MessageBubble({ msg, onEdit, onReload }: { msg: Message; onEdit?: (c: s
               ))}
             </div>
           )}
-          {/* Strip the injected file context from display — show only the user's actual question */}
           {msg.displayContent ?? msg.content}
         </div>
         <span style={{fontSize:10,color:'var(--text-muted)',paddingRight:2}}>{time}</span>
@@ -220,7 +223,6 @@ function ModelSelector({ selectedModel, models, activeProvider, cloudModel, isOn
     document.addEventListener('mousedown', close)
     return () => document.removeEventListener('mousedown', close)
   }, [open])
-
   const isCloud     = activeProvider !== 'ollama'
   const displayName = isCloud
     ? `${activeProvider.charAt(0).toUpperCase() + activeProvider.slice(1)} · ${(cloudModel || activeProvider).split(':')[0]}`
@@ -235,7 +237,6 @@ function ModelSelector({ selectedModel, models, activeProvider, cloudModel, isOn
         <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:120 }}>{displayName}</span>
         <ChevronDown size={10} style={{ flexShrink:0 }}/>
       </button>
-
       {open && (
         <div style={{ position:'absolute', bottom:'calc(100% + 6px)', left:0, background:'var(--bg-secondary)', border:'1px solid var(--border)', borderRadius:10, padding:6, minWidth:220, maxHeight:300, overflowY:'auto', boxShadow:'0 8px 24px rgba(0,0,0,0.5)', zIndex:100 }}>
           {models.length > 0 && <>
@@ -251,7 +252,6 @@ function ModelSelector({ selectedModel, models, activeProvider, cloudModel, isOn
               </button>
             ))}
           </>}
-
           {isOnline && (() => {
             const CLOUD = [
               { id:'gemini', label:'Gemini Flash',     color:'#4285f4' },
@@ -280,9 +280,7 @@ function ModelSelector({ selectedModel, models, activeProvider, cloudModel, isOn
               ))}
             </>
           })()}
-
           {!isOnline && <div style={{ padding:'7px 10px', fontSize:11, color:'var(--text-muted)', borderTop:'1px solid var(--border)', marginTop:4 }}>⚠ Offline — cloud providers unavailable</div>}
-
           <div style={{ height:1, background:'var(--border)', margin:'6px 4px' }}/>
           <button onClick={() => { setOpen(false); onOpenSettings() }}
             style={{ display:'flex', alignItems:'center', gap:6, width:'100%', padding:'7px 10px', background:'transparent', border:'none', borderRadius:6, cursor:'pointer', color:'var(--text-secondary)', fontSize:12, textAlign:'left' }}
@@ -315,6 +313,13 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
   const [apiKeyStatus,   setApiKeyStatus]   = useState<Record<string,boolean>>({})
   const [showSettings,   setShowSettings]   = useState(false)
   const [isAtBottom,     setIsAtBottom]     = useState(true)
+  const [toast,          setToast]          = useState<{ msg: string; type: 'info'|'success'|'error' } | null>(null)
+
+  // Show a temporary toast notification
+  const showToast = useCallback((msg: string, type: 'info'|'success'|'error' = 'info', ms = 3000) => {
+    setToast({ msg, type })
+    setTimeout(() => setToast(null), ms)
+  }, [])
 
   const scrollRef       = useRef<HTMLDivElement>(null)
   const bottomRef       = useRef<HTMLDivElement>(null)
@@ -330,19 +335,16 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
   const isStreaming       = streamingSessionId === activeSessionId
   const isBusy            = isSending || isStreaming
 
-  // ── Smart scroll ──────────────────────────────────────────────────────────
+  // Smart scroll
   const scrollToBottom = useCallback((force = false) => {
     const el = scrollRef.current; if (!el) return
     if (force || !userScrolledRef.current) el.scrollTop = el.scrollHeight
   }, [])
-
   const handleScroll = useCallback(() => {
     const el = scrollRef.current; if (!el) return
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
-    setIsAtBottom(atBottom)
-    userScrolledRef.current = !atBottom
+    setIsAtBottom(atBottom); userScrolledRef.current = !atBottom
   }, [])
-
   useEffect(() => { if (!userScrolledRef.current) scrollToBottom() }, [messages.length])
   const lastContent = messages[messages.length - 1]?.content
   useEffect(() => { if (!userScrolledRef.current) scrollToBottom() }, [lastContent])
@@ -368,72 +370,39 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
     return () => window.removeEventListener('provider-changed', loadProvider)
   }, [])
 
-  // ── File attach ────────────────────────────────────────────────────────────
+  // File attach
   async function handleAttach() {
     try {
-      const selected = await open({
-        multiple: true,
-        filters: [{
-          name: 'Supported files',
-          extensions: [...TEXT_EXTS, ...IMAGE_EXTS],
-        }],
-      })
+      const selected = await open({ multiple: true, filters: [{ name: 'Supported files', extensions: [...TEXT_EXTS, ...IMAGE_EXTS] }] })
       if (!selected) return
       const paths = Array.isArray(selected) ? selected : [selected]
       for (const filePath of paths) {
         const name = filePath.split('/').pop() ?? filePath
         const ext  = name.split('.').pop()?.toLowerCase() ?? ''
-        if (attachments.find(a => a.path === filePath)) continue  // no duplicates
-
+        if (attachments.find(a => a.path === filePath)) continue
         try {
-          if (IMAGE_EXTS.has(ext)) {
-            // Read image as base64 via server
+          if (IMAGE_EXTS.has(ext) || TEXT_EXTS.has(ext)) {
             const res = await fetch(`http://localhost:3001/project/file?path=${encodeURIComponent(filePath)}`)
             if (!res.ok) continue
-            const data = await res.json()
+            const data    = await res.json()
+            const content = (data.content ?? '') as string
+            const truncated = content.length > MAX_FILE_SIZE
+              ? content.slice(0, MAX_FILE_SIZE) + '\n\n[... file truncated at 500 KB ...]'
+              : content
             setAttachments(prev => [...prev, {
               id: nanoid(), name, path: filePath,
-              size: data.content?.length ?? 0,
-              content: data.content ?? '',
-              isImage: true,
+              size: content.length, content: truncated,
+              isImage: IMAGE_EXTS.has(ext),
             }])
-          } else if (TEXT_EXTS.has(ext)) {
-            const res = await fetch(`http://localhost:3001/project/file?path=${encodeURIComponent(filePath)}`)
-            if (!res.ok) continue
-            const data = await res.json()
-            const content = (data.content ?? '') as string
-            if (content.length > MAX_FILE_SIZE) {
-              // Truncate with notice
-              setAttachments(prev => [...prev, {
-                id: nanoid(), name, path: filePath,
-                size: content.length,
-                content: content.slice(0, MAX_FILE_SIZE) + '\n\n[... file truncated at 500 KB ...]',
-                isImage: false,
-              }])
-            } else {
-              setAttachments(prev => [...prev, {
-                id: nanoid(), name, path: filePath,
-                size: content.length,
-                content, isImage: false,
-              }])
-            }
           }
-        } catch { /* skip unreadable files */ }
+        } catch { }
       }
-    } catch { /* dialog cancelled */ }
+    } catch { }
   }
 
-  // Build the full message text with file context injected
   function buildMessageWithContext(text: string, files: AttachedFile[]): string {
     if (!files.length) return text
-    const parts: string[] = []
-    for (const f of files) {
-      if (f.isImage) {
-        parts.push(`[Attached image: ${f.name}]`)
-      } else {
-        parts.push(`<file name="${f.name}">\n${f.content}\n</file>`)
-      }
-    }
+    const parts = files.map(f => f.isImage ? `[Attached image: ${f.name}]` : `<file name="${f.name}">\n${f.content}\n</file>`)
     return parts.join('\n\n') + '\n\n' + text
   }
 
@@ -459,59 +428,82 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
     } catch { }
   }
 
-  // ── Export chat as Markdown ────────────────────────────────────────────────
-  function exportChat() {
+  // Export: show save dialog, write via server (avoids NSURLErrorDomain -999)
+  async function exportChat() {
     if (!session || !messages.length) return
-    const lines = [`# ${session.title}`, `_Exported from LocalForge — ${new Date().toLocaleString()}_`, '']
+    const lines: string[] = [
+      `# ${session.title}`,
+      `Exported from LocalForge — ${new Date().toLocaleString()}`,
+      '',
+    ]
     for (const m of messages) {
-      if (m.type === 'user')  lines.push(`**You:** ${m.displayContent ?? m.content}`, '')
-      if (m.type === 'agent') lines.push(`**AI:** ${m.content}`, '')
-      if (m.type === 'system') lines.push(`> ${m.content}`, '')
+      if (m.type === 'user')   lines.push(`You: ${stripMarkdown(m.displayContent ?? m.content)}`, '')
+      if (m.type === 'agent')  lines.push(`AI: ${stripMarkdown(m.content)}`, '')
+      if (m.type === 'system') lines.push(`Note: ${stripMarkdown(m.content)}`, '')
     }
-    const blob = new Blob([lines.join('\n')], { type:'text/markdown' })
-    const url  = URL.createObjectURL(blob)
-    const a    = document.createElement('a')
-    a.href = url; a.download = `${session.title.replace(/[^a-z0-9]/gi,'_').toLowerCase()}.md`
-    a.click(); URL.revokeObjectURL(url)
+    const text     = lines.join('\n')
+    const fileName = session.title.replace(/[^a-z0-9]/gi, '_').toLowerCase() + '.md'
+
+    showToast('Opening save dialog…', 'info')
+
+    try {
+      // Show native macOS Save As picker
+      const filePath = await save({
+        defaultPath: fileName,
+        filters: [{ name: 'Markdown', extensions: ['md'] }],
+      })
+      if (!filePath) { setToast(null); return }  // user cancelled
+
+      showToast('Saving…', 'info')
+
+      // Write via agent server — avoids Tauri FS plugin dependency and -999 errors
+      const res = await fetch('http://localhost:3001/project/file', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ path: filePath, content: text }),
+      })
+
+      if (res.ok) {
+        showToast(`Saved to ${filePath.split('/').pop()}`, 'success', 4000)
+      } else {
+        throw new Error(`Server returned ${res.status}`)
+      }
+    } catch (err: any) {
+      // Final fallback: browser blob download (works in web mode)
+      showToast('Using browser download instead…', 'info')
+      const blob = new Blob([text], { type: 'text/markdown' })
+      const url  = URL.createObjectURL(blob)
+      const a    = document.createElement('a')
+      a.href = url; a.download = fileName; a.click()
+      URL.revokeObjectURL(url)
+      showToast(`Downloaded as ${fileName}`, 'success', 3000)
+    }
   }
 
   async function send(overrideText?: string) {
     const text = (overrideText ?? input).trim()
     if (!text || !session || isBusy) return
     if (!overrideText) setInput('')
-
-    const sessionId   = session.id
-    const sessionType = session.type
-    const rootPath    = session.rootPath
-    const isFirstMsg  = messages.filter(m => m.type === 'user').length === 0
+    const sessionId          = session.id
+    const sessionType        = session.type
+    const rootPath           = session.rootPath
+    const isFirstMsg         = messages.filter(m => m.type === 'user').length === 0
     const currentAttachments = [...attachments]
-
-    // Clear attachments after capturing
     if (!overrideText) setAttachments([])
-
     userScrolledRef.current = false; scrollToBottom(true)
-
-    // Build full message with file context injected
     const fullContent    = buildMessageWithContext(text, currentAttachments)
-    const displayContent = text  // what to SHOW in the bubble (no file dump)
+    const displayContent = text
     const filePaths      = currentAttachments.map(f => f.path)
-
     const msgId = nanoid()
-    addMessage(sessionId, {
-      id: msgId, type:'user', content: fullContent,
-      displayContent, filePaths,
-      timestamp: Date.now(),
-    })
+    addMessage(sessionId, { id:msgId, type:'user', content:fullContent, displayContent, filePaths, timestamp:Date.now() })
     api.saveMessage(msgId, sessionId, 'user', fullContent).catch(() => {})
-
     setSendingSession(sessionId); setStreamingSession(null)
     const streamTaskId = nanoid(); let firstChunk = true
-
     try {
       await api.streamChat(fullContent, sessionId,
         messages.filter(m => m.type==='user'||m.type==='agent').map(m => ({ role:m.type==='user'?'user':'assistant', content:m.content })),
         streamTaskId,
-        (chunk) => {
+        chunk => {
           if (firstChunk) { setSendingSession(null); setStreamingSession(sessionId); firstChunk=false }
           appendStream(sessionId, streamTaskId, chunk)
         }
@@ -519,18 +511,15 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
       finalizeStream(sessionId, streamTaskId)
       const live = useAppStore.getState().sessions.find(s => s.id === sessionId)
       if (isChat && isFirstMsg && live?.title === 'New chat') generateTitle(sessionId, sessionType, rootPath, text)
-
     } catch (err: any) {
       const errType = classifyError(err.message)
-      const userMessage = errType === 'ram'
-        ? '⚠ **Not enough memory to run this model.**\n\nOptions:\n- Close other apps (WhatsApp, Brave, VS Code)\n- Pull a smaller model: `ollama pull qwen2.5-coder:1.5b`\n- Add a free cloud API key in Settings (Gemini or Groq)'
+      const msg = errType === 'ram'
+        ? '⚠ **Not enough memory.**\n\n- Close other apps\n- Pull a smaller model: `ollama pull qwen2.5-coder:1.5b`\n- Add a free cloud API key in Settings (Gemini or Groq)'
         : errType === 'timeout'
-        ? '⚠ **Connection failed or timed out.**\n\n- Check the agent server: `cd packages/agent-core && npm run dev`\n- Check Ollama: `ollama serve`'
+        ? '⚠ **Connection failed.**\n\n- Check the agent server: `cd packages/agent-core && npm run dev`\n- Check Ollama: `ollama serve`'
         : `⚠ **Error:** ${err.message}`
-      addMessage(sessionId, { id:nanoid(), type:'system', content:userMessage, timestamp:Date.now() })
-    } finally {
-      setSendingSession(null); setStreamingSession(null)
-    }
+      addMessage(sessionId, { id:nanoid(), type:'system', content:msg, timestamp:Date.now() })
+    } finally { setSendingSession(null); setStreamingSession(null) }
   }
 
   function handleEdit(content: string) { setInput(content); textareaRef.current?.focus() }
@@ -543,16 +532,12 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }
-
   const canSend     = !!input.trim() && !!session && !isBusy
   const placeholder = !session ? 'Open a chat or project to start…' : isChat ? 'Ask anything…' : 'Ask about this project…'
 
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%', overflow:'hidden', background:'var(--bg-primary)' }}>
-      <style>{`
-        @keyframes spin  { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }
-        @keyframes blink { 0%,100% { opacity:1 } 50% { opacity:0 } }
-      `}</style>
+      <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}@keyframes toastIn{from{opacity:0;transform:translateX(-50%) translateY(10px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}`}</style>
 
       {/* Title bar */}
       {session && (
@@ -560,7 +545,6 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
           <span style={{ fontSize:13, fontWeight:500, color:'var(--text-primary)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flexShrink:1, minWidth:0 }}>{session.title}</span>
           {isProject && session.rootPath && <span style={{ fontSize:10, color:'var(--text-muted)', fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flexShrink:1, minWidth:0 }}>{session.rootPath}</span>}
           <div style={{ flex:1, minWidth:8 }}/>
-          {/* Export button */}
           {messages.length > 0 && (
             <button onClick={exportChat} title="Export chat as Markdown"
               style={{ display:'flex', alignItems:'center', gap:4, padding:'3px 8px', background:'transparent', border:'1px solid var(--border)', borderRadius:5, color:'var(--text-secondary)', cursor:'pointer', fontSize:11, flexShrink:0 }}
@@ -604,7 +588,6 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
         </div>
       )}
 
-      {/* Content */}
       {currentActiveFile ? <FileEditorPanel filePath={currentActiveFile}/> : (
         <>
           <div ref={scrollRef} onScroll={handleScroll}
@@ -612,13 +595,11 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
             {messages.length===0 && !isBusy && (
               <div style={{ margin:'auto', textAlign:'center', color:'var(--text-muted)' }}>
                 <Bot size={36} style={{ marginBottom:10, opacity:0.3 }}/>
-                <div style={{ fontSize:15, fontWeight:500, marginBottom:6, color:'var(--text-secondary)' }}>
-                  {isChat ? 'Ask me anything' : 'Project assistant'}
-                </div>
+                <div style={{ fontSize:15, fontWeight:500, marginBottom:6, color:'var(--text-secondary)' }}>{isChat ? 'Ask me anything' : 'Project assistant'}</div>
                 <div style={{ fontSize:13, lineHeight:1.8, color:'var(--text-muted)' }}>
                   {isChat
-                    ? <>Explain concepts, review code, write drafts, or answer questions.<br/>Click <Paperclip size={11} style={{display:'inline',verticalAlign:'middle'}}/> to attach files for context.</>
-                    : <>Ask about the codebase, request code changes, or instruct agents.<br/>Click <Paperclip size={11} style={{display:'inline',verticalAlign:'middle'}}/> to attach files for context.</>
+                    ? <>Explain concepts, review code, write drafts, or answer questions.<br/>Click <Paperclip size={11} style={{display:'inline',verticalAlign:'middle'}}/> to attach files.</>
+                    : <>Ask about the codebase, request code changes, or instruct agents.<br/>Click <Paperclip size={11} style={{display:'inline',verticalAlign:'middle'}}/> to attach files.</>
                   }
                 </div>
               </div>
@@ -632,11 +613,9 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
             <div ref={bottomRef} style={{ height:1 }}/>
           </div>
 
-          {/* Scroll to bottom button */}
           {!isAtBottom && (
-            <div style={{ position:'absolute', bottom:attachments.length > 0 ? 130 : 100, left:'50%', transform:'translateX(-50%)', zIndex:20 }}>
-              <button
-                onClick={() => { userScrolledRef.current=false; scrollToBottom(true) }}
+            <div style={{ position:'absolute', bottom: attachments.length > 0 ? 130 : 100, left:'50%', transform:'translateX(-50%)', zIndex:20 }}>
+              <button onClick={() => { userScrolledRef.current=false; scrollToBottom(true) }}
                 style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', borderRadius:20, background:'var(--bg-secondary)', border:'1px solid var(--border-light)', color:'var(--text-primary)', fontSize:12, fontWeight:500, cursor:'pointer', boxShadow:'0 4px 16px rgba(0,0,0,0.4)', backdropFilter:'blur(8px)' }}
                 onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor='var(--accent)'; (e.currentTarget as HTMLElement).style.background='var(--bg-hover)' }}
                 onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor='var(--border-light)'; (e.currentTarget as HTMLElement).style.background='var(--bg-secondary)' }}
@@ -644,30 +623,21 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
             </div>
           )}
 
-          {/* Input area */}
           <div style={{ flexShrink:0, padding:'8px 24px 14px', background:'var(--bg-primary)', position:'relative' }}>
-            {/* Attachment strip above input */}
             {attachments.length > 0 && (
               <AttachmentStrip files={attachments} onRemove={id => setAttachments(prev => prev.filter(f => f.id !== id))}/>
             )}
-
-            <div style={{ display:'flex', alignItems:'flex-end', gap:6, background:'var(--bg-tertiary)', border:`1px solid ${isBusy?'var(--accent)':attachments.length?'var(--accent)':'var(--border)'}`, borderRadius:12, padding:'8px 10px 8px 14px', transition:'border-color 0.2s', marginTop: attachments.length ? 6 : 0 }}>
-              {/* Attach button */}
+            <div style={{ display:'flex', alignItems:'flex-end', gap:6, background:'var(--bg-tertiary)', border:`1px solid ${isBusy?'var(--accent)':attachments.length?'var(--accent)':'var(--border)'}`, borderRadius:12, padding:'8px 10px 8px 14px', transition:'border-color 0.2s', marginTop:attachments.length?6:0 }}>
               <button onClick={handleAttach} className="icon-btn" title="Attach file"
-                style={{ width:28, height:28, flexShrink:0, marginBottom:1, color: attachments.length ? 'var(--accent)' : 'var(--text-muted)' }}>
+                style={{ width:28, height:28, flexShrink:0, marginBottom:1, color:attachments.length?'var(--accent)':'var(--text-muted)' }}>
                 <Paperclip size={14}/>
               </button>
               <textarea ref={textareaRef} value={input} onChange={e => setInput(e.target.value)}
-                onKeyDown={onKeyDown} placeholder={placeholder} disabled={!session || isBusy} rows={1}
+                onKeyDown={onKeyDown} placeholder={placeholder} disabled={!session||isBusy} rows={1}
                 style={{ flex:1, background:'transparent', border:'none', outline:'none', resize:'none', color:'var(--text-primary)', fontSize:13, lineHeight:1.6, fontFamily:'inherit', padding:'2px 0', maxHeight:140, overflowY:'auto' }}
               />
               <div style={{ display:'flex', alignItems:'center', gap:4, flexShrink:0, marginBottom:1 }}>
-                <ModelSelector
-                  selectedModel={selectedModel} models={models}
-                  activeProvider={activeProvider} cloudModel={cloudModel}
-                  isOnline={isOnline} apiKeyStatus={apiKeyStatus}
-                  onOpenSettings={() => setShowSettings(true)} onChange={handleModelChange}
-                />
+                <ModelSelector selectedModel={selectedModel} models={models} activeProvider={activeProvider} cloudModel={cloudModel} isOnline={isOnline} apiKeyStatus={apiKeyStatus} onOpenSettings={() => setShowSettings(true)} onChange={handleModelChange}/>
                 <button className="icon-btn" title="Voice (coming soon)" style={{ width:28, height:28 }}><Mic size={14}/></button>
                 <button onClick={() => send()} disabled={!canSend}
                   style={{ width:32, height:32, borderRadius:8, border:'none', background:canSend?'var(--accent)':'var(--bg-hover)', color:canSend?'white':'var(--text-muted)', cursor:canSend?'pointer':'not-allowed', display:'flex', alignItems:'center', justifyContent:'center', transition:'background 0.15s', flexShrink:0 }}>
@@ -683,6 +653,37 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
       )}
 
       {showSettings && <SettingsModal onClose={() => { setShowSettings(false); window.dispatchEvent(new CustomEvent('provider-changed')) }}/>}
+
+      {/* Toast notification */}
+      {toast && (
+        <div style={{
+          position: 'fixed', bottom: 80, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 999, pointerEvents: 'none',
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '10px 18px', borderRadius: 10,
+          background: toast.type === 'success' ? 'rgba(16,185,129,0.15)'
+            : toast.type === 'error' ? 'rgba(239,68,68,0.15)'
+            : 'rgba(139,92,246,0.15)',
+          border: `1px solid ${
+            toast.type === 'success' ? 'rgba(16,185,129,0.4)'
+            : toast.type === 'error' ? 'rgba(239,68,68,0.4)'
+            : 'rgba(139,92,246,0.4)'
+          }`,
+          backdropFilter: 'blur(12px)',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
+          fontSize: 13, fontWeight: 500,
+          color: toast.type === 'success' ? 'var(--green)'
+            : toast.type === 'error' ? 'var(--red)'
+            : 'var(--accent)',
+          whiteSpace: 'nowrap',
+          animation: 'toastIn 0.2s ease',
+        }}>
+          {toast.type === 'success' && <Check size={14}/>}
+          {toast.type === 'error'   && <X size={14}/>}
+          {toast.type === 'info'    && <Loader size={14} style={{ animation: 'spin 1s linear infinite' }}/>}
+          {toast.msg}
+        </div>
+      )}
     </div>
   )
 }

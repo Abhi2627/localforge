@@ -74,10 +74,13 @@ interface AppState {
   setUserName:        (name: string) => void
 }
 
+const isWide = typeof window !== 'undefined' ? window.innerWidth >= 700 : true
+const isRightWide = typeof window !== 'undefined' ? window.innerWidth >= 900 : true
+
 export const useAppStore = create<AppState>((set, get) => ({
   screen: 'welcome', sessions: [], activeSessionId: null,
-  models: [], selectedModel: '', leftExpanded: true,
-  rightExpanded: true, isConnected: false, isOnline: navigator.onLine, userName: '',
+  models: [], selectedModel: '', leftExpanded: isWide,
+  rightExpanded: isRightWide, isConnected: false, isOnline: navigator.onLine, userName: '',
   openFiles: {}, activeFile: {},
   sendingSessionId: null,
   streamingSessionId: null,
