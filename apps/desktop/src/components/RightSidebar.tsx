@@ -369,8 +369,17 @@ function ProjectGraphModalBody({ files, rootPath }: { files: string[]; rootPath:
 function SidebarSection({ title, expanded, onToggle, flex, children }: {
   title: string; expanded: boolean; onToggle: () => void; flex: number; children: React.ReactNode
 }) {
+  const HEADER_H = 28
   return (
-    <div style={{ display:'flex', flexDirection:'column', overflow:'hidden', flex: expanded ? flex : 0, minHeight: expanded ? 80 : 0, transition:'flex 0.2s ease' }}>
+    // When collapsed: fixed height = header only. When expanded: flex grows.
+    <div style={{
+      display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      flex:      expanded ? flex : 0,
+      flexBasis: expanded ? undefined : HEADER_H,
+      minHeight: HEADER_H,
+      flexShrink: expanded ? 1 : 0,   // collapsed sections don't shrink below header
+      transition: 'flex 0.2s ease',
+    }}>
       {/* Section header */}
       <div
         onClick={onToggle}
