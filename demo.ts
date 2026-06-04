@@ -1,1 +1,3 @@
-cd /path/to/your/project/root
+// demo.ts
+
+console.log("Hello World");
