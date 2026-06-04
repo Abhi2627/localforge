@@ -47,6 +47,8 @@ export function FilePatchCard({ patch, alreadyApplied = false, onApply, onReject
     try {
       await onApply(patch)
       setApplied(true)
+      // Notify the file tree to show the new/updated file immediately
+      window.dispatchEvent(new CustomEvent('localforge:file-applied', { detail: patch.path }))
     } finally {
       setApplying(false)
     }

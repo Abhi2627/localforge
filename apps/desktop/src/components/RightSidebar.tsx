@@ -665,6 +665,16 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
     setAddedFiles(prev => [...prev, filePath])
   }
 
+  // Listen for file-applied events from FilePatchCard (chat apply button)
+  useEffect(() => {
+    function handleFileApplied(e: Event) {
+      const path = (e as CustomEvent<string>).detail
+      if (path) onAdd(path)
+    }
+    window.addEventListener('localforge:file-applied', handleFileApplied)
+    return () => window.removeEventListener('localforge:file-applied', handleFileApplied)
+  }, [])
+
   // Clear deleted/added tracking when session changes
   useEffect(() => {
     setDeletedPaths(new Set())

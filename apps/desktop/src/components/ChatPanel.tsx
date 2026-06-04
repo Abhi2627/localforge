@@ -7,6 +7,7 @@ import { useAppStore, type Message, type AgentRole } from '../store/appStore'
 import { api } from '../hooks/useApi'
 import { nanoid } from '../hooks/nanoid'
 import FileEditorPanel from './FileEditorPanel'
+import DiffEditorPanel from './DiffEditorPanel'
 import SettingsModal from './SettingsModal'
 import { FilePatchCard, type FilePatch } from './FilePatchCard'
 
@@ -699,7 +700,15 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
         </div>
       )}
 
-      {currentActiveFile ? <FileEditorPanel filePath={currentActiveFile}/> : (
+      {/* Render: diff view, file editor, or chat */}
+      {currentActiveFile?.startsWith('git-diff::') ? (() => {
+        // Format: git-diff::{sessionId}::{filePath}::{staged}
+        const parts    = currentActiveFile.split('::')
+        const sessId   = parts[1] ?? activeSessionId ?? ''
+        const filePath = parts[2] ?? ''
+        const staged   = parts[3] === 'true'
+        return <DiffEditorPanel sessionId={sessId} filePath={filePath} staged={staged}/>
+      })() : currentActiveFile ? <FileEditorPanel filePath={currentActiveFile}/> : (
         <>
           {/* Messages */}
           <div ref={scrollRef} onScroll={handleScroll}

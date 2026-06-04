@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { GitBranch, RefreshCw, User, Plus, Minus, Circle, ArrowUp, ArrowDown } from 'lucide-react'
+import { useAppStore } from '../store/appStore'
 
 interface FileChange { status: string; file: string; oldFile?: string }
 interface GitStatus {
@@ -27,9 +28,7 @@ interface Branch {
   upstream?:   string
   lastCommit?: string
 }
-interface DiffLine  { type: 'context' | 'added' | 'removed'; content: string }
-interface DiffHunk  { header: string; lines: DiffLine[] }
-interface FileDiff  { file: string; status: string; hunks: DiffHunk[]; isBinary: boolean }
+interface Props { sessionId: string }
 
 const STATUS_COLOR: Record<string, string> = {
   added:'var(--green)', modified:'#f59e0b', deleted:'var(--red)',
@@ -60,50 +59,6 @@ function RefBadge({ ref }: { ref: string }) {
   )
 }
 
-function DiffViewer({ diffs, onClose }: { diffs: FileDiff[]; onClose: () => void }) {
-  return (
-    <div style={{ position:'absolute', inset:0, background:'var(--bg-primary)', zIndex:20, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-      <div style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 10px', borderBottom:'1px solid var(--border)', flexShrink:0, background:'var(--bg-secondary)' }}>
-        <span style={{ fontSize:11, fontWeight:600, color:'var(--text-primary)', flex:1 }}>Diff viewer</span>
-        <button onClick={onClose} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', fontSize:16, lineHeight:1 }}>✕</button>
-      </div>
-      <div style={{ flex:1, overflowY:'auto', fontFamily:'monospace', fontSize:11 }}>
-        {diffs.length === 0
-          ? <div style={{ padding:'12px', color:'var(--text-muted)' }}>No changes</div>
-          : diffs.map((f, fi) => (
-            <div key={fi}>
-              <div style={{ padding:'6px 10px', background:'var(--bg-tertiary)', borderBottom:'1px solid var(--border)', fontSize:11, color:'var(--text-primary)', fontWeight:500, fontFamily:'monospace' }}>
-                {f.file}
-              </div>
-              {f.isBinary
-                ? <div style={{ padding:'8px 10px', color:'var(--text-muted)', fontSize:11 }}>Binary file</div>
-                : f.hunks.map((hunk, hi) => (
-                  <div key={hi}>
-                    <div style={{ padding:'3px 10px', background:'rgba(124,106,247,0.08)', color:'var(--accent)', fontSize:10, borderBottom:'1px solid var(--border)' }}>
-                      {hunk.header}
-                    </div>
-                    {hunk.lines.map((line, li) => {
-                      const bg     = line.type==='added' ? 'rgba(61,214,140,0.08)' : line.type==='removed' ? 'rgba(245,101,101,0.08)' : 'transparent'
-                      const color  = line.type==='added' ? '#3dd68c' : line.type==='removed' ? '#f56565' : 'var(--text-secondary)'
-                      const prefix = line.type==='added' ? '+' : line.type==='removed' ? '-' : ' '
-                      return (
-                        <div key={li} style={{ display:'flex', background:bg, minHeight:18 }}>
-                          <span style={{ color, width:14, flexShrink:0, textAlign:'center', userSelect:'none', opacity:0.8 }}>{prefix}</span>
-                          <span style={{ color, flex:1, whiteSpace:'pre', overflow:'hidden', textOverflow:'ellipsis', paddingRight:8 }}>{line.content}</span>
-                        </div>
-                      )
-                    })}
-                  </div>
-                ))
-              }
-            </div>
-          ))
-        }
-      </div>
-    </div>
-  )
-}
-
 interface Props { sessionId: string }
 type Tab = 'status' | 'log' | 'branches'
 
@@ -114,7 +69,8 @@ export default function GitPanel({ sessionId }: Props) {
   const [branches, setBranches] = useState<Branch[]>([])
   const [loading,  setLoading]  = useState(false)
   const [isRepo,   setIsRepo]   = useState(true)
-  const [diffs,    setDiffs]    = useState<FileDiff[] | null>(null)
+  const activeSessionId = useAppStore(s => s.activeSessionId)
+  const openFileFn      = useAppStore(s => s.openFile)
 
   const BASE = `http://localhost:3001/project/${sessionId}/git`
 
@@ -162,15 +118,23 @@ export default function GitPanel({ sessionId }: Props) {
   }, [tab, loadStatus, loadLog, loadBranches])
 
   async function openFileDiff(file: string, staged: boolean) {
-    const res  = await fetch(`${BASE}/diff?file=${encodeURIComponent(file)}&staged=${staged}`)
-    const data = await res.json()
-    setDiffs(data.diffs ?? [])
+    // Open as a diff tab in the main editor area — same place as regular files
+    // Format: git-diff::{sessionId}::{filePath}::{staged}
+    if (activeSessionId) {
+      openFileFn(activeSessionId, `git-diff::${sessionId}::${file}::${staged}`)
+    }
   }
 
   async function openCommitDiff(hash: string) {
+    // For commit diffs, load via API and open the first changed file as a diff
+    if (!activeSessionId) return
     const res  = await fetch(`${BASE}/commit/${hash}`)
     const data = await res.json()
-    setDiffs(data.diffs ?? [])
+    const diffs = data.diffs ?? []
+    if (diffs.length > 0) {
+      // Open the first changed file as a diff against that commit
+      openFileFn(activeSessionId, `git-diff::${sessionId}::${diffs[0].file}::false`)
+    }
   }
 
   if (!isRepo) return (
@@ -186,8 +150,7 @@ export default function GitPanel({ sessionId }: Props) {
   const remoteBranches = branches.filter(b => b.isRemote)
 
   return (
-    <div style={{ display:'flex', flexDirection:'column', flex:1, overflow:'hidden', minHeight:0, position:'relative' }}>
-      {diffs && <DiffViewer diffs={diffs} onClose={() => setDiffs(null)}/>}
+    <div style={{ display:'flex', flexDirection:'column', flex:1, overflow:'hidden', minHeight:0 }}>
 
       {/* Branch bar */}
       <div style={{ display:'flex', alignItems:'center', gap:6, padding:'5px 10px', borderBottom:'1px solid var(--border)', flexShrink:0, background:'var(--bg-tertiary)' }}>
