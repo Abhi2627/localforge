@@ -346,6 +346,57 @@ async function bootstrap() {
   server.get<{ Params: { sessionId: string } }>('/project/:sessionId/contracts', async (req) => { const c = getCachedReport(req.params.sessionId); if (c) return c; const s = getSession(req.params.sessionId); if (!s?.rootPath) return { error: 'No rootPath', violations: [], orphans: [], summary: null }; return runEnforcer(req.params.sessionId, s.rootPath) })
   server.post<{ Params: { sessionId: string } }>('/project/:sessionId/contracts/rescan', async (req) => { const s = getSession(req.params.sessionId); if (!s?.rootPath) return { success: false }; return { success: true, summary: runEnforcer(req.params.sessionId, s.rootPath).summary } })
 
+  // ── File management (VSCode-style operations) ──────────────────────────────
+  server.delete<{ Querystring: { path: string } }>('/project/file', async (req, reply) => {
+    const { path: filePath } = req.query
+    if (!filePath) { reply.status(400).send('No path'); return }
+    try {
+      const stat = fs.statSync(filePath)
+      if (stat.isDirectory()) fs.rmSync(filePath, { recursive: true, force: true })
+      else fs.unlinkSync(filePath)
+      return { success: true }
+    } catch (err: any) { reply.status(500).send(err.message) }
+  })
+
+  server.post<{ Body: { source: string; destination: string } }>('/project/file/move', async (req, reply) => {
+    const { source, destination } = req.body
+    if (!source || !destination) { reply.status(400).send('Missing source/destination'); return }
+    try { fs.renameSync(source, destination); return { success: true } }
+    catch (err: any) { reply.status(500).send(err.message) }
+  })
+
+  server.post<{ Body: { source: string; destination: string } }>('/project/file/copy', async (req, reply) => {
+    const { source, destination } = req.body
+    if (!source || !destination) { reply.status(400).send('Missing source/destination'); return }
+    try {
+      function copyRecursive(src: string, dst: string) {
+        const stat = fs.statSync(src)
+        if (stat.isDirectory()) {
+          fs.mkdirSync(dst, { recursive: true })
+          fs.readdirSync(src).forEach(f => copyRecursive(path.join(src,f), path.join(dst,f)))
+        } else {
+          fs.mkdirSync(path.dirname(dst), { recursive: true })
+          fs.copyFileSync(src, dst)
+        }
+      }
+      copyRecursive(source, destination)
+      return { success: true }
+    } catch (err: any) { reply.status(500).send(err.message) }
+  })
+
+  server.post<{ Body: { path: string } }>('/project/folder', async (req, reply) => {
+    const { path: folderPath } = req.body
+    if (!folderPath) { reply.status(400).send('No path'); return }
+    try { fs.mkdirSync(folderPath, { recursive: true }); return { success: true } }
+    catch (err: any) { reply.status(500).send(err.message) }
+  })
+
+  server.get<{ Querystring: { path: string } }>('/project/file/exists', async (req) => {
+    const { path: filePath } = req.query
+    if (!filePath) return { exists: false }
+    return { exists: fs.existsSync(filePath), isDir: fs.existsSync(filePath) && fs.statSync(filePath).isDirectory() }
+  })
+
   // ── Git ────────────────────────────────────────────────────────────────────
   server.get<{ Params: { sessionId: string } }>('/project/:sessionId/git/status', async (req) => { const s = getSession(req.params.sessionId); if (!s?.rootPath) return { isRepo: false }; return { isRepo: true, status: getStatus(s.rootPath) } })
   server.get<{ Params: { sessionId: string }; Querystring: { limit?: string; branch?: string } }>('/project/:sessionId/git/log', async (req) => { const s = getSession(req.params.sessionId); if (!s?.rootPath) return { commits: [] }; return { commits: getLog(s.rootPath, Math.min(parseInt(req.query.limit ?? '50'), 200), req.query.branch ?? '') } })

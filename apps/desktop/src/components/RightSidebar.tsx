@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from 'react'
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import {
   ChevronRight, ChevronDown, Bot, LayoutDashboard,
   Plus, Loader, File, Folder, FolderOpen, Search, Network,
@@ -44,40 +44,253 @@ function fileColor(ext: string): string {
   return m[ext]??'var(--text-muted)'
 }
 
-function FileTreeNode({ node, depth=0, filter }: { node:TreeNode; depth?:number; filter:string }) {
-  const [open,setOpen] = useState(depth<2)
-  const activeSessionId = useAppStore(s=>s.activeSessionId)
-  const openFileFn      = useAppStore(s=>s.openFile)
-  if (!nodeMatchesFilter(node,filter)) return null
-  const indent = depth*12
+// ── Context menu ──────────────────────────────────────────────────────────────
+interface CtxMenu { x: number; y: number; node: TreeNode }
+
+function ContextMenu({ menu, onClose, onAction }: {
+  menu: CtxMenu
+  onClose: () => void
+  onAction: (action: string, node: TreeNode) => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    function handle(e: MouseEvent) { if (ref.current && !ref.current.contains(e.target as Node)) onClose() }
+    document.addEventListener('mousedown', handle)
+    return () => document.removeEventListener('mousedown', handle)
+  }, [])
+
+  // Adjust position so menu doesn't overflow viewport
+  const menuW = 200, menuH = 280
+  const x = Math.min(menu.x, window.innerWidth  - menuW - 8)
+  const y = Math.min(menu.y, window.innerHeight - menuH - 8)
+
+  const SEP = 'separator'
+  const items: Array<{ label: string; action: string; danger?: boolean } | typeof SEP> = [
+    { label: 'New File',       action: 'new_file' },
+    { label: 'New Folder',     action: 'new_folder' },
+    SEP,
+    { label: 'Open',           action: 'open' },
+    { label: 'Rename',         action: 'rename' },
+    SEP,
+    { label: 'Copy',           action: 'copy' },
+    { label: 'Cut',            action: 'cut' },
+    { label: 'Paste',          action: 'paste' },
+    { label: 'Duplicate',      action: 'duplicate' },
+    SEP,
+    { label: 'Copy Path',      action: 'copy_path' },
+    { label: 'Copy Rel. Path', action: 'copy_rel_path' },
+    SEP,
+    { label: 'Delete',         action: 'delete', danger: true },
+  ]
+
+  return (
+    <div ref={ref} style={{
+      position: 'fixed', left: x, top: y, zIndex: 9999,
+      background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+      borderRadius: 8, padding: '4px 0', minWidth: menuW,
+      boxShadow: '0 8px 32px rgba(0,0,0,0.6)', userSelect: 'none',
+    }}>
+      <div style={{ padding: '4px 12px 6px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: menuW - 24 }}>
+        {menu.node.name}
+      </div>
+      {items.map((item, i) =>
+        item === SEP
+          ? <div key={i} style={{ height: 1, background: 'var(--border)', margin: '2px 0' }}/>
+          : <button key={item.action} onClick={() => { onAction(item.action, menu.node); onClose() }}
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 14px', background: 'none', border: 'none', color: item.danger ? 'var(--red)' : 'var(--text-secondary)', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}
+              onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)'}
+              onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'none'}
+            >{item.label}</button>
+      )}
+    </div>
+  )
+}
+
+// ── Inline rename input ──────────────────────────────────────────────────
+function InlineInput({ defaultValue, indent, onCommit, onCancel }: {
+  defaultValue: string; indent: number; onCommit: (val: string) => void; onCancel: () => void
+}) {
+  const [val, setVal] = useState(defaultValue)
+  const ref = useRef<HTMLInputElement>(null)
+  useEffect(() => { ref.current?.focus(); ref.current?.select() }, [])
+  function commit() { const v = val.trim(); if (v && v !== defaultValue) onCommit(v); else onCancel() }
+  return (
+    <div style={{ padding: `2px 8px 2px ${8 + indent}px` }}>
+      <input ref={ref} value={val} onChange={e => setVal(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') onCancel() }}
+        onBlur={commit}
+        style={{ width: '100%', background: 'var(--bg-primary)', border: '1px solid var(--accent)', borderRadius: 4, padding: '2px 6px', color: 'var(--text-primary)', fontSize: 12, outline: 'none', boxSizing: 'border-box' }}
+      />
+    </div>
+  )
+}
+
+// ── File tree node with full VSCode-style interactions ───────────────────────
+function FileTreeNode({ node, depth=0, filter, clipboard, onClipboard, onRefresh, rootPath }: {
+  node: TreeNode; depth?: number; filter: string
+  clipboard: { node: TreeNode; mode: 'copy'|'cut' } | null
+  onClipboard: (c: { node: TreeNode; mode: 'copy'|'cut' } | null) => void
+  onRefresh: () => void
+  rootPath: string
+}) {
+  const [open,       setOpen]       = useState(depth < 2)
+  const [ctx,        setCtx]        = useState<CtxMenu | null>(null)
+  const [renaming,   setRenaming]   = useState(false)
+  const [newItem,    setNewItem]    = useState<'file'|'folder'|null>(null)
+  const activeSessionId = useAppStore(s => s.activeSessionId)
+  const openFileFn      = useAppStore(s => s.openFile)
+
+  if (!nodeMatchesFilter(node, filter)) return null
+  const indent = depth * 12
+
+  const isCut = clipboard?.mode === 'cut' && clipboard.node.path === node.path
+
+  async function doDelete() {
+    if (!confirm(`Delete "${node.name}"? This cannot be undone.`)) return
+    await fetch(`http://localhost:3001/project/file?path=${encodeURIComponent(node.path)}`, { method: 'DELETE' })
+    onRefresh()
+  }
+
+  async function doRename(newName: string) {
+    const dir = node.path.replace(/\/[^\/]+$/, '')
+    const dst = `${dir}/${newName}`
+    await fetch('http://localhost:3001/project/file/move', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source: node.path, destination: dst }),
+    })
+    setRenaming(false)
+    onRefresh()
+  }
+
+  async function doNew(name: string, isDir: boolean) {
+    const base = node.isDir ? node.path : node.path.replace(/\/[^\/]+$/, '')
+    const dst  = `${base}/${name}`
+    if (isDir) {
+      await fetch('http://localhost:3001/project/folder', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: dst }),
+      })
+    } else {
+      await fetch('http://localhost:3001/project/file', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: dst, content: '' }),
+      })
+    }
+    setNewItem(null)
+    onRefresh()
+    if (!isDir) { if (activeSessionId) openFileFn(activeSessionId, dst) }
+  }
+
+  async function doPaste() {
+    if (!clipboard) return
+    const dir = node.isDir ? node.path : node.path.replace(/\/[^\/]+$/, '')
+    const dst = `${dir}/${clipboard.node.name}`
+    const endpoint = clipboard.mode === 'cut' ? 'http://localhost:3001/project/file/move' : 'http://localhost:3001/project/file/copy'
+    await fetch(endpoint, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source: clipboard.node.path, destination: dst }),
+    })
+    if (clipboard.mode === 'cut') onClipboard(null)
+    onRefresh()
+  }
+
+  async function doDuplicate() {
+    const ext  = node.isDir ? '' : (node.name.includes('.') ? '.' + node.name.split('.').pop() : '')
+    const base = node.isDir ? node.name : node.name.slice(0, node.name.length - ext.length)
+    const dir  = node.path.replace(/\/[^\/]+$/, '')
+    let dst = `${dir}/${base}_copy${ext}`
+    let i = 1
+    while (true) {
+      const res = await fetch(`http://localhost:3001/project/file/exists?path=${encodeURIComponent(dst)}`)
+      const { exists } = await res.json()
+      if (!exists) break
+      dst = `${dir}/${base}_copy${i++}${ext}`
+    }
+    await fetch('http://localhost:3001/project/file/copy', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source: node.path, destination: dst }),
+    })
+    onRefresh()
+  }
+
+  function handleAction(action: string, n: TreeNode) {
+    switch (action) {
+      case 'open':         if (activeSessionId && !n.isDir) openFileFn(activeSessionId, n.path); break
+      case 'rename':       setRenaming(true); break
+      case 'new_file':     setOpen(true); setNewItem('file'); break
+      case 'new_folder':   setOpen(true); setNewItem('folder'); break
+      case 'copy':         onClipboard({ node: n, mode: 'copy' }); break
+      case 'cut':          onClipboard({ node: n, mode: 'cut'  }); break
+      case 'paste':        doPaste(); break
+      case 'duplicate':    doDuplicate(); break
+      case 'delete':       doDelete(); break
+      case 'copy_path':    navigator.clipboard.writeText(n.path); break
+      case 'copy_rel_path':navigator.clipboard.writeText(n.path.replace(rootPath + '/', '')); break
+    }
+  }
+
+  const sharedProps = {
+    onContextMenu: (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); setCtx({ x: e.clientX, y: e.clientY, node }) },
+  }
+
   if (node.isDir) {
     const isOpen = filter ? true : open
     return (
       <div>
-        <div onClick={()=>setOpen(!open)}
-          style={{display:'flex',alignItems:'center',gap:4,padding:`3px 8px 3px ${8+indent}px`,cursor:'pointer',fontSize:12,color:'var(--text-secondary)',userSelect:'none'}}
+        {ctx && <ContextMenu menu={ctx} onClose={() => setCtx(null)} onAction={handleAction}/>}
+        <div {...sharedProps}
+          onClick={() => setOpen(!open)}
+          style={{ display:'flex', alignItems:'center', gap:4, padding:`3px 8px 3px ${8+indent}px`, cursor:'pointer', fontSize:12, color:'var(--text-secondary)', userSelect:'none', opacity: isCut ? 0.4 : 1 }}
           onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background='var(--bg-hover)'}
           onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background='transparent'}>
           {isOpen?<ChevronDown size={11} style={{flexShrink:0,opacity:0.6}}/>:<ChevronRight size={11} style={{flexShrink:0,opacity:0.6}}/>}
           {isOpen?<FolderOpen size={13} style={{flexShrink:0,color:'#dcb67a'}}/>:<Folder size={13} style={{flexShrink:0,color:'#dcb67a'}}/>}
-          <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{node.name}</span>
+          {renaming
+            ? <InlineInput defaultValue={node.name} indent={0} onCommit={doRename} onCancel={() => setRenaming(false)}/>
+            : <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{node.name}</span>
+          }
         </div>
-        {isOpen && node.children.map(c=><FileTreeNode key={c.path} node={c} depth={depth+1} filter={filter}/>)}
+        {isOpen && (
+          <div>
+            {newItem && (
+              <InlineInput
+                defaultValue={newItem === 'file' ? 'newfile.ts' : 'newfolder'}
+                indent={indent + 12}
+                onCommit={v => doNew(v, newItem === 'folder')}
+                onCancel={() => setNewItem(null)}
+              />
+            )}
+            {node.children.map(c => (
+              <FileTreeNode key={c.path} node={c} depth={depth+1} filter={filter}
+                clipboard={clipboard} onClipboard={onClipboard} onRefresh={onRefresh} rootPath={rootPath}/>
+            ))}
+          </div>
+        )}
       </div>
     )
   }
-  const ext=node.name.split('.').pop()??''
-  const col=fileColor(ext)
-  const hl=!!(filter&&node.name.toLowerCase().includes(filter.toLowerCase()))
+
+  const ext = node.name.split('.').pop() ?? ''
+  const col = fileColor(ext)
+  const hl  = !!(filter && node.name.toLowerCase().includes(filter.toLowerCase()))
   return (
-    <div
-      style={{display:'flex',alignItems:'center',gap:5,padding:`3px 8px 3px ${22+indent}px`,cursor:'pointer',fontSize:12,color:hl?'var(--accent)':node.isNew?'var(--green)':'var(--text-secondary)',background:hl?'var(--accent-dim)':'transparent'}}
-      onClick={()=>{ if(activeSessionId) openFileFn(activeSessionId,node.path) }}
-      onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background=hl?'var(--accent-dim)':'var(--bg-hover)'}
-      onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background=hl?'var(--accent-dim)':'transparent'}>
-      <File size={12} style={{flexShrink:0,color:col}}/>
-      <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}}>{node.name}</span>
-      {node.isNew&&<span style={{fontSize:9,color:'var(--green)',flexShrink:0}}>M</span>}
+    <div>
+      {ctx && <ContextMenu menu={ctx} onClose={() => setCtx(null)} onAction={handleAction}/>}
+      {renaming && (
+        <InlineInput defaultValue={node.name} indent={indent}
+          onCommit={doRename} onCancel={() => setRenaming(false)}/>
+      )}
+      {!renaming && (
+        <div {...sharedProps}
+          style={{ display:'flex', alignItems:'center', gap:5, padding:`3px 8px 3px ${22+indent}px`, cursor:'pointer', fontSize:12, color:hl?'var(--accent)':node.isNew?'var(--green)':'var(--text-secondary)', background:hl?'var(--accent-dim)':'transparent', opacity: isCut ? 0.4 : 1 }}
+          onClick={() => { if (activeSessionId) openFileFn(activeSessionId, node.path) }}
+          onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background=hl?'var(--accent-dim)':'var(--bg-hover)'}
+          onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background=hl?'var(--accent-dim)':'transparent'}>
+          <File size={12} style={{flexShrink:0,color:col}}/>
+          <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}}>{node.name}</span>
+          {node.isNew&&<span style={{fontSize:9,color:'var(--green)',flexShrink:0}}>M</span>}
+        </div>
+      )}
     </div>
   )
 }
@@ -417,12 +630,15 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
   const [showSearch,     setShowSearch]     = useState(false)
   const [explorerOpen,   setExplorerOpen]   = useState(true)
   const [gitOpen,        setGitOpen]        = useState(true)
+  const [clipboard,      setClipboard]      = useState<{ node: TreeNode; mode: 'copy'|'cut' } | null>(null)
+  const [refreshTick,    setRefreshTick]    = useState(0)
+  const doRefresh = useCallback(() => setRefreshTick(t => t + 1), [])
 
   const allFiles    = session?.allFiles    ?? []
   const written     = session?.writtenFiles ?? []
   const mergedFiles = useMemo(()=>[...new Set([...allFiles,...written])],[allFiles.join(','),written.join(',')]) // eslint-disable-line
   const newFileSet  = useMemo(()=>new Set(written),[written.join(',')]) // eslint-disable-line
-  const tree        = useMemo(()=>session?.rootPath?buildTree(mergedFiles,session.rootPath,newFileSet):[],[mergedFiles.join(','),session?.rootPath,written.join(',')]) // eslint-disable-line
+  const tree        = useMemo(()=>session?.rootPath?buildTree(mergedFiles,session.rootPath,newFileSet):[],[mergedFiles.join(','),session?.rootPath,written.join(','),refreshTick]) // eslint-disable-line
 
   const hasRunning = session?.agents.some(a=>a.status==='running')
 
@@ -541,10 +757,21 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
                 style={{flex:1,background:'var(--bg-tertiary)',border:'none',borderRadius:4,padding:'2px 6px',color:'var(--text-primary)',fontSize:11,outline:'none'}}/>
             )}
           </div>
+          {/* Clipboard indicator */}
+          {clipboard && (
+            <div style={{ display:'flex', alignItems:'center', gap:6, padding:'3px 8px', background:'rgba(139,92,246,0.1)', borderBottom:'1px solid var(--border)', fontSize:11, color:'var(--accent)', flexShrink:0 }}>
+              <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                {clipboard.mode === 'cut' ? '✂' : '⎘'} {clipboard.node.name}
+              </span>
+              <button onClick={() => setClipboard(null)} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', display:'flex', padding:0, fontSize:12 }}>✕</button>
+            </div>
+          )}
           <div style={{flex:1,overflowY:'auto',overflowX:'hidden',paddingBottom:4}}>
             {tree.length===0
               ?<div style={{padding:'10px 12px',fontSize:11,color:'var(--text-muted)'}}>{session?.rootPath?'No files yet':'Open a project to see files'}</div>
-              :tree.map(n=><FileTreeNode key={n.path} node={n} depth={0} filter={fileSearch}/>)
+              :tree.map(n=><FileTreeNode key={n.path} node={n} depth={0} filter={fileSearch}
+                  clipboard={clipboard} onClipboard={setClipboard} onRefresh={doRefresh} rootPath={session?.rootPath??''}
+                />)
             }
           </div>
         </SidebarSection>
