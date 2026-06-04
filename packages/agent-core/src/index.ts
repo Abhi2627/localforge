@@ -248,6 +248,42 @@ async function bootstrap() {
 
   // ── Health ─────────────────────────────────────────────────────────────────
   server.get('/health', async () => ({ status: 'ok', mode: taskQueue.currentMode, shell: DEFAULT_SHELL }))
+
+  // ── Git direct (rootPath-based, bypasses DB lookup) ─────────────────────────
+  // Used when session may not yet be persisted in SQLite (race condition on first open)
+  server.get<{ Querystring: { rootPath: string } }>('/git/direct/status', async (req) => {
+    const p = req.query.rootPath; if (!p) return { isRepo: false }
+    return { isRepo: true, status: getStatus(p) }
+  })
+  server.get<{ Querystring: { rootPath: string; limit?: string; branch?: string } }>('/git/direct/log', async (req) => {
+    const p = req.query.rootPath; if (!p) return { commits: [] }
+    return { commits: getLog(p, Math.min(parseInt(req.query.limit ?? '100'), 500), req.query.branch ?? '') }
+  })
+  server.get<{ Querystring: { rootPath: string } }>('/git/direct/branches', async (req) => {
+    const p = req.query.rootPath; if (!p) return { branches: [] }
+    return { branches: getBranches(p) }
+  })
+  server.get<{ Querystring: { rootPath: string; file?: string; staged?: string } }>('/git/direct/diff', async (req) => {
+    const p = req.query.rootPath; if (!p) return { diffs: [] }
+    return { diffs: getDiff(p, req.query.file, req.query.staged === 'true') }
+  })
+
+  // Returns the committed (HEAD) or staged version of a file — used for full-file diff view
+  server.get<{ Querystring: { rootPath: string; file: string; staged?: string } }>('/git/direct/file-at-head', async (req) => {
+    const { rootPath: p, file, staged } = req.query
+    if (!p || !file) return { content: '' }
+    try {
+      const ref = staged === 'true' ? `:${file}` : `HEAD:${file}`
+      const content = execSync(`git show "${ref}"`, {
+        cwd: p, encoding: 'utf8', timeout: 8000,
+        maxBuffer: 1024 * 1024 * 10,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      })
+      return { content }
+    } catch {
+      return { content: '' }  // new file — no HEAD version
+    }
+  })
   server.get('/system', async () => profileSystem())
   server.post<{ Body: { mode: 'sequential'|'parallel'; maxParallel?: number } }>('/system/mode', async (req) => { taskQueue.setMode(req.body.mode, req.body.maxParallel); saveConfig({ executionMode: req.body.mode, maxParallel: req.body.maxParallel ?? 1 }); return { success: true } })
   server.get('/network/info', async () => ({ lanIp: LAN_IP, hostname: os.hostname(), platform: os.platform() }))

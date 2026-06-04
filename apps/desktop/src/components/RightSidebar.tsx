@@ -838,7 +838,7 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
           onToggle={() => setGitOpen(v=>!v)}
         >
           {session?.rootPath
-            ?<GitPanel sessionId={session.id}/>
+            ?<GitPanel sessionId={session.id} rootPath={session.rootPath}/>
             :<div style={{padding:'10px 12px',fontSize:11,color:'var(--text-muted)'}}>Open a project to see git status</div>
           }
         </SidebarSection>

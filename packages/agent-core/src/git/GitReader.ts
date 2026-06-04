@@ -97,6 +97,8 @@ function parseStatusChar(char: string): FileChange['status'] {
 }
 
 // ── Status ────────────────────────────────────────────────────────────────────
+// Uses -z (NUL-terminated output) so filenames with spaces are never mangled.
+// Format: XY<space>filename<NUL>  —  renames: XY<space>newname<NUL>oldname<NUL>
 
 export function getStatus(rootPath: string): GitStatus | null {
   if (!isGitRepo(rootPath)) return null
@@ -105,17 +107,35 @@ export function getStatus(rootPath: string): GitStatus | null {
   const unstaged:  FileChange[] = []
   const untracked: string[]     = []
 
-  const porcelain = run('git status --porcelain=v1 -u', rootPath)
-  for (const line of porcelain.split('\n').filter(Boolean)) {
-    const X = line[0], Y = line[1]
-    const rest = line.slice(3)
-    const parts = rest.split(' -> ')
-    const file    = parts.length > 1 ? parts[1] : parts[0]
-    const oldFile = parts.length > 1 ? parts[0] : undefined
+  const raw = run('git status --porcelain=v1 -u -z', rootPath)
+  if (!raw) return buildCleanStatus(rootPath)
 
-    if (X === '?' && Y === '?') { untracked.push(file); continue }
-    if (X !== ' ' && X !== '?') staged.push({ status: parseStatusChar(X), file, oldFile })
+  // Split on NUL — each token is one porcelain entry
+  const entries = raw.split('\0').filter(Boolean)
+  let i = 0
+  while (i < entries.length) {
+    const entry = entries[i]
+    if (entry.length < 3) { i++; continue }
+
+    const X    = entry[0]   // index (staged) status char
+    const Y    = entry[1]   // worktree (unstaged) status char
+    const file = entry.slice(3)  // col 0-1 = XY, col 2 = space, col 3+ = filename
+
+    if (X === '?' && Y === '?') {
+      untracked.push(file)
+      i++; continue
+    }
+
+    if ((X === 'R' || X === 'C') && i + 1 < entries.length) {
+      // Rename/copy: next NUL-token is the original filename
+      const oldFile = entries[i + 1]
+      staged.push({ status: parseStatusChar(X), file, oldFile })
+      i += 2; continue
+    }
+
+    if (X !== ' ' && X !== '?') staged.push({ status: parseStatusChar(X), file })
     if (Y !== ' ' && Y !== '?') unstaged.push({ status: parseStatusChar(Y), file })
+    i++
   }
 
   const branch   = run('git rev-parse --abbrev-ref HEAD', rootPath) || 'HEAD'
@@ -130,28 +150,50 @@ export function getStatus(rootPath: string): GitStatus | null {
     behind = isNaN(b) ? 0 : b
   }
 
-  return { branch, upstream, ahead, behind, staged, unstaged, untracked, isClean: staged.length === 0 && unstaged.length === 0 && untracked.length === 0 }
+  return { branch, upstream, ahead, behind, staged, unstaged, untracked,
+    isClean: staged.length === 0 && unstaged.length === 0 && untracked.length === 0 }
+}
+
+function buildCleanStatus(rootPath: string): GitStatus {
+  const branch = run('git rev-parse --abbrev-ref HEAD', rootPath) || 'HEAD'
+  return { branch, ahead: 0, behind: 0, staged: [], unstaged: [], untracked: [], isClean: true }
 }
 
 // ── Log ───────────────────────────────────────────────────────────────────────
+// Uses ASCII unit-separator (0x1f) and record-separator (0x1e) instead of NUL bytes.
+// NUL bytes in the format string cause Node's execSync to throw — that's why log
+// was always returning [].
 
 export function getLog(rootPath: string, limit = 50, branch = ''): Commit[] {
   if (!isGitRepo(rootPath)) return []
 
-  const S = '\x00', RS = '\x01'
-  const fmt = `%h${S}%H${S}%an${S}%ae${S}%aI${S}%D${S}%s`
-  const ref  = branch || ''
-  const raw  = run(`git log --format="${fmt}${RS}" -n ${limit} ${ref}`, rootPath)
+  // 0x1f = ASCII Unit Separator, 0x1e = ASCII Record Separator
+  // These never appear in commit metadata and are safe to pass through the shell.
+  const FS  = '\x1f'
+  const RS  = '\x1e'
+  const fmt = `%h${FS}%H${FS}%an${FS}%ae${FS}%aI${FS}%D${FS}%s`
+  const ref = branch || ''
+  const raw = run(`git log --format="${fmt}${RS}" -n ${limit} ${ref}`, rootPath)
   if (!raw) return []
 
-  return raw.split(RS).filter(Boolean).map(entry => {
-    const [hash, fullHash, author, email, date, refsRaw, ...msg] = entry.trim().split(S)
-    return {
-      hash, fullHash, author, email, date,
-      message: msg.join(S).trim(),
-      refs: refsRaw ? refsRaw.split(', ').filter(Boolean) : [],
-    }
-  }).filter(c => c.hash)
+  return raw
+    .split(RS)
+    .filter(Boolean)
+    .map(entry => {
+      const parts   = entry.trim().split(FS)
+      const hash    = parts[0]?.trim() ?? ''
+      if (!hash) return null
+      return {
+        hash,
+        fullHash: parts[1]?.trim() ?? '',
+        author:   parts[2]?.trim() ?? '',
+        email:    parts[3]?.trim() ?? '',
+        date:     parts[4]?.trim() ?? '',
+        message:  parts[6]?.trim() ?? '',
+        refs:     parts[5] ? parts[5].split(', ').map(r => r.trim()).filter(Boolean) : [],
+      } satisfies Commit
+    })
+    .filter((c): c is Commit => c !== null && c.hash.length > 0)
 }
 
 // ── Branches ──────────────────────────────────────────────────────────────────

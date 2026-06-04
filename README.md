@@ -14,7 +14,7 @@ LocalForge is a purpose-built desktop IDE for AI-assisted development. It combin
 
 **Core principles:**
 - Local-first: everything works offline with Ollama
-- Cloud-optional: plug in Gemini, Claude, or OpenAI for heavier tasks
+- Cloud-optional: plug in Gemini, Claude, OpenAI, or Groq for heavier tasks
 - Production-ready: not a demo — ships features agents can actually write and apply to disk
 
 ---
@@ -27,7 +27,7 @@ LocalForge is a purpose-built desktop IDE for AI-assisted development. It combin
 | Agent server | Fastify + TypeScript |
 | Persistence | SQLite via better-sqlite3 |
 | Local inference | Ollama (OpenAI-compatible API) |
-| Cloud inference | OpenAI-compatible (Gemini, Claude, OpenAI, Groq) |
+| Cloud inference | Gemini, Claude, OpenAI, Groq (OpenAI-compatible) |
 | Terminal | xterm.js + node-pty |
 | MCP | @modelcontextprotocol/sdk |
 
@@ -56,128 +56,179 @@ cd apps/desktop && npm run dev
 
 ## What's Built ✅
 
-### Core infrastructure
-- Tauri 2.0 monorepo (apps/desktop + packages/agent-core)
+### Core Infrastructure
+- Tauri 2.0 monorepo (`apps/desktop` + `packages/agent-core`)
 - Fastify agent server with full TypeScript
-- SQLite session persistence (chats + projects survive restart)
+- SQLite session persistence — chats and projects survive restarts
 - Ollama client with model fallback chain
-- Hardware-aware task scheduler (auto sequential/parallel)
-- MCP filesystem integration
+- MCP filesystem integration (auto-connects on project open)
+- Hardware-aware task scheduler (auto sequential/parallel based on RAM)
 
 ### Cloud LLM Integration
-- Unified LLM client routing to Ollama or cloud transparently
-- Supported providers: Gemini, OpenAI, Claude, Groq, Custom (OpenAI-compatible)
-- Settings page: API key management, temperature, max tokens, system prompt, context length
+- Unified LLM client routing to Ollama or cloud providers transparently
+- Supported providers: Gemini Flash, OpenAI GPT-4o, Claude, Groq (free tier), Custom (OpenAI-compatible)
+- Settings: API key management, temperature, max tokens, system prompt, context length
 - Per-chat model selector in the input bar — only shows providers with saved API keys
 - Internet connectivity detection — cloud providers auto-disabled when offline
 
-### Desktop UI
-- VSCode-style layout: TopBar, LeftBar, ChatPanel, RightSidebar, TerminalPanel
-- Chat mode with SSE streaming, Markdown rendering, per-message copy/edit/regenerate
-- Auto-generated session titles, timestamps
-- Per-session model selector beside the mic button (like Claude)
-- Tab strip with auto-evict
-- Left sidebar: Chats + Projects history, rename, delete (persists across restarts via localStorage)
-- Right sidebar: File Explorer, Git panel, API Contracts, Agents, Knowledge Graph, Project Graph
-- Integrated terminal (xterm.js + node-pty, multi-tab)
-- Responsive layout (auto-collapse sidebars on resize)
+### Chat Features
+- SSE streaming with Markdown rendering (tables, code blocks, lists, headers)
+- File attach: click paperclip to inject `.ts`, `.py`, `.md`, `.json`, `.txt` etc. into context
+- File chips clickable in chat — opens preview popup (name, size, scrollable content)
+- Agent file write + apply: model proposes files using `write:path` syntax, rendered as Apply/Reject cards
+  - Deterministic patch IDs — applied state persists across page reloads (localStorage)
+  - Fallback parser: detects plain code blocks when model ignores the `write:` format
+  - Diff preview with expand chevron before applying
+- MCP indicator in project chat title bar (green = connected, blinking red = connecting)
+- Project chat grounded in real files: README.md + key config files injected into every message context
+- Auto-generated session titles, per-message copy/edit/regenerate
+- Export chat as `.txt` (plain text, opens on any OS) via Tauri save dialog with toast notifications
+- Scroll-to-bottom button (appears when user scrolls up mid-stream, sits above input bar)
 
-### Intelligence layer
-- Knowledge Graph (TS/JS/Python/Rust symbol extractor, conflict detection, agent context injection)
-- API Contract Enforcer (fetch/axios calls vs Express/Fastify routes, violation detection)
-- Model Advisor (latency/TPS tracking, error log, smart suggestions)
+### Right Sidebar (VSCode-style)
+- **Row 1:** Project title div (folder name, loading spinner)
+- **Row 2:** 4 horizontal icon buttons — each opens a full-screen modal window:
+  - **Knowledge Graph** (Network icon): symbol browser with search, kind filter, conflict detection
+  - **Project Graph** (Layout icon): interactive component dependency graph
+  - **Agents** (Bot icon): agent list with status, running indicator dot, add agent
+  - **API Contracts** (Branch icon): frontend call vs backend route matching, violation detection
+- **File Explorer:** collapsible, takes full space when only section open, 50/50 split when both open
+  - Full VSCode-style file management via right-click context menu:
+    - New File, New Folder (inline input, Enter to confirm, Escape to cancel)
+    - Rename (inline input replaces filename in-place)
+    - Copy, Cut, Paste (clipboard strip shown above tree with ✂/⎘ indicator)
+    - Duplicate (auto-increments `_copy`, `_copy1` to avoid conflicts)
+    - Copy Path, Copy Relative Path
+    - Delete (confirmation dialog, immediately removes from tree)
+  - Files applied via chat Apply button appear in tree immediately (CustomEvent bridge)
+  - Files deleted from tree are immediately hidden (local `deletedPaths` set, no store rescan needed)
+  - File search via magnifier button
+- **Source Control:** collapsible git panel
+  - Auto-reloads every 3s (no manual refresh button) — detects `git commit`, `git push`, `git add`
+  - Staged / Unstaged / Untracked sections with status badges (M/A/D/R)
+  - Commit log with relative timestamps, author, ref badges
+  - Branch list (local + remote)
+  - Click any changed file → opens **side-by-side diff view** in the main editor area
+- **Collapsed strip:** 6 icons when sidebar is narrow — 4 open modals directly, 2 expand the sidebar
+
+### Main Editor Area
+- `FileEditorPanel`: syntax-highlighted code editor (token-based, no Monaco dependency)
+  - Line numbers, copy button, Cmd+S to save, Tab → 2 spaces
+  - Supported languages: TS, TSX, JS, JSX, Python, JSON, CSS, SCSS, HTML, Shell, Rust, Go
+- `DiffEditorPanel`: VSCode-style side-by-side diff viewer (opens when git file is clicked)
+  - Left column = before (red removed lines), Right column = after (green added lines)
+  - Both columns scroll in sync, line number gutters, `+`/`-` markers
+  - Hunk headers with purple accent, staged/unstaged badge, `+N -N` change count
+  - File navigator for multi-file diffs
+- File tabs above editor — Chat tab always visible, open files listed with × to close
+
+### Left Bar
+- Chats section (collapsible, New Chat button)
+- Projects section (collapsible, Open Project button)
+- Extensions placeholder
+- Collapsed state: all icons expand the sidebar on click with accent hover effect
+- Per-session rename and delete with timestamps in context menu
+- Deleted sessions blacklisted in localStorage — never reappear after restart
+
+### Welcome Screen
+- Vertically centred greeting with username (`Welcome onboard, {name}`)
+- New Chat + New Project buttons
+- 3 rows of horizontally auto-scrolling feature cards with edge fade masks
+- Left bar starts collapsed on launch for full-width welcome view
+
+### Intelligence Layer
+- Knowledge Graph: TS/JS/Python/Rust symbol extractor, conflict detection, agent context injection
+- API Contract Enforcer: fetch/axios calls vs Express/Fastify routes, violation detection
+- Model Advisor: latency/TPS tracking, error log, smart suggestions
+
+### Server File Management API
+- `POST /project/file` — create or overwrite a file
+- `DELETE /project/file?path=...` — delete file or folder (recursive)
+- `POST /project/file/move` — rename or move
+- `POST /project/file/copy` — copy file/folder recursively
+- `POST /project/folder` — create new folder
+- `GET /project/file/exists` — check path existence (used for duplicate naming)
+- `GET /mcp/status?path=...` — check MCP connection status
+- `POST /mcp/connect` — connect MCP to a project path
 
 ### UX & Polish
 - RAM error detection: shows actionable in-chat message when Ollama runs out of memory
-- Real internet connectivity via `navigator.onLine` + native events (instant, no external fetch)
-- Deleted sessions blacklisted in localStorage — never reappear after restart
-- Git panel (status, staged/unstaged, commit log, branch view, inline diff)
-- QR preview (LAN IP detection, port picker)
-- "Scroll to bottom" button appears when user scrolls up during streaming
+- Toast notification system: slide-up pill for export status (info/success/error)
+- Cut items shown at 40% opacity while on clipboard
+- Clipboard indicator strip above file tree with ✂/⎘ and × to clear
 
 ---
 
 ## Roadmap
 
-### Phase 4 — In Progress 🔥
+### Phase 4 — Completed ✅
 
-#### 4B — File Attach
-- [ ] Drag-and-drop files into chat (read content into context: .ts, .py, .md, .json, .txt)
-- [ ] Image attach for vision-capable models (LLaVA, Gemini Vision, GPT-4o)
-- [ ] File preview before send (name, size, type)
-- [ ] Context-aware injection into system prompt
-
-#### 4C — Agent File Write + Apply
-- [ ] Agents propose file changes with full diff preview
-- [ ] Apply / Reject / Edit per file before writing to disk
-- [ ] Multi-file patch: agent proposes N files, user reviews batch
-- [ ] Write history log with undo
-
-#### 4D — Ollama Model Management UI
-- [ ] List installed models with size and quantization
-- [ ] Pull new models from within the app (`ollama pull <model>`)
-- [ ] Real-time download progress bar
-- [ ] Delete models, filter by capability (code/chat/vision)
-
-#### 4E — Right Sidebar Redesign
-- [ ] Replace accordion sections with 4 horizontal icon buttons below project name
-- [ ] Each icon opens a floating modal (Project Graph, Knowledge Graph, Agents, API Contracts)
-- [ ] Modals are resizable and dismissable
-
-#### 4F — Export Chat
-- [ ] Export chat as Markdown (.md)
-- [ ] Export chat as PDF
-- [ ] Copy full conversation to clipboard
-
-#### 4G — Settings: Local vs Cloud Split
-- [ ] Separate "Local Models" section (Ollama only) from "Cloud Providers" in Settings
-- [ ] Local Models section shows installed models, usage tips, RAM requirements
+| Feature | Status |
+|---|---|
+| 4B File Attach | ✅ Done |
+| 4C Agent file write + apply (with fallback parser) | ✅ Done |
+| 4D Ollama model management (in Settings) | ✅ Done |
+| 4E Right sidebar redesign (icon buttons + modals) | ✅ Done |
+| 4F Export chat as .txt | ✅ Done |
+| 4G Settings local/cloud split | ⬜ Pending (new features to add — planned next) |
 
 ---
 
-### Phase 5 — Future (Parked)
-
-These are real features but require significant infrastructure or third-party dependencies that are not yet stable enough in this environment:
+### Phase 5 — Future
 
 #### 5A — Math Rendering
 - LaTeX equation rendering via KaTeX (remark-math + rehype-katex)
-- Requires: CSS loading order fix in Vite/Tauri, font path resolution
-- Blocked by: KaTeX CSS not loading correctly in Tauri webview
+- Blocked by: KaTeX CSS not loading correctly in Tauri webview; font path resolution issues
 
 #### 5B — Web Search / RAG
-- `@web` trigger for live data queries
-- Blocked by: small local models (qwen2.5-coder) hallucinate party names and facts regardless of retrieved context
-- Real fix: use Gemini Flash or GPT-4o-mini for RAG queries — revisit after cloud providers are stable
+- `@web` trigger for live data queries (infrastructure partially built)
+- Blocked by: small local models hallucinate regardless of retrieved context
+- Fix: use Gemini Flash or GPT-4o-mini for RAG — revisit when cloud providers are stable
 
 #### 5C — Graph Visualization
-- Draw charts and graphs from data (like Gemini does)
-- Requires: chart.js or D3 integration, agent output parsing for structured data
+- Draw charts and graphs from data (chart.js or D3)
+- Requires: agent output parsing for structured data
 
 #### 5D — File Output (docx, drive)
 - Export responses as Word documents, save to Google Drive
 - Requires: docx generation library, OAuth integration
 
 #### 5E — Universal File Reading in Chat
-- Accept PDF, DOCX, XLSX, images (PNG, JPG, WEBP), and any text file as chat attachments
-- PDF: extract text via pdf-parse or pdfjs-dist, inject into model context
-- DOCX: extract text via mammoth.js
-- XLSX/CSV: convert to readable table format before injection
-- Images: pass as base64 to vision-capable models (Gemini Vision, GPT-4o, LLaVA)
-- Currently blocked: Ollama local models (qwen2.5-coder) do not support vision; PDF/DOCX parsing requires additional server-side libraries
-- Current state: only plain text files and code files are supported as attachments
-- Fix path: add `pdf-parse` + `mammoth` to agent-core, add vision routing for cloud providers, extend file type filter in ChatPanel
+- Accept PDF, DOCX, XLSX, images as chat attachments
+- PDF → text via `pdf-parse` / `pdfjs-dist`; DOCX → `mammoth.js`; images → base64 for vision models
+- Blocked by: Ollama local models do not support vision; PDF/DOCX parsing requires server-side libraries
+- Fix: add `pdf-parse` + `mammoth` to agent-core, add vision routing for cloud providers
 
-#### 5F — Agent Response Mode (direct action, no explanation)
-- Currently small local models (qwen2.5-coder 1.5b/7b) respond with step-by-step human instructions alongside the write block, because they are trained to explain rather than act
-- Desired behaviour: when a file write is requested, the model should output ONLY the `write:path` block and a one-line summary — no "Step 1", no "Navigate to", no shell commands
-- Fix path: requires either (a) a larger instruction-following model (>=14b parameters) that reliably follows strict system prompt rules, (b) a post-processing layer that strips explanatory text from responses that contain write blocks, or (c) fine-tuning a small model on agent-style action-only datasets
-- Short-term workaround: post-process agent responses — if a `write:` block is present, automatically hide the surrounding prose in the UI and show only a "File written" summary line
-- Blocked by: small local models ignoring system prompt formatting constraints regardless of instruction strength
+#### 5F — Agent Direct-Action Mode (no explanatory prose)
+- Small local models (qwen2.5-coder 1.5b/7b) write step-by-step instructions alongside `write:` blocks
+- Desired: model outputs ONLY the write block + one-line summary
+- Fix path:
+  - (a) Use a larger model (≥14b parameters) that reliably follows strict system prompt rules
+  - (b) Post-processing: if a `write:` block is present, hide surrounding prose in the UI
+  - (c) Fine-tune a small model on agent-action-only datasets
+- Blocked by: small local models ignoring system prompt formatting constraints
 
-#### 5G — Agent auto-apply mode
-- Option in Settings to auto-apply all `write:` blocks without requiring user confirmation
-- Useful for experienced users running batch code generation tasks
-- Should have a per-session toggle and a global default
+#### 5G — Agent Auto-Apply Mode
+- Option in Settings to auto-apply all `write:` blocks without user confirmation
+- Per-session toggle + global default
+- Should have a "Review mode" option to show a summary of what was applied
+
+#### 5H — Full-File Diff View
+- Currently: diff shows only changed hunks (git unified diff format, ~3 context lines each side)
+- Desired: show the complete file on both sides, with changed lines highlighted inline (like Monaco)
+- Fix: load full file content separately, apply diff decorations client-side
+- Blocked by: no Monaco editor embedded; requires building a custom line-diffing engine or integrating Monaco
+
+---
+
+## Known Limitations
+
+| Limitation | Detail |
+|---|---|
+| Small model format compliance | `qwen2.5-coder:1.5b/7b` often ignores the `write:path` format and writes instructions instead. The fallback parser handles most cases but is not 100% reliable. Use a ≥14b model or a cloud provider for best results. |
+| Git diff shows partial file | The diff view shows only changed regions (standard unified diff format). Full-file side-by-side diff requires Monaco or a custom diffing engine (Phase 5H). |
+| PDF/DOCX not supported in file attach | Only plain text and code files can be attached to chat. PDF/DOCX support is Phase 5E. |
+| Vision not supported for local models | Image attachments are parsed as filenames only for Ollama models. Vision support requires a cloud provider. |
 
 ---
 

@@ -684,7 +684,17 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
           </div>
           {(openFiles[session.id]??[]).map(file => {
             const isActive = currentActiveFile===file
-            const name = file.replace(/\\/g,'/').split('/').pop()??'file'
+            // For git-diff tabs, show a readable label instead of the raw path
+            let name: string
+            if (file.startsWith('git-diff::')) {
+              const parts  = file.split('::')
+              const fp     = parts[2] ?? 'diff'
+              const staged = parts[3] === 'true'
+              // Use plain ASCII brackets to avoid font rendering eating characters
+              name = `[diff] ${fp.split('/').pop() ?? fp}${staged ? ' +' : ''}`
+            } else {
+              name = file.replace(/\\/g,'/').split('/').pop() ?? 'file'
+            }
             return (
               <div key={file} onClick={() => setActiveFile(session.id, file)}
                 style={{ display:'flex', alignItems:'center', gap:5, padding:'3px 8px 3px 10px', borderRadius:4, background:isActive?'var(--bg-primary)':'transparent', border:`1px solid ${isActive?'var(--border)':'transparent'}`, color:isActive?'var(--text-primary)':'var(--text-secondary)', cursor:'pointer', fontSize:12, userSelect:'none', flexShrink:0 }}>
@@ -707,8 +717,16 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
         const sessId   = parts[1] ?? activeSessionId ?? ''
         const filePath = parts[2] ?? ''
         const staged   = parts[3] === 'true'
-        return <DiffEditorPanel sessionId={sessId} filePath={filePath} staged={staged}/>
-      })() : currentActiveFile ? <FileEditorPanel filePath={currentActiveFile}/> : (
+        return (
+          <div style={{ flex:1, overflow:'hidden', minHeight:0, display:'flex', flexDirection:'column' }}>
+            <DiffEditorPanel sessionId={sessId} filePath={filePath} staged={staged}/>
+          </div>
+        )
+      })() : currentActiveFile ? (
+        <div style={{ flex:1, overflow:'hidden', minHeight:0, display:'flex', flexDirection:'column' }}>
+          <FileEditorPanel filePath={currentActiveFile}/>
+        </div>
+      ) : (
         <>
           {/* Messages */}
           <div ref={scrollRef} onScroll={handleScroll}
