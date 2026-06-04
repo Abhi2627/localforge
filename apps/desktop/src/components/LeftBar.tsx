@@ -106,7 +106,7 @@ function SessionItem({ session }: { session: any }) {
   )
 }
 
-function ChatSection({ sessions, expanded }: { sessions: any[]; expanded: boolean }) {
+function ChatSection({ sessions, expanded, onExpand }: { sessions: any[]; expanded: boolean; onExpand: () => void }) {
   const [open, setOpen] = useState(true)
   const { addSession, setActiveSession } = useAppStore()
   const filtered = sessions.filter(s => s.type==='chat' && s.title && s.title.trim()!=='')
@@ -119,7 +119,9 @@ function ChatSection({ sessions, expanded }: { sessions: any[]; expanded: boolea
   }
 
   if (!expanded) return (
-    <button title="Chats" style={{ display:'flex', alignItems:'center', justifyContent:'center', width:'100%', padding:'9px 0', border:'none', background:'transparent', color:'var(--text-secondary)', cursor:'pointer' }}>
+    <button title="Chats — click to expand" onClick={onExpand} style={{ display:'flex', alignItems:'center', justifyContent:'center', width:'100%', padding:'9px 0', border:'none', background:'transparent', color:'var(--text-secondary)', cursor:'pointer' }}
+      onMouseEnter={e=>(e.currentTarget as HTMLElement).style.color='var(--accent)'}
+      onMouseLeave={e=>(e.currentTarget as HTMLElement).style.color='var(--text-secondary)'}>
       <MessageCircle size={18}/>
     </button>
   )
@@ -144,7 +146,7 @@ function ChatSection({ sessions, expanded }: { sessions: any[]; expanded: boolea
   )
 }
 
-function ProjectSection({ sessions, expanded }: { sessions: any[]; expanded: boolean }) {
+function ProjectSection({ sessions, expanded, onExpand }: { sessions: any[]; expanded: boolean; onExpand: () => void }) {
   const [open, setOpen] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const seen = new Set<string>()
@@ -153,7 +155,9 @@ function ProjectSection({ sessions, expanded }: { sessions: any[]; expanded: boo
     .filter(s => { const key=s.rootPath??s.id; if (seen.has(key)) return false; seen.add(key); return true })
 
   if (!expanded) return (
-    <button title="Projects" style={{ display:'flex', alignItems:'center', justifyContent:'center', width:'100%', padding:'9px 0', border:'none', background:'transparent', color:'var(--text-secondary)', cursor:'pointer' }}>
+    <button title="Projects — click to expand" onClick={onExpand} style={{ display:'flex', alignItems:'center', justifyContent:'center', width:'100%', padding:'9px 0', border:'none', background:'transparent', color:'var(--text-secondary)', cursor:'pointer' }}
+      onMouseEnter={e=>(e.currentTarget as HTMLElement).style.color='var(--accent)'}
+      onMouseLeave={e=>(e.currentTarget as HTMLElement).style.color='var(--text-secondary)'}>
       <FolderOpen size={18}/>
     </button>
   )
@@ -180,7 +184,7 @@ function ProjectSection({ sessions, expanded }: { sessions: any[]; expanded: boo
 }
 
 export default function LeftBar({ onOpenTerminal, onOpenProjectTerminal }: LeftBarProps) {
-  const { sessions, leftExpanded: expanded, setUserName, activeSessionId } = useAppStore()
+  const { sessions, leftExpanded: expanded, setLeftExpanded, setUserName, activeSessionId } = useAppStore()
   const [showAccount,  setShowAccount]  = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const activeSession = sessions.find(s => s.id === activeSessionId)
@@ -207,15 +211,18 @@ export default function LeftBar({ onOpenTerminal, onOpenProjectTerminal }: LeftB
   return (
     <div style={{ background:'var(--bg-secondary)', borderRight:'1px solid var(--border)', display:'flex', flexDirection:'column', height:'100%', overflow:'hidden' }}>
       <div style={{ flex:1, overflowY:'auto', overflowX:'hidden', paddingTop:6 }}>
-        <ChatSection    sessions={sessions} expanded={expanded}/>
-        <ProjectSection sessions={sessions} expanded={expanded}/>
+        <ChatSection    sessions={sessions} expanded={expanded} onExpand={()=>setLeftExpanded(true)}/>
+        <ProjectSection sessions={sessions} expanded={expanded} onExpand={()=>setLeftExpanded(true)}/>
         {expanded ? (
           <button style={{ display:'flex', alignItems:'center', gap:8, width:'100%', padding:'8px 10px', border:'none', background:'transparent', color:'var(--text-secondary)', cursor:'pointer', fontSize:13 }}
             onMouseEnter={e=>(e.currentTarget as HTMLElement).style.color='var(--text-primary)'}
             onMouseLeave={e=>(e.currentTarget as HTMLElement).style.color='var(--text-secondary)'}
           ><Puzzle size={15}/><span>Extensions</span></button>
         ) : (
-          <button title="Extensions" style={{ display:'flex', alignItems:'center', justifyContent:'center', width:'100%', padding:'9px 0', border:'none', background:'transparent', color:'var(--text-secondary)', cursor:'pointer' }}>
+          <button title="Extensions — click to expand" onClick={()=>setLeftExpanded(true)}
+            style={{ display:'flex', alignItems:'center', justifyContent:'center', width:'100%', padding:'9px 0', border:'none', background:'transparent', color:'var(--text-secondary)', cursor:'pointer' }}
+            onMouseEnter={e=>(e.currentTarget as HTMLElement).style.color='var(--accent)'}
+            onMouseLeave={e=>(e.currentTarget as HTMLElement).style.color='var(--text-secondary)'}>
             <Puzzle size={18}/>
           </button>
         )}

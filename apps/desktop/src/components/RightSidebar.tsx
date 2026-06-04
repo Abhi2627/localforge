@@ -3,7 +3,7 @@ import {
   ChevronRight, ChevronDown, Bot, LayoutDashboard,
   Plus, Loader, File, Folder, FolderOpen, Search, Network,
   AlertTriangle, RefreshCw, CheckCircle, XCircle, AlertCircle,
-  GitBranch, X
+  GitBranch, GitMerge, X
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import AgentModal from './AgentModal'
@@ -408,7 +408,7 @@ function SidebarSection({ title, expanded, onToggle, children }: {
 type ModalPanel = 'knowledge' | 'contracts' | 'agents' | 'graph' | null
 
 export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps) {
-  const { sessions, activeSessionId, rightExpanded } = useAppStore()
+  const { sessions, activeSessionId, rightExpanded, setRightExpanded } = useAppStore()
   const session = sessions.find(s => s.id === activeSessionId)
 
   const [openModal,      setOpenModal]      = useState<ModalPanel>(null)
@@ -426,30 +426,60 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
 
   const hasRunning = session?.agents.some(a=>a.status==='running')
 
-  // Collapsed sidebar (icon strip only)
-  if (!rightExpanded) {
-    return (
-      <div style={{width:40,background:'var(--bg-secondary)',borderLeft:'1px solid var(--border)',display:'flex',flexDirection:'column',alignItems:'center',paddingTop:10,gap:6,height:'100%'}}>
-        {[
-          {icon:<Network size={15}/>,    label:'Knowledge Graph'},
-          {icon:<LayoutDashboard size={15}/>, label:'Project Graph'},
-          {icon:<Bot size={15}/>,        label:'Agents', dot:!!hasRunning},
-          {icon:<GitBranch size={15}/>,  label:'API Contracts'},
-        ].map(({icon,label,dot})=>(
-          <div key={label} title={label} style={{position:'relative'}}>
-            <button className="icon-btn" style={{width:32,height:32}}>{icon}</button>
-            {dot&&<span style={{position:'absolute',top:4,right:4,width:5,height:5,borderRadius:'50%',background:'var(--green)',boxShadow:'0 0 4px var(--green)'}}/>}
-          </div>
-        ))}
-      </div>
-    )
-  }
-
   const modalTitles: Record<NonNullable<ModalPanel>, string> = {
     knowledge: 'Knowledge Graph',
     contracts: 'API Contracts',
     agents:    'Agents',
     graph:     'Project Graph',
+  }
+
+  function renderModalBody() {
+    if (openModal === 'knowledge') return session
+      ? <KnowledgeGraphModalBody sessionId={session.id}/>
+      : <div style={{padding:24,color:'var(--text-muted)',fontSize:13}}>Open a project to view the knowledge graph</div>
+    if (openModal === 'contracts') return session
+      ? <ContractsModalBody sessionId={session.id}/>
+      : <div style={{padding:24,color:'var(--text-muted)',fontSize:13}}>Open a project to check API contracts</div>
+    if (openModal === 'agents') return <AgentsModalBody session={session} onAddAgent={()=>{setOpenModal(null);setShowAgentModal(true)}}/>
+    if (openModal === 'graph') return session?.rootPath
+      ? <ProjectGraphModalBody files={mergedFiles} rootPath={session.rootPath}/>
+      : <div style={{padding:24,color:'var(--text-muted)',fontSize:13}}>Open a project to view the project graph</div>
+    return null
+  }
+
+  // Collapsed sidebar — 6 icons: 4 open modals, 2 expand the sidebar
+  if (!rightExpanded) {
+    const collapsedIcons = [
+      { icon:<Network size={14}/>,        label:'Knowledge Graph',                   action:()=>setOpenModal('knowledge') },
+      { icon:<LayoutDashboard size={14}/>, label:'Project Graph',                     action:()=>setOpenModal('graph') },
+      { icon:<Bot size={14}/>,            label:'Agents',                            action:()=>setOpenModal('agents'), dot:!!hasRunning },
+      { icon:<GitBranch size={14}/>,      label:'API Contracts',                     action:()=>setOpenModal('contracts') },
+      { icon:<FolderOpen size={14}/>,     label:'File Explorer — click to expand',   action:()=>setRightExpanded(true) },
+      { icon:<GitMerge size={14}/>,       label:'Source Control — click to expand',  action:()=>setRightExpanded(true) },
+    ]
+    return (
+      <div style={{width:40,background:'var(--bg-secondary)',borderLeft:'1px solid var(--border)',display:'flex',flexDirection:'column',alignItems:'center',paddingTop:8,gap:4,height:'100%'}}>
+        {collapsedIcons.map(({icon,label,action,dot})=>(
+          <div key={label} title={label} style={{position:'relative',width:'100%',display:'flex',justifyContent:'center'}}>
+            <button
+              onClick={action}
+              style={{width:32,height:30,display:'flex',alignItems:'center',justifyContent:'center',background:'transparent',border:'1px solid transparent',borderRadius:6,cursor:'pointer',color:'var(--text-muted)',transition:'all 0.15s'}}
+              onMouseEnter={e=>{(e.currentTarget as HTMLElement).style.color='var(--accent)';(e.currentTarget as HTMLElement).style.borderColor='var(--border)';(e.currentTarget as HTMLElement).style.background='var(--bg-hover)'}}
+              onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.color='var(--text-muted)';(e.currentTarget as HTMLElement).style.borderColor='transparent';(e.currentTarget as HTMLElement).style.background='transparent'}}
+            >{icon}</button>
+            {dot&&<span style={{position:'absolute',top:3,right:3,width:5,height:5,borderRadius:'50%',background:'var(--green)',boxShadow:'0 0 4px var(--green)',pointerEvents:'none'}}/>}
+          </div>
+        ))}
+        {/* render modals even when collapsed */}
+        {openModal && (
+          <PanelModal title={modalTitles[openModal]} onClose={()=>setOpenModal(null)}>
+            {renderModalBody()}
+          </PanelModal>
+        )}
+        {showAgentModal && session && <AgentModal sessionId={session.id} projectId={session.id} onClose={()=>setShowAgentModal(false)}/>}
+        <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
+      </div>
+    )
   }
 
   return (
@@ -538,27 +568,7 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
       {/* ── Modal windows ── */}
       {openModal && (
         <PanelModal title={modalTitles[openModal]} onClose={()=>setOpenModal(null)}>
-          {openModal==='knowledge' && session
-            ? <KnowledgeGraphModalBody sessionId={session.id}/>
-            : openModal==='knowledge'
-            ? <div style={{padding:24,color:'var(--text-muted)',fontSize:13}}>Open a project to view the knowledge graph</div>
-            : null
-          }
-          {openModal==='contracts' && session
-            ? <ContractsModalBody sessionId={session.id}/>
-            : openModal==='contracts'
-            ? <div style={{padding:24,color:'var(--text-muted)',fontSize:13}}>Open a project to check API contracts</div>
-            : null
-          }
-          {openModal==='agents' && (
-            <AgentsModalBody session={session} onAddAgent={()=>{setOpenModal(null);setShowAgentModal(true)}}/>
-          )}
-          {openModal==='graph' && session?.rootPath
-            ? <ProjectGraphModalBody files={mergedFiles} rootPath={session.rootPath}/>
-            : openModal==='graph'
-            ? <div style={{padding:24,color:'var(--text-muted)',fontSize:13}}>Open a project to view the project graph</div>
-            : null
-          }
+          {renderModalBody()}
         </PanelModal>
       )}
 
