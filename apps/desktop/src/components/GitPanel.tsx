@@ -151,6 +151,16 @@ export default function GitPanel({ sessionId }: Props) {
 
   useEffect(() => { reload() }, [reload])
 
+  // Auto-reload every 3s — detects git changes (commits, staging, pushes) without manual refresh
+  useEffect(() => {
+    const interval = setInterval(() => {
+      loadStatus()
+      if (tab === 'log')      loadLog()
+      if (tab === 'branches') loadBranches()
+    }, 3000)
+    return () => clearInterval(interval)
+  }, [tab, loadStatus, loadLog, loadBranches])
+
   async function openFileDiff(file: string, staged: boolean) {
     const res  = await fetch(`${BASE}/diff?file=${encodeURIComponent(file)}&staged=${staged}`)
     const data = await res.json()
@@ -185,10 +195,8 @@ export default function GitPanel({ sessionId }: Props) {
         <span style={{ fontSize:11, fontWeight:500, color:'var(--accent)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1 }}>{currentBranch}</span>
         {status && status.ahead  > 0 && <span style={{ fontSize:10, color:'var(--green)', display:'flex', alignItems:'center', gap:2 }}><ArrowUp size={9}/>{status.ahead}</span>}
         {status && status.behind > 0 && <span style={{ fontSize:10, color:'#f59e0b', display:'flex', alignItems:'center', gap:2 }}><ArrowDown size={9}/>{status.behind}</span>}
-        <button onClick={reload} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', display:'flex', padding:2 }}
-          onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'}
-          onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'}
-        ><RefreshCw size={11} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }}/></button>
+        {/* Loading indicator — shows during background refresh, no manual button needed */}
+        {loading && <RefreshCw size={10} style={{ animation:'spin 1s linear infinite', color:'var(--text-muted)', flexShrink:0 }}/>}
       </div>
 
       {/* Tabs */}

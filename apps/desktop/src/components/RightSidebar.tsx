@@ -366,18 +366,19 @@ function ProjectGraphModalBody({ files, rootPath }: { files: string[]; rootPath:
 }
 
 // ── Collapsible section for sidebar ──────────────────────────────────────────
-function SidebarSection({ title, expanded, onToggle, flex, children }: {
-  title: string; expanded: boolean; onToggle: () => void; flex: number; children: React.ReactNode
+function SidebarSection({ title, expanded, onToggle, children }: {
+  title: string; expanded: boolean; onToggle: () => void; children: React.ReactNode
 }) {
   const HEADER_H = 28
   return (
-    // When collapsed: fixed height = header only. When expanded: flex grows.
     <div style={{
-      display: 'flex', flexDirection: 'column', overflow: 'hidden',
-      flex:      expanded ? flex : 0,
-      flexBasis: expanded ? undefined : HEADER_H,
-      minHeight: HEADER_H,
-      flexShrink: expanded ? 1 : 0,   // collapsed sections don't shrink below header
+      display:    'flex',
+      flexDirection: 'column',
+      overflow:   'hidden',
+      // When expanded: flex:1 with basis:0 means each section gets exactly equal space
+      // When collapsed: flex:0, basis=header height, shrink=0 so header is always visible
+      flex:       expanded ? '1 1 0' : `0 0 ${HEADER_H}px`,
+      minHeight:  HEADER_H,
       transition: 'flex 0.2s ease',
     }}>
       {/* Section header */}
@@ -424,11 +425,6 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
   const tree        = useMemo(()=>session?.rootPath?buildTree(mergedFiles,session.rootPath,newFileSet):[],[mergedFiles.join(','),session?.rootPath,written.join(',')]) // eslint-disable-line
 
   const hasRunning = session?.agents.some(a=>a.status==='running')
-
-  // Both open → 50/50. One open → takes all. Neither → both show headers only.
-  const bothOpen = explorerOpen && gitOpen
-  const explorerFlex = bothOpen ? 1 : explorerOpen ? 1 : 0
-  const gitFlex      = bothOpen ? 1 : gitOpen      ? 1 : 0
 
   // Collapsed sidebar (icon strip only)
   if (!rightExpanded) {
@@ -506,7 +502,6 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
           title={`Explorer${mergedFiles.length>0?` (${mergedFiles.length})`:''}` }
           expanded={explorerOpen}
           onToggle={() => setExplorerOpen(v=>!v)}
-          flex={explorerFlex}
         >
           {/* Search bar */}
           <div style={{padding:'4px 8px',flexShrink:0,display:'flex',alignItems:'center',gap:4,borderBottom:'1px solid var(--border)'}}>
@@ -532,7 +527,6 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
           title="Source Control"
           expanded={gitOpen}
           onToggle={() => setGitOpen(v=>!v)}
-          flex={gitFlex}
         >
           {session?.rootPath
             ?<GitPanel sessionId={session.id}/>
