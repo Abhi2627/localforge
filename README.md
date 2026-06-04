@@ -167,6 +167,18 @@ These are real features but require significant infrastructure or third-party de
 - Current state: only plain text files and code files are supported as attachments
 - Fix path: add `pdf-parse` + `mammoth` to agent-core, add vision routing for cloud providers, extend file type filter in ChatPanel
 
+#### 5F — Agent Response Mode (direct action, no explanation)
+- Currently small local models (qwen2.5-coder 1.5b/7b) respond with step-by-step human instructions alongside the write block, because they are trained to explain rather than act
+- Desired behaviour: when a file write is requested, the model should output ONLY the `write:path` block and a one-line summary — no "Step 1", no "Navigate to", no shell commands
+- Fix path: requires either (a) a larger instruction-following model (>=14b parameters) that reliably follows strict system prompt rules, (b) a post-processing layer that strips explanatory text from responses that contain write blocks, or (c) fine-tuning a small model on agent-style action-only datasets
+- Short-term workaround: post-process agent responses — if a `write:` block is present, automatically hide the surrounding prose in the UI and show only a "File written" summary line
+- Blocked by: small local models ignoring system prompt formatting constraints regardless of instruction strength
+
+#### 5G — Agent auto-apply mode
+- Option in Settings to auto-apply all `write:` blocks without requiring user confirmation
+- Useful for experienced users running batch code generation tasks
+- Should have a per-session toggle and a global default
+
 ---
 
 ## License
