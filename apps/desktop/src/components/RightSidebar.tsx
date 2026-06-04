@@ -126,11 +126,13 @@ function InlineInput({ defaultValue, indent, onCommit, onCancel }: {
 }
 
 // ── File tree node with full VSCode-style interactions ───────────────────────
-function FileTreeNode({ node, depth=0, filter, clipboard, onClipboard, onRefresh, rootPath }: {
+function FileTreeNode({ node, depth=0, filter, clipboard, onClipboard, onRefresh, onDelete, onAdd, rootPath }: {
   node: TreeNode; depth?: number; filter: string
   clipboard: { node: TreeNode; mode: 'copy'|'cut' } | null
   onClipboard: (c: { node: TreeNode; mode: 'copy'|'cut' } | null) => void
   onRefresh: () => void
+  onDelete: (node: TreeNode) => void
+  onAdd:    (path: string)  => void
   rootPath: string
 }) {
   const [open,       setOpen]       = useState(depth < 2)
@@ -147,8 +149,8 @@ function FileTreeNode({ node, depth=0, filter, clipboard, onClipboard, onRefresh
 
   async function doDelete() {
     if (!confirm(`Delete "${node.name}"? This cannot be undone.`)) return
-    await fetch(`http://localhost:3001/project/file?path=${encodeURIComponent(node.path)}`, { method: 'DELETE' })
-    onRefresh()
+    const res = await fetch(`http://localhost:3001/project/file?path=${encodeURIComponent(node.path)}`, { method: 'DELETE' })
+    if (res.ok) onDelete(node)  // immediately remove from tree without waiting for store rescan
   }
 
   async function doRename(newName: string) {
@@ -177,8 +179,12 @@ function FileTreeNode({ node, depth=0, filter, clipboard, onClipboard, onRefresh
       })
     }
     setNewItem(null)
-    onRefresh()
-    if (!isDir) { if (activeSessionId) openFileFn(activeSessionId, dst) }
+    if (!isDir) {
+      onAdd(dst)  // immediately add to tree
+      if (activeSessionId) openFileFn(activeSessionId, dst)
+    } else {
+      onRefresh()
+    }
   }
 
   async function doPaste() {
@@ -262,7 +268,8 @@ function FileTreeNode({ node, depth=0, filter, clipboard, onClipboard, onRefresh
             )}
             {node.children.map(c => (
               <FileTreeNode key={c.path} node={c} depth={depth+1} filter={filter}
-                clipboard={clipboard} onClipboard={onClipboard} onRefresh={onRefresh} rootPath={rootPath}/>
+                clipboard={clipboard} onClipboard={onClipboard} onRefresh={onRefresh}
+                onDelete={onDelete} onAdd={onAdd} rootPath={rootPath}/>
             ))}
           </div>
         )}
@@ -632,11 +639,45 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
   const [gitOpen,        setGitOpen]        = useState(true)
   const [clipboard,      setClipboard]      = useState<{ node: TreeNode; mode: 'copy'|'cut' } | null>(null)
   const [refreshTick,    setRefreshTick]    = useState(0)
+  const [deletedPaths,   setDeletedPaths]   = useState<Set<string>>(new Set())
+  const [addedFiles,     setAddedFiles]     = useState<string[]>([])
+
   const doRefresh = useCallback(() => setRefreshTick(t => t + 1), [])
+
+  function onDelete(node: TreeNode) {
+    // Remove the node path and all children from the visible tree immediately
+    setDeletedPaths(prev => {
+      const next = new Set(prev)
+      next.add(node.path)
+      // Also mark all children if it's a directory
+      if (node.isDir) {
+        function addChildren(n: TreeNode) {
+          next.add(n.path)
+          n.children.forEach(addChildren)
+        }
+        addChildren(node)
+      }
+      return next
+    })
+  }
+
+  function onAdd(filePath: string) {
+    setAddedFiles(prev => [...prev, filePath])
+  }
+
+  // Clear deleted/added tracking when session changes
+  useEffect(() => {
+    setDeletedPaths(new Set())
+    setAddedFiles([])
+  }, [activeSessionId])
 
   const allFiles    = session?.allFiles    ?? []
   const written     = session?.writtenFiles ?? []
-  const mergedFiles = useMemo(()=>[...new Set([...allFiles,...written])],[allFiles.join(','),written.join(',')]) // eslint-disable-line
+  // Merge store files + locally added files, exclude locally deleted paths
+  const mergedFiles = useMemo(() => {
+    const all = [...new Set([...allFiles, ...written, ...addedFiles])]
+    return all.filter(f => !deletedPaths.has(f))
+  }, [allFiles.join(','), written.join(','), addedFiles.join(','), deletedPaths]) // eslint-disable-line
   const newFileSet  = useMemo(()=>new Set(written),[written.join(',')]) // eslint-disable-line
   const tree        = useMemo(()=>session?.rootPath?buildTree(mergedFiles,session.rootPath,newFileSet):[],[mergedFiles.join(','),session?.rootPath,written.join(','),refreshTick]) // eslint-disable-line
 
@@ -770,7 +811,8 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
             {tree.length===0
               ?<div style={{padding:'10px 12px',fontSize:11,color:'var(--text-muted)'}}>{session?.rootPath?'No files yet':'Open a project to see files'}</div>
               :tree.map(n=><FileTreeNode key={n.path} node={n} depth={0} filter={fileSearch}
-                  clipboard={clipboard} onClipboard={setClipboard} onRefresh={doRefresh} rootPath={session?.rootPath??''}
+                  clipboard={clipboard} onClipboard={setClipboard} onRefresh={doRefresh}
+                  onDelete={onDelete} onAdd={onAdd} rootPath={session?.rootPath??''}
                 />)
             }
           </div>
