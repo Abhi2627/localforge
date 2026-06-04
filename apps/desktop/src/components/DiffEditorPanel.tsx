@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { GitBranch, Loader, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 
@@ -52,6 +52,53 @@ const MONO: React.CSSProperties = {
   overflowWrap: 'normal',
 }
 
+const MINIMAP_W      = 60
+const MINIMAP_LINE_H = 2
+const MINIMAP_CHAR_W = 0.5
+
+function DiffMinimap({ lines, visibleStart, visibleCount, onClickLine, label }: {
+  lines: FullLine[]; visibleStart: number; visibleCount: number
+  onClickLine: (i: number) => void; label: string
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const FULL_H = lines.length * MINIMAP_LINE_H
+
+  useEffect(() => {
+    const canvas = canvasRef.current; if (!canvas) return
+    canvas.width = MINIMAP_W; canvas.height = Math.max(FULL_H, 1)
+    const ctx = canvas.getContext('2d'); if (!ctx) return
+    ctx.fillStyle = '#1e1e1e'; ctx.fillRect(0, 0, MINIMAP_W, Math.max(FULL_H, 1))
+    lines.forEach(({ content, decor }, i) => {
+      const y = i * MINIMAP_LINE_H
+      if      (decor === 'removed') { ctx.fillStyle = 'rgba(220,50,47,0.35)';    ctx.fillRect(0, y, MINIMAP_W, MINIMAP_LINE_H) }
+      else if (decor === 'added')   { ctx.fillStyle = 'rgba(42,180,102,0.35)';   ctx.fillRect(0, y, MINIMAP_W, MINIMAP_LINE_H) }
+      const trimmed = content.trimStart()
+      const indent  = content.length - trimmed.length
+      const x = indent * MINIMAP_CHAR_W
+      const w = Math.min(trimmed.length * MINIMAP_CHAR_W, MINIMAP_W - x)
+      if (w > 0) {
+        ctx.fillStyle = decor === 'removed' ? '#f88' : decor === 'added' ? '#7ec' : '#555770'
+        ctx.fillRect(x, y + 0.3, w, 1)
+      }
+    })
+  }, [lines]) // eslint-disable-line
+
+  function handleClick(e: React.MouseEvent<HTMLDivElement>) {
+    const rect = e.currentTarget.getBoundingClientRect()
+    onClickLine(Math.floor((e.clientY - rect.top) / MINIMAP_LINE_H))
+  }
+
+  return (
+    <div onClick={handleClick} style={{ width:MINIMAP_W, flexShrink:0, background:'#1e1e1e', borderLeft:'1px solid #2a2a2a', overflow:'hidden', position:'relative', cursor:'pointer' }}>
+      <div style={{ fontSize:8, color:'#444', padding:'2px 4px', position:'sticky', top:0, background:'#1e1e1e', zIndex:1 }}>{label}</div>
+      <div style={{ width:MINIMAP_W, height:FULL_H, position:'relative' }}>
+        <canvas ref={canvasRef} width={MINIMAP_W} height={Math.max(FULL_H,1)} style={{ display:'block', imageRendering:'pixelated' }}/>
+        <div style={{ position:'absolute', left:0, top: visibleStart * MINIMAP_LINE_H, width:MINIMAP_W, height: Math.max(visibleCount * MINIMAP_LINE_H, 20), background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.12)', pointerEvents:'none', boxSizing:'border-box' }}/>
+      </div>
+    </div>
+  )
+}
+
 function FullFileColumn({
   lines, label, isRight, onScroll,
 }: {
@@ -80,7 +127,7 @@ function FullFileColumn({
         const lineNumColor =
           line.decor === 'removed' ? '#c55' :
           line.decor === 'added'   ? '#3a9' :
-          '#3d3d3d'
+          '#858585'   // brighter than before (#3d3d3d was too faint)
 
         const textColor =
           line.decor === 'removed' ? '#ff9999' :
@@ -120,6 +167,8 @@ export default function DiffEditorPanel({ sessionId, filePath, staged }: Props) 
   const [loading,     setLoading]    = useState(true)
   const [error,       setError]      = useState('')
   const [fileIdx,     setFileIdx]    = useState(0)
+  const [leftVisible,  setLeftVisible]  = useState({ start: 0, count: 40 })
+  const [rightVisible, setRightVisible] = useState({ start: 0, count: 40 })
   const containerRef = useRef<HTMLDivElement>(null)
 
   const sessions  = useAppStore(s => s.sessions)
@@ -153,6 +202,8 @@ export default function DiffEditorPanel({ sessionId, filePath, staged }: Props) 
       .catch(e => { setError(e.message); setLoading(false) })
   }, [sessionId, filePath, staged, rootPath])
 
+  const DIFF_LINE_H = 20
+
   function syncScroll(e: React.UIEvent<HTMLDivElement>) {
     const src = e.currentTarget
     const container = containerRef.current
@@ -160,7 +211,23 @@ export default function DiffEditorPanel({ sessionId, filePath, staged }: Props) 
     container.querySelectorAll<HTMLElement>('[data-scroll-col]').forEach(el => {
       if (el !== src) el.scrollTop = src.scrollTop
     })
+    const isLeft = src.dataset.scrollCol === 'left'
+    const start  = Math.floor(src.scrollTop / DIFF_LINE_H)
+    const count  = Math.ceil(src.clientHeight / DIFF_LINE_H)
+    if (isLeft) setLeftVisible({ start, count })
+    else        setRightVisible({ start, count })
   }
+
+  const scrollToLine = useCallback((colSide: 'left'|'right', lineIdx: number) => {
+    const container = containerRef.current; if (!container) return
+    const col = container.querySelector<HTMLElement>(`[data-scroll-col="${colSide}"]`)
+    if (!col) return
+    const targetTop = lineIdx * DIFF_LINE_H - col.clientHeight / 2
+    col.scrollTop = Math.max(0, targetTop)
+    // sync other col
+    const other = container.querySelector<HTMLElement>(`[data-scroll-col="${colSide === 'left' ? 'right' : 'left'}"]`)
+    if (other) other.scrollTop = col.scrollTop
+  }, [])
 
   if (loading) return (
     <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', background:'#1e1e1e', gap:10 }}>
@@ -251,20 +318,40 @@ export default function DiffEditorPanel({ sessionId, filePath, staged }: Props) 
         )}
       </div>
 
-      {/* Side-by-side full file diff */}
+      {/* Side-by-side full file diff — each column has its own minimap */}
       <div ref={containerRef} style={{ flex:1, display:'flex', overflow:'hidden', minHeight:0 }}>
-        <FullFileColumn
-          lines={leftLines}
-          label={`${currentDiff.file}  (before — ${leftLines.length} lines)`}
-          isRight={false}
-          onScroll={syncScroll}
-        />
-        <FullFileColumn
-          lines={rightLines}
-          label={`${currentDiff.file}  (after — ${rightLines.length} lines)`}
-          isRight={true}
-          onScroll={syncScroll}
-        />
+        {/* Left: old file + minimap */}
+        <div style={{ flex:1, display:'flex', overflow:'hidden', minWidth:0, borderRight:'2px solid #333' }}>
+          <FullFileColumn
+            lines={leftLines}
+            label={`${currentDiff.file}  (before — ${leftLines.length} lines)`}
+            isRight={false}
+            onScroll={syncScroll}
+          />
+          <DiffMinimap
+            lines={leftLines}
+            visibleStart={leftVisible.start}
+            visibleCount={leftVisible.count}
+            onClickLine={i => scrollToLine('left', i)}
+            label="before"
+          />
+        </div>
+        {/* Right: new file + minimap */}
+        <div style={{ flex:1, display:'flex', overflow:'hidden', minWidth:0 }}>
+          <FullFileColumn
+            lines={rightLines}
+            label={`${currentDiff.file}  (after — ${rightLines.length} lines)`}
+            isRight={true}
+            onScroll={syncScroll}
+          />
+          <DiffMinimap
+            lines={rightLines}
+            visibleStart={rightVisible.start}
+            visibleCount={rightVisible.count}
+            onClickLine={i => scrollToLine('right', i)}
+            label="after"
+          />
+        </div>
       </div>
     </div>
   )
