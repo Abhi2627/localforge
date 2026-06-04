@@ -10,7 +10,7 @@ import FileEditorPanel from './FileEditorPanel'
 import SettingsModal from './SettingsModal'
 import { FilePatchCard, type FilePatch } from './FilePatchCard'
 
-interface ChatPanelProps { onOpenTerminal?: (cwd: string) => void; terminalOpen?: boolean }
+interface ChatPanelProps { onOpenTerminal?: (cwd: string) => void }
 interface AttachedFile { id: string; name: string; path: string; size: number; content: string; isImage: boolean }
 
 function roleBadgeClass(role?: AgentRole) { return `badge-${role ?? 'fullstack'}` }
@@ -53,31 +53,23 @@ function extractFileContent(msgContent: string, fileName: string): string {
   return m ? m[0].replace(/<file name="[^"]*">\n?/, '').replace(/\n?<\/file>$/, '') : ''
 }
 
-// Parse ```write:path\ncontent\n``` blocks from agent output.
-// userPrompt: the user's message that triggered this response (for filename hints in fallback)
 function extractPatches(content: string, rootPath?: string, userPrompt?: string): { patches: FilePatch[]; cleanContent: string } {
   const patches: FilePatch[] = []
-
-  // Primary: explicit write: blocks
   const primary = content.replace(/```write:([^\n]+)\n([\s\S]*?)```/g, (_m, fp: string, fc: string) => {
     patches.push({ id: nanoid(), path: fp.trim(), content: fc.trimEnd(), rootPath })
     return `[File proposal: ${fp.trim()}]`
   })
   if (patches.length > 0) return { patches, cleanContent: primary.trim() }
-
-  // Fallback: plain fenced code block — look for filename in agent content OR user prompt
   const searchText = content + ' ' + (userPrompt ?? '')
   const fileNameMatch = searchText.match(/([\w./-]+\.(?:ts|tsx|js|jsx|mjs|py|go|rs|css|scss|html|json|md|yaml|yml|sh|env|toml|txt|proto|sql|graphql|dockerfile))/i)
   if (fileNameMatch) {
     const codeMatch = content.match(/```(?:\w+)?\n([\s\S]*?)```/)
     if (codeMatch) {
-      // Clean path: strip leading comment markers and spaces
       const rawPath = fileNameMatch[1].replace(/^\/\/\s*/, '').trim()
       patches.push({ id: nanoid(), path: rawPath, content: codeMatch[1].trimEnd(), rootPath })
-      return { patches, cleanContent: content }  // keep original display
+      return { patches, cleanContent: content }
     }
   }
-
   return { patches, cleanContent: primary.trim() }
 }
 
@@ -95,7 +87,7 @@ function getFileIcon(name: string) {
 function AttachmentStrip({ files, onRemove }: { files: AttachedFile[]; onRemove: (id: string) => void }) {
   if (!files.length) return null
   return (
-    <div style={{ display:'flex', gap:6, flexWrap:'wrap', padding:'6px 0 2px' }}>
+    <div style={{ display:'flex', gap:6, flexWrap:'wrap', padding:'6px 0 4px' }}>
       {files.map(f => (
         <div key={f.id} style={{ display:'flex', alignItems:'center', gap:5, padding:'4px 8px', background:'var(--bg-tertiary)', border:'1px solid var(--border)', borderRadius:6, fontSize:11, color:'var(--text-secondary)', maxWidth:180 }}>
           <span style={{ color:'var(--accent)', flexShrink:0 }}>{getFileIcon(f.name)}</span>
@@ -185,20 +177,15 @@ function MsgActions({ content, onEdit, onReload, isUser, visible }: {
   )
 }
 
-// Agent message with file-patch card support
 function AgentBubble({ msg, onReload, rootPath, userPrompt }: { msg: Message; onReload?: () => void; rootPath?: string; userPrompt?: string }) {
   const [hovered,    setHovered]    = useState(false)
   const appliedRef   = useRef<Set<string>>(new Set())
   const [appliedIds, setAppliedIds] = useState<Set<string>>(new Set())
-
-  // Patches derived once from content — stable reference prevents re-creation on every render
   const patchesRef = useRef<FilePatch[] | null>(null)
   if (patchesRef.current === null) {
     patchesRef.current = extractPatches(msg.content, rootPath, userPrompt).patches
   }
   const [patches, setPatches] = useState<FilePatch[]>(patchesRef.current)
-
-  // Re-derive when streaming finalises (type changes stream → agent)
   const prevTypeRef = useRef(msg.type)
   useEffect(() => {
     if (prevTypeRef.current !== 'agent' && msg.type === 'agent') {
@@ -207,38 +194,27 @@ function AgentBubble({ msg, onReload, rootPath, userPrompt }: { msg: Message; on
       if (fresh.length > 0) setPatches(fresh)
     }
   }, [msg.type]) // eslint-disable-line
-
   const { cleanContent } = extractPatches(msg.content, rootPath, userPrompt)
   const displayContent = patches.length > 0 ? cleanContent : msg.content
-
   async function handleApply(patch: FilePatch) {
-    if (appliedRef.current.has(patch.id)) return   // guard: already applied — no duplicate writes
-    // Resolve full path: absolute paths used as-is; relative paths joined to project root
-    const fullPath = patch.path.startsWith('/')
-      ? patch.path
-      : rootPath
-        ? `${rootPath}/${patch.path}`
-        : patch.path
+    if (appliedRef.current.has(patch.id)) return
+    const fullPath = patch.path.startsWith('/') ? patch.path : rootPath ? `${rootPath}/${patch.path}` : patch.path
     const res = await fetch('http://localhost:3001/project/file', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ path: fullPath, content: patch.content }),
     })
     if (!res.ok) throw new Error(`Write failed: ${res.status}`)
     appliedRef.current.add(patch.id)
-    setAppliedIds(new Set(appliedRef.current))  // trigger re-render with updated applied set
+    setAppliedIds(new Set(appliedRef.current))
   }
-
   return (
     <div style={{display:'flex',flexDirection:'column',gap:3}}
       onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
       {msg.agentName && <div className={`agent-badge ${roleBadgeClass(msg.agentRole)}`} style={{display:'inline-block',fontSize:10,alignSelf:'flex-start'}}>{msg.agentName}</div>}
       {displayContent && <div className="msg-agent"><MarkdownContent content={displayContent}/></div>}
       {patches.map(p => (
-        <FilePatchCard key={p.id} patch={p}
-          alreadyApplied={appliedIds.has(p.id)}
-          onApply={handleApply}
-          onReject={id => setPatches(ps => ps.filter(x => x.id !== id))}
-        />
+        <FilePatchCard key={p.id} patch={p} alreadyApplied={appliedIds.has(p.id)}
+          onApply={handleApply} onReject={id => setPatches(ps => ps.filter(x => x.id !== id))}/>
       ))}
       <div style={{display:'flex',alignItems:'center',gap:6}}>
         <span style={{fontSize:10,color:'var(--text-muted)',paddingLeft:2}}>{formatTime(msg.timestamp)}</span>
@@ -254,7 +230,6 @@ function MessageBubble({ msg, onEdit, onReload, rootPath, userPrompt }: {
   const [hovered,     setHovered]     = useState(false)
   const [previewFile, setPreviewFile] = useState<{ name: string; content: string } | null>(null)
   const cleanDisplay = msg.displayContent ?? extractDisplayContent(msg.content)
-
   if (msg.type === 'system') {
     const isError = msg.content.startsWith('⚠')
     return (
@@ -275,9 +250,6 @@ function MessageBubble({ msg, onEdit, onReload, rootPath, userPrompt }: {
     </div>
   )
   if (msg.type === 'agent') return <AgentBubble msg={msg} onReload={onReload} rootPath={rootPath} userPrompt={userPrompt}/>
-
-
-  // User bubble
   const time = formatTime(msg.timestamp)
   return (
     <>
@@ -405,7 +377,7 @@ function ModelSelector({ selectedModel, models, activeProvider, cloudModel, isOn
   )
 }
 
-export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: ChatPanelProps) {
+export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
   const {
     sessions, activeSessionId,
     addMessage, appendStream, finalizeStream,
@@ -477,12 +449,10 @@ export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: Chat
     return () => window.removeEventListener('provider-changed', loadProvider)
   }, [])
 
-  // MCP status poll + auto-connect for project sessions
   useEffect(() => {
     if (!isProject || !session?.rootPath) { setMcpConnected(false); return }
     const rootPath = session.rootPath
     let cancelled = false
-
     async function checkAndConnect() {
       try {
         const res  = await fetch(`http://localhost:3001/mcp/status?path=${encodeURIComponent(rootPath)}`)
@@ -497,7 +467,6 @@ export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: Chat
         if (!cancelled) setMcpConnected(cd.connected === true)
       } catch { if (!cancelled) setMcpConnected(false) }
     }
-
     checkAndConnect()
     const interval = setInterval(checkAndConnect, 4000)
     return () => { cancelled = true; clearInterval(interval) }
@@ -559,7 +528,7 @@ export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: Chat
       if (m.type === 'agent')  lines.push('AI:', stripMarkdown(m.content), '')
       if (m.type === 'system') lines.push(`[Note: ${stripMarkdown(m.content)}]`, '')
     }
-    const text     = lines.join('\n')
+    const text = lines.join('\n')
     const fileName = session.title.replace(/[^a-z0-9]/gi, '_').toLowerCase() + '.txt'
     showToast('Opening save dialog...', 'info')
     try {
@@ -589,8 +558,8 @@ export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: Chat
     const currentAttachments = [...attachments]
     if (!overrideText) setAttachments([])
     userScrolledRef.current = false; scrollToBottom(true)
-    const fullContent    = buildMessageWithContext(text, currentAttachments)
-    const filePaths      = currentAttachments.map(f => f.path)
+    const fullContent = buildMessageWithContext(text, currentAttachments)
+    const filePaths   = currentAttachments.map(f => f.path)
     const msgId = nanoid()
     addMessage(sessionId, { id:msgId, type:'user', content:fullContent, displayContent:text, filePaths, timestamp:Date.now() })
     api.saveMessage(msgId, sessionId, 'user', fullContent).catch(() => {})
@@ -611,9 +580,9 @@ export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: Chat
     } catch (err: any) {
       const errType = classifyError(err.message)
       const msg = errType === 'ram'
-        ? '⚠ **Not enough memory.**\n\n- Close other apps\n- Pull a smaller model: `ollama pull qwen2.5-coder:1.5b`\n- Add a free cloud API key in Settings'
+        ? '⚠ **Not enough memory.**\n\n- Close other apps\n- Pull a smaller model: `ollama pull qwen2.5-coder:1.5b`\n- Add a cloud API key in Settings'
         : errType === 'timeout'
-        ? '⚠ **Connection failed.**\n\n- Check the agent server: `cd packages/agent-core && npm run dev`\n- Check Ollama: `ollama serve`'
+        ? '⚠ **Connection failed.**\n\n- Check agent server: `cd packages/agent-core && npm run dev`\n- Check Ollama: `ollama serve`'
         : `⚠ **Error:** ${err.message}`
       addMessage(sessionId, { id:nanoid(), type:'system', content:msg, timestamp:Date.now() })
     } finally { setSendingSession(null); setStreamingSession(null) }
@@ -641,6 +610,7 @@ export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: Chat
         @keyframes toastIn { from { opacity:0; transform:translateX(-50%) translateY(10px) } to { opacity:1; transform:translateX(-50%) translateY(0) } }
       `}</style>
 
+      {/* Title bar */}
       {session && (
         <div style={{ flexShrink:0, padding:'0 16px', height:36, borderBottom:'1px solid var(--border)', background:'var(--bg-secondary)', display:'flex', alignItems:'center', gap:8, overflow:'hidden' }}>
           <span style={{ fontSize:13, fontWeight:500, color:'var(--text-primary)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flexShrink:1, minWidth:0 }}>{session.title}</span>
@@ -671,6 +641,7 @@ export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: Chat
         </div>
       )}
 
+      {/* File tabs */}
       {session && isProject && (
         <div style={{ display:'flex', alignItems:'center', gap:4, padding:'4px 8px', background:'var(--bg-secondary)', borderBottom:'1px solid var(--border)', flexShrink:0, overflowX:'auto', scrollbarWidth:'none' }}>
           <div onClick={() => setActiveFile(session.id, null)}
@@ -697,6 +668,7 @@ export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: Chat
 
       {currentActiveFile ? <FileEditorPanel filePath={currentActiveFile}/> : (
         <>
+          {/* Messages */}
           <div ref={scrollRef} onScroll={handleScroll}
             style={{ flex:1, overflowY:'auto', padding:'20px 24px', display:'flex', flexDirection:'column', gap:14, minHeight:0 }}>
             {messages.length===0 && !isBusy && (
@@ -706,13 +678,12 @@ export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: Chat
                 <div style={{ fontSize:13, lineHeight:1.8, color:'var(--text-muted)' }}>
                   {isChat
                     ? <>Explain concepts, review code, write drafts, answer questions.<br/>Click <Paperclip size={11} style={{display:'inline',verticalAlign:'middle'}}/> to attach files.</>
-                    : <>Ask about the codebase, request code changes, or say "write X file" to get an Apply button.<br/>Click <Paperclip size={11} style={{display:'inline',verticalAlign:'middle'}}/> to attach files.</>
+                    : <>Ask about the codebase, request code changes, or say "write X file" for an Apply button.<br/>Click <Paperclip size={11} style={{display:'inline',verticalAlign:'middle'}}/> to attach files.</>
                   }
                 </div>
               </div>
             )}
             {messages.map((msg, i) => {
-              // Find the most recent user message before this one (for fallback filename detection)
               const prevUserMsg = messages.slice(0, i).filter(m => m.type === 'user').pop()
               return (
                 <MessageBubble key={msg.id} msg={msg} onEdit={handleEdit}
@@ -726,32 +697,36 @@ export default function ChatPanel({ onOpenTerminal, terminalOpen = false }: Chat
             <div ref={bottomRef} style={{ height:1 }}/>
           </div>
 
+          {/* Scroll-to-bottom button — sits in flex flow BETWEEN scroll area and input bar */}
+          {/* This means it is always above the input bar, regardless of terminal state */}
           {!isAtBottom && (
-            <div style={{ position:'absolute', bottom: terminalOpen ? 270 : (attachments.length > 0 ? 130 : 100), left:'50%', transform:'translateX(-50%)', zIndex:20 }}>
+            <div style={{ flexShrink:0, display:'flex', justifyContent:'center', padding:'6px 0', background:'var(--bg-primary)' }}>
               <button onClick={() => { userScrolledRef.current=false; scrollToBottom(true) }}
-                style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', borderRadius:20, background:'var(--bg-secondary)', border:'1px solid var(--border)', color:'var(--text-primary)', fontSize:12, fontWeight:500, cursor:'pointer', boxShadow:'0 4px 16px rgba(0,0,0,0.4)', backdropFilter:'blur(8px)' }}
+                style={{ display:'flex', alignItems:'center', gap:6, padding:'6px 14px', borderRadius:20, background:'var(--bg-secondary)', border:'1px solid var(--border)', color:'var(--text-primary)', fontSize:12, fontWeight:500, cursor:'pointer', boxShadow:'0 4px 16px rgba(0,0,0,0.4)', backdropFilter:'blur(8px)' }}
                 onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor='var(--accent)'; (e.currentTarget as HTMLElement).style.background='var(--bg-hover)' }}
                 onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor='var(--border)'; (e.currentTarget as HTMLElement).style.background='var(--bg-secondary)' }}
               ><ArrowDown size={13} style={{color:'var(--accent)'}}/> Scroll to bottom</button>
             </div>
           )}
 
-          <div style={{ flexShrink:0, padding:'8px 24px 14px', background:'var(--bg-primary)', position:'relative' }}>
+          {/* Input area */}
+          <div style={{ flexShrink:0, padding:'8px 24px 14px', background:'var(--bg-primary)' }}>
             {attachments.length > 0 && (
               <AttachmentStrip files={attachments} onRemove={id => setAttachments(prev => prev.filter(f => f.id !== id))}/>
             )}
-            <div style={{ display:'flex', alignItems:'flex-end', gap:6, background:'var(--bg-tertiary)', border:`1px solid ${isBusy?'var(--accent)':attachments.length?'var(--accent)':'var(--border)'}`, borderRadius:12, padding:'8px 10px 8px 14px', transition:'border-color 0.2s', marginTop:attachments.length?6:0 }}>
+            {/* Input row — alignItems:'center' keeps all icons and textarea vertically centred */}
+            <div style={{ display:'flex', alignItems:'center', gap:8, background:'var(--bg-tertiary)', border:`1px solid ${isBusy?'var(--accent)':attachments.length?'var(--accent)':'var(--border)'}`, borderRadius:12, padding:'8px 12px', transition:'border-color 0.2s', marginTop:attachments.length?6:0 }}>
               <button onClick={handleAttach} className="icon-btn" title="Attach file"
-                style={{ width:28, height:28, flexShrink:0, marginBottom:1, color:attachments.length?'var(--accent)':'var(--text-muted)' }}>
+                style={{ width:28, height:28, flexShrink:0, color:attachments.length?'var(--accent)':'var(--text-muted)', display:'flex', alignItems:'center', justifyContent:'center' }}>
                 <Paperclip size={14}/>
               </button>
               <textarea ref={textareaRef} value={input} onChange={e => setInput(e.target.value)}
                 onKeyDown={onKeyDown} placeholder={placeholder} disabled={!session||isBusy} rows={1}
-                style={{ flex:1, background:'transparent', border:'none', outline:'none', resize:'none', color:'var(--text-primary)', fontSize:13, lineHeight:1.6, fontFamily:'inherit', padding:'2px 0', maxHeight:140, overflowY:'auto' }}
+                style={{ flex:1, background:'transparent', border:'none', outline:'none', resize:'none', color:'var(--text-primary)', fontSize:13, lineHeight:'20px', fontFamily:'inherit', padding:0, maxHeight:140, overflowY:'auto', verticalAlign:'middle', alignSelf:'center' }}
               />
-              <div style={{ display:'flex', alignItems:'center', gap:4, flexShrink:0, marginBottom:1 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:4, flexShrink:0 }}>
                 <ModelSelector selectedModel={selectedModel} models={models} activeProvider={activeProvider} cloudModel={cloudModel} isOnline={isOnline} apiKeyStatus={apiKeyStatus} onOpenSettings={() => setShowSettings(true)} onChange={handleModelChange}/>
-                <button className="icon-btn" title="Voice (coming soon)" style={{ width:28, height:28 }}><Mic size={14}/></button>
+                <button className="icon-btn" title="Voice (coming soon)" style={{ width:28, height:28, display:'flex', alignItems:'center', justifyContent:'center' }}><Mic size={14}/></button>
                 <button onClick={() => send()} disabled={!canSend}
                   style={{ width:32, height:32, borderRadius:8, border:'none', background:canSend?'var(--accent)':'var(--bg-hover)', color:canSend?'white':'var(--text-muted)', cursor:canSend?'pointer':'not-allowed', display:'flex', alignItems:'center', justifyContent:'center', transition:'background 0.15s', flexShrink:0 }}>
                   {isBusy ? <Loader size={13} style={{animation:'spin 1s linear infinite'}}/> : <Send size={13}/>}

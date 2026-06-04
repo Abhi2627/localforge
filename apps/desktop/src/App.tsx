@@ -50,6 +50,16 @@ export default function App() {
     loadSession, setAllFiles, setSessionSummary,
   } = useAppStore()
 
+  // Always start with left bar collapsed so welcome screen has full width
+  // Only expand when user explicitly opens a session
+  const hasExpandedRef = useRef(false)
+  useEffect(() => {
+    if (!hasExpandedRef.current) {
+      setLeftExpanded(false)
+      hasExpandedRef.current = true
+    }
+  }, []) // eslint-disable-line
+
   const activeSession    = sessions.find(s => s.id === activeSessionId)
   const isProjectSession = screen === 'session' && activeSession?.type === 'project'
   const showRight        = isProjectSession
@@ -216,7 +226,7 @@ export default function App() {
 
       <div style={{ display:'flex', flexDirection:'column', overflow:'hidden', minHeight:0, minWidth:0 }}>
         <TabStrip/>
-        {screen === 'welcome' ? <WelcomeScreen/> : <ChatPanel onOpenTerminal={openProjectTerminal} terminalOpen={terminalOpen}/>}
+        {screen === 'welcome' ? <WelcomeScreen/> : <ChatPanel onOpenTerminal={openProjectTerminal}/>}
       </div>
 
       {showRight && (
