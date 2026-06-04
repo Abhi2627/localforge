@@ -1,4 +1,4 @@
-import { useRef, useEffect, KeyboardEvent, useState, useCallback } from 'react'
+import { useRef, useEffect, KeyboardEvent, useState, useCallback, useMemo } from 'react'
 import { Send, Bot, Paperclip, Mic, Loader, Copy, Pencil, RefreshCw, Check, X, Terminal, ChevronDown, ArrowDown, FileText, Image, File, Download } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -53,11 +53,25 @@ function extractFileContent(msgContent: string, fileName: string): string {
   return m ? m[0].replace(/<file name="[^"]*">\n?/, '').replace(/\n?<\/file>$/, '') : ''
 }
 
+// Deterministic patch ID — derived from message content + path so it
+// survives re-renders and page reloads (unlike nanoid which creates new IDs every time)
+function makePatchId(filePath: string, content: string): string {
+  // Simple hash: combine path + first 100 chars of content
+  const raw = filePath + '::' + content.slice(0, 100)
+  let hash = 0
+  for (let i = 0; i < raw.length; i++) {
+    hash = (Math.imul(31, hash) + raw.charCodeAt(i)) | 0
+  }
+  return `patch_${Math.abs(hash).toString(36)}`
+}
+
 function extractPatches(content: string, rootPath?: string, userPrompt?: string): { patches: FilePatch[]; cleanContent: string } {
   const patches: FilePatch[] = []
   const primary = content.replace(/```write:([^\n]+)\n([\s\S]*?)```/g, (_m, fp: string, fc: string) => {
-    patches.push({ id: nanoid(), path: fp.trim(), content: fc.trimEnd(), rootPath })
-    return `[File proposal: ${fp.trim()}]`
+    const path    = fp.trim()
+    const fcClean = fc.trimEnd()
+    patches.push({ id: makePatchId(path, fcClean), path, content: fcClean, rootPath })
+    return `[File proposal: ${path}]`
   })
   if (patches.length > 0) return { patches, cleanContent: primary.trim() }
   const searchText = content + ' ' + (userPrompt ?? '')
@@ -66,7 +80,8 @@ function extractPatches(content: string, rootPath?: string, userPrompt?: string)
     const codeMatch = content.match(/```(?:\w+)?\n([\s\S]*?)```/)
     if (codeMatch) {
       const rawPath = fileNameMatch[1].replace(/^\/\/\s*/, '').trim()
-      patches.push({ id: nanoid(), path: rawPath, content: codeMatch[1].trimEnd(), rootPath })
+      const fc      = codeMatch[1].trimEnd()
+      patches.push({ id: makePatchId(rawPath, fc), path: rawPath, content: fc, rootPath })
       return { patches, cleanContent: content }
     }
   }
@@ -177,44 +192,62 @@ function MsgActions({ content, onEdit, onReload, isUser, visible }: {
   )
 }
 
+// Persist applied patch IDs to localStorage so they survive page reloads
+const APPLIED_KEY = 'localforge_applied_patches'
+function loadApplied(): Set<string> {
+  try { return new Set(JSON.parse(localStorage.getItem(APPLIED_KEY) ?? '[]')) } catch { return new Set() }
+}
+function saveApplied(ids: Set<string>) {
+  try { localStorage.setItem(APPLIED_KEY, JSON.stringify([...ids])) } catch { }
+}
+
 function AgentBubble({ msg, onReload, rootPath, userPrompt }: { msg: Message; onReload?: () => void; rootPath?: string; userPrompt?: string }) {
-  const [hovered,    setHovered]    = useState(false)
-  const appliedRef   = useRef<Set<string>>(new Set())
-  const [appliedIds, setAppliedIds] = useState<Set<string>>(new Set())
-  const patchesRef = useRef<FilePatch[] | null>(null)
-  if (patchesRef.current === null) {
-    patchesRef.current = extractPatches(msg.content, rootPath, userPrompt).patches
-  }
-  const [patches, setPatches] = useState<FilePatch[]>(patchesRef.current)
-  const prevTypeRef = useRef(msg.type)
-  useEffect(() => {
-    if (prevTypeRef.current !== 'agent' && msg.type === 'agent') {
-      prevTypeRef.current = 'agent'
-      const { patches: fresh } = extractPatches(msg.content, rootPath, userPrompt)
-      if (fresh.length > 0) setPatches(fresh)
-    }
-  }, [msg.type]) // eslint-disable-line
-  const { cleanContent } = extractPatches(msg.content, rootPath, userPrompt)
+  const [hovered, setHovered] = useState(false)
+
+  // Patches derived from stable content — IDs are deterministic so they match across reloads
+  const patches = useMemo(
+    () => extractPatches(msg.content, rootPath, userPrompt).patches,
+    [msg.content, rootPath] // eslint-disable-line
+  )
+  const { cleanContent } = useMemo(
+    () => extractPatches(msg.content, rootPath, userPrompt),
+    [msg.content, rootPath] // eslint-disable-line
+  )
+
+  // Load applied state from localStorage on mount — survives reloads
+  const [appliedIds, setAppliedIds] = useState<Set<string>>(() => {
+    const all = loadApplied()
+    // Filter to only IDs relevant to this message's patches
+    const patchIds = new Set(extractPatches(msg.content, rootPath, userPrompt).patches.map(p => p.id))
+    return new Set([...all].filter(id => patchIds.has(id)))
+  })
+  const [rejected, setRejected] = useState<Set<string>>(new Set())
+
   const displayContent = patches.length > 0 ? cleanContent : msg.content
+
   async function handleApply(patch: FilePatch) {
-    if (appliedRef.current.has(patch.id)) return
-    const fullPath = patch.path.startsWith('/') ? patch.path : rootPath ? `${rootPath}/${patch.path}` : patch.path
+    if (appliedIds.has(patch.id)) return   // already applied — guard
+    const fullPath = patch.path.startsWith('/') ? patch.path
+      : rootPath ? `${rootPath}/${patch.path}` : patch.path
     const res = await fetch('http://localhost:3001/project/file', {
-      method:'POST', headers:{'Content-Type':'application/json'},
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: fullPath, content: patch.content }),
     })
     if (!res.ok) throw new Error(`Write failed: ${res.status}`)
-    appliedRef.current.add(patch.id)
-    setAppliedIds(new Set(appliedRef.current))
+    // Persist to localStorage so reload shows Applied state
+    const all = loadApplied()
+    all.add(patch.id)
+    saveApplied(all)
+    setAppliedIds(new Set(all))
   }
   return (
     <div style={{display:'flex',flexDirection:'column',gap:3}}
       onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
       {msg.agentName && <div className={`agent-badge ${roleBadgeClass(msg.agentRole)}`} style={{display:'inline-block',fontSize:10,alignSelf:'flex-start'}}>{msg.agentName}</div>}
       {displayContent && <div className="msg-agent"><MarkdownContent content={displayContent}/></div>}
-      {patches.map(p => (
+      {patches.filter(p => !rejected.has(p.id)).map(p => (
         <FilePatchCard key={p.id} patch={p} alreadyApplied={appliedIds.has(p.id)}
-          onApply={handleApply} onReject={id => setPatches(ps => ps.filter(x => x.id !== id))}/>
+          onApply={handleApply} onReject={id => setRejected(r => new Set([...r, id]))}/>
       ))}
       <div style={{display:'flex',alignItems:'center',gap:6}}>
         <span style={{fontSize:10,color:'var(--text-muted)',paddingLeft:2}}>{formatTime(msg.timestamp)}</span>
