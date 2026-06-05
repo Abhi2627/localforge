@@ -12,10 +12,13 @@
 
 LocalForge is a purpose-built desktop IDE for AI-assisted development. It combines a VSCode-style UI, local Ollama inference, multi-agent task orchestration, and cloud LLM integration into a single offline-capable desktop app.
 
+**Core design goal:** Users should never feel lost. Every feature is modelled after VSCode so the interface is immediately familiar — no learning curve on top of the AI learning curve.
+
 **Core principles:**
 - Local-first: everything works offline with Ollama
 - Cloud-optional: plug in Gemini, Claude, OpenAI, or Groq for heavier tasks
 - Production-ready: not a demo — ships features agents can actually write and apply to disk
+- Familiar: VSCode-style UI, keybindings, git panel, diff view, minimap, terminal
 
 ---
 
@@ -67,9 +70,12 @@ cd apps/desktop && npm run dev
 ### Cloud LLM Integration
 - Unified LLM client routing to Ollama or cloud providers transparently
 - Supported providers: Gemini Flash, OpenAI GPT-4o, Claude, Groq (free tier), Custom (OpenAI-compatible)
-- Settings: API key management, temperature, max tokens, system prompt, context length
+- **Settings — Local tab:** System info panel (platform, CPU, RAM bar green/amber/red, Ollama version + status dot)
+- **Settings — Cloud tab:** Per-provider rate limit info (e.g. "Groq free: 30 RPM / 6K TPM"), API key save/test/delete, model selector
+- **Ollama removed from cloud providers** — lives only in Local tab
 - Per-chat model selector in the input bar — only shows providers with saved API keys
 - Internet connectivity detection — cloud providers auto-disabled when offline
+- **Rate limit / quota error classifier** — when any provider returns 429, quota exceeded, invalid key, OOM, or context-length errors, the model sends a provider-specific actionable message in chat with exact limits and immediate fix options
 
 ### Chat Features
 - SSE streaming with Markdown rendering (tables, code blocks, lists, headers)
@@ -78,146 +84,123 @@ cd apps/desktop && npm run dev
 - Agent file write + apply: model proposes files using `write:path` syntax, rendered as Apply/Reject cards
   - Deterministic patch IDs — applied state persists across page reloads (localStorage)
   - Fallback parser: detects plain code blocks when model ignores the `write:` format
-  - Diff preview with expand chevron before applying
+  - Applied files appear in file tree immediately via `localforge:file-applied` CustomEvent
 - MCP indicator in project chat title bar (green = connected, blinking red = connecting)
 - Project chat grounded in real files: README.md + key config files injected into every message context
 - Auto-generated session titles, per-message copy/edit/regenerate
-- Export chat as `.txt` (plain text, opens on any OS) via Tauri save dialog with toast notifications
-- Scroll-to-bottom button (appears when user scrolls up mid-stream, sits above input bar)
+- Export chat as `.txt` via Tauri save dialog with toast notifications
+- Scroll-to-bottom button (appears when user scrolls up mid-stream)
 
 ### Right Sidebar (VSCode-style)
-- **Row 1:** Project title div (folder name, loading spinner)
-- **Row 2:** 4 horizontal icon buttons — each opens a full-screen modal window:
-  - **Knowledge Graph** (Network icon): symbol browser with search, kind filter, conflict detection
-  - **Project Graph** (Layout icon): interactive component dependency graph
-  - **Agents** (Bot icon): agent list with status, running indicator dot, add agent
-  - **API Contracts** (Branch icon): frontend call vs backend route matching, violation detection
-- **File Explorer:** collapsible, takes full space when only section open, 50/50 split when both open
-  - Full VSCode-style file management via right-click context menu:
-    - New File, New Folder (inline input, Enter to confirm, Escape to cancel)
-    - Rename (inline input replaces filename in-place)
-    - Copy, Cut, Paste (clipboard strip shown above tree with ✂/⎘ indicator)
-    - Duplicate (auto-increments `_copy`, `_copy1` to avoid conflicts)
-    - Copy Path, Copy Relative Path
-    - Delete (confirmation dialog, immediately removes from tree)
-  - Files applied via chat Apply button appear in tree immediately (CustomEvent bridge)
-  - Files deleted from tree are immediately hidden (local `deletedPaths` set, no store rescan needed)
-  - File search via magnifier button
-- **Source Control:** collapsible git panel
-  - Auto-reloads every 3s (no manual refresh button) — detects `git commit`, `git push`, `git add`
-  - Staged / Unstaged / Untracked sections with status badges (M/A/D/R)
-  - Commit log with relative timestamps, author, ref badges
-  - Branch list (local + remote)
-  - Click any changed file → opens **side-by-side diff view** in the main editor area
-- **Collapsed strip:** 6 icons when sidebar is narrow — 4 open modals directly, 2 expand the sidebar
+- **Row 1:** Project title, loading spinner
+- **Row 2:** 4 icon buttons → full-screen modals: Knowledge Graph, Project Graph, Agents, API Contracts
+- **File Explorer:**
+  - **Permanent search bar** — always visible at top, clear button, filters tree in real time
+  - Full VSCode-style right-click context menu: New File, New Folder, Rename (inline), Copy, Cut, Paste, Duplicate, Copy Path, Copy Rel. Path, Delete
+  - Clipboard strip above tree (✂/⎘ indicator, × to clear, cut items at 40% opacity)
+  - Files from chat Apply appear immediately; deleted files vanish immediately (no rescan)
+- **Source Control (Git panel):**
+  - Single **CHANGES (N)** section — staged (green dot) + unstaged (amber dot) merged, just like VSCode
+  - Untracked files in separate section below
+  - **History tab** — all commits grouped by day (sticky headers), load-more button (100 at a time), click commit → expands to show changed files, click file → opens diff in main editor
+  - **Branches tab** — local + remote, current branch highlighted
+  - Branch bar with ↑ahead / ↓behind indicators, spinning loader on auto-reload
+  - Auto-reloads every 3 seconds
+- **Collapsed strip:** 6 icons — 4 open modals directly, 2 expand the sidebar
 
-### Main Editor Area
-- `FileEditorPanel`: syntax-highlighted code editor (token-based, no Monaco dependency)
-  - Line numbers, copy button, Cmd+S to save, Tab → 2 spaces
-  - Supported languages: TS, TSX, JS, JSX, Python, JSON, CSS, SCSS, HTML, Shell, Rust, Go
-- `DiffEditorPanel`: VSCode-style side-by-side diff viewer (opens when git file is clicked)
-  - Left column = before (red removed lines), Right column = after (green added lines)
-  - Both columns scroll in sync, line number gutters, `+`/`-` markers
-  - Hunk headers with purple accent, staged/unstaged badge, `+N -N` change count
-  - File navigator for multi-file diffs
-- File tabs above editor — Chat tab always visible, open files listed with × to close
+### Main Editor Area — File Editor
+- `FileEditorPanel`: syntax-highlighted code editor
+  - **Auto-save** — debounced 800ms after last keystroke, no manual save needed
+  - **Breakpoint gutter** — 16px strip left of line numbers; hover = faint red dot, click = persistent red dot with glow; breakpoint count shown in header
+  - **Line numbers** — bright `#858585`, red for breakpointed lines
+  - **Minimap** — right side, renders actual tiny text (`ctx.fillText` at 1.7px monospace) with syntax colours (comments=green, keywords=blue, types=teal, strings=orange, JSX=gold); viewport indicator auto-scrolls as you scroll the file
+  - **File breadcrumb** — full path shown in header
+  - Cmd+S to save manually, Tab → 2 spaces, language detection from extension
+  - Supported: TS, TSX, JS, JSX, Python, JSON, CSS, SCSS, HTML, Shell, Rust, Go
+
+### Main Editor Area — Diff Editor
+- `DiffEditorPanel`: VSCode-style side-by-side diff
+  - **Full file shown** — loads HEAD/index content + working tree, overlays diff highlights on complete file (not just hunks)
+  - **Left column** = before (red background, `-` marker, red line numbers)
+  - **Right column** = after (green background, `+` marker, green line numbers)
+  - **Inline character-level highlighting** — LCS-based char diff; whole changed line = light bg, exact changed chars = darker bg
+  - **Grey placeholder rows** — added lines get empty placeholders in left column so columns stay aligned
+  - **Single combined minimap** on far right — left half=before (red), right half=after (green), centre divider; auto-scrolls with viewport
+  - Both columns scroll in sync via `data-scroll-col` + `onScroll` sync
+  - Commit diff mode: click file in History → shows before (parent commit) vs after (this commit)
+  - Staged/unstaged/commit mode badge, `+N -N` change count in header
+
+### Terminal
+- Integrated terminal via xterm.js + node-pty
+- Shell auto-detection (zsh/bash/sh, respects `$SHELL` and `/etc/passwd`)
+- Full colour support (truecolor), 120×30 default size
+- Horizontal terminal tabs
 
 ### Left Bar
-- Chats section (collapsible, New Chat button)
-- Projects section (collapsible, Open Project button)
-- Extensions placeholder
-- Collapsed state: all icons expand the sidebar on click with accent hover effect
-- Per-session rename and delete with timestamps in context menu
-- Deleted sessions blacklisted in localStorage — never reappear after restart
+- Chats / Projects sections (collapsible), New Chat / Open Project buttons
+- Collapsed state: icons expand sidebar on click with accent hover
+- Per-session rename, delete with timestamps
+- Deleted sessions blacklisted in localStorage
 
 ### Welcome Screen
-- Vertically centred greeting with username (`Welcome onboard, {name}`)
-- New Chat + New Project buttons
-- 3 rows of horizontally auto-scrolling feature cards with edge fade masks
-- Left bar starts collapsed on launch for full-width welcome view
+- Vertically centred greeting with username
+- Auto-scrolling feature cards with edge fade masks
 
 ### Intelligence Layer
 - Knowledge Graph: TS/JS/Python/Rust symbol extractor, conflict detection, agent context injection
-- API Contract Enforcer: fetch/axios calls vs Express/Fastify routes, violation detection
-- Model Advisor: latency/TPS tracking, error log, smart suggestions
+- API Contract Enforcer: frontend fetch calls vs backend routes, violation detection
+- Model Advisor: latency/TPS tracking, error log, model suggestions
 
-### Server File Management API
-- `POST /project/file` — create or overwrite a file
-- `DELETE /project/file?path=...` — delete file or folder (recursive)
-- `POST /project/file/move` — rename or move
-- `POST /project/file/copy` — copy file/folder recursively
-- `POST /project/folder` — create new folder
-- `GET /project/file/exists` — check path existence (used for duplicate naming)
-- `GET /mcp/status?path=...` — check MCP connection status
-- `POST /mcp/connect` — connect MCP to a project path
-
-### UX & Polish
-- RAM error detection: shows actionable in-chat message when Ollama runs out of memory
-- Toast notification system: slide-up pill for export status (info/success/error)
-- Cut items shown at 40% opacity while on clipboard
-- Clipboard indicator strip above file tree with ✂/⎘ and × to clear
+### Server APIs
+- Full file management: create, read, write, delete, move, copy, folder create, exists check
+- Git: status, log, branches, diff (staged/unstaged/HEAD), commit diff, file-at-HEAD, file-at-commit
+- System info: RAM, CPU, platform, Ollama status
+- MCP: connect, status
+- Settings: provider config, API keys (save/delete/validate), LLM defaults, appearance
 
 ---
 
 ## Roadmap
 
-### Phase 4 — Completed ✅
+### Phase 4 — Status
 
 | Feature | Status |
 |---|---|
-| 4B File Attach | ✅ Done |
-| 4C Agent file write + apply (with fallback parser) | ✅ Done |
-| 4D Ollama model management (in Settings) | ✅ Done |
-| 4E Right sidebar redesign (icon buttons + modals) | ✅ Done |
+| 4B File Attach in chat | ✅ Done |
+| 4C Agent file write + apply (deterministic IDs, localStorage persist) | ✅ Done |
+| 4D Ollama model management | ✅ Done |
+| 4E Right sidebar (icon buttons + modals) | ✅ Done |
 | 4F Export chat as .txt | ✅ Done |
-| 4G Settings local/cloud split | ⬜ Pending (new features to add — planned next) |
+| 4G Settings split (Local/Cloud/LLM/Display) + rate limit classifier | ✅ Done |
+| 4H VSCode-style diff editor (full file, inline char diff, combined minimap) | ✅ Done |
+| 4I Git history with commit drill-down | ✅ Done |
+| 4J File editor minimap (actual text rendering, syntax colors) | ✅ Done |
+| 4K Breakpoint gutter | ✅ Done |
+| 4L Permanent file search bar | ✅ Done |
+
+### Phase 5 — In Progress / Planned
+
+| Feature | Status |
+|---|---|
+| 5A Auto-save (debounced, no manual save) | 🔨 Next |
+| 5B Find in Files (Cmd+Shift+F, search across project) | 🔨 Next |
+| 5C File breadcrumb (full path, clickable segments) | 🔨 Next |
+| 5D VSCode-style terminal (tabs, theme, font, colours) | 🔨 Next |
+| 5E Per-session provider/model selection (different API keys per chat) | 🔨 Next |
+| 5F Agent Auto-Apply mode (toggle in settings, no confirm dialog) | 📋 Planned |
+| 5G Universal file reading in chat (PDF, DOCX, images) | 📋 Planned |
+| 5H Chart/graph rendering from agent data output | 📋 Planned |
+| 5I Math rendering (KaTeX) | 📋 Planned |
 
 ---
 
-### Phase 5 — Future
+## Known Bugs
 
-#### 5A — Math Rendering
-- LaTeX equation rendering via KaTeX (remark-math + rehype-katex)
-- Blocked by: KaTeX CSS not loading correctly in Tauri webview; font path resolution issues
+See [`docs/KNOWN_BUGS.md`](./docs/KNOWN_BUGS.md) for detailed investigation notes.
 
-#### 5B — Web Search / RAG
-- `@web` trigger for live data queries (infrastructure partially built)
-- Blocked by: small local models hallucinate regardless of retrieved context
-- Fix: use Gemini Flash or GPT-4o-mini for RAG — revisit when cloud providers are stable
-
-#### 5C — Graph Visualization
-- Draw charts and graphs from data (chart.js or D3)
-- Requires: agent output parsing for structured data
-
-#### 5D — File Output (docx, drive)
-- Export responses as Word documents, save to Google Drive
-- Requires: docx generation library, OAuth integration
-
-#### 5E — Universal File Reading in Chat
-- Accept PDF, DOCX, XLSX, images as chat attachments
-- PDF → text via `pdf-parse` / `pdfjs-dist`; DOCX → `mammoth.js`; images → base64 for vision models
-- Blocked by: Ollama local models do not support vision; PDF/DOCX parsing requires server-side libraries
-- Fix: add `pdf-parse` + `mammoth` to agent-core, add vision routing for cloud providers
-
-#### 5F — Agent Direct-Action Mode (no explanatory prose)
-- Small local models (qwen2.5-coder 1.5b/7b) write step-by-step instructions alongside `write:` blocks
-- Desired: model outputs ONLY the write block + one-line summary
-- Fix path:
-  - (a) Use a larger model (≥14b parameters) that reliably follows strict system prompt rules
-  - (b) Post-processing: if a `write:` block is present, hide surrounding prose in the UI
-  - (c) Fine-tune a small model on agent-action-only datasets
-- Blocked by: small local models ignoring system prompt formatting constraints
-
-#### 5G — Agent Auto-Apply Mode
-- Option in Settings to auto-apply all `write:` blocks without user confirmation
-- Per-session toggle + global default
-- Should have a "Review mode" option to show a summary of what was applied
-
-#### 5H — Full-File Diff View
-- Currently: diff shows only changed hunks (git unified diff format, ~3 context lines each side)
-- Desired: show the complete file on both sides, with changed lines highlighted inline (like Monaco)
-- Fix: load full file content separately, apply diff decorations client-side
-- Blocked by: no Monaco editor embedded; requires building a custom line-diffing engine or integrating Monaco
+| Bug | Status |
+|---|---|
+| Diff view empty for some staged files (`git diff HEAD -- deep/path/file` returns nothing from server process) | PARKED — needs debug endpoint to diagnose |
 
 ---
 
@@ -225,10 +208,10 @@ cd apps/desktop && npm run dev
 
 | Limitation | Detail |
 |---|---|
-| Small model format compliance | `qwen2.5-coder:1.5b/7b` often ignores the `write:path` format and writes instructions instead. The fallback parser handles most cases but is not 100% reliable. Use a ≥14b model or a cloud provider for best results. |
-| Git diff shows partial file | The diff view shows only changed regions (standard unified diff format). Full-file side-by-side diff requires Monaco or a custom diffing engine (Phase 5H). |
-| PDF/DOCX not supported in file attach | Only plain text and code files can be attached to chat. PDF/DOCX support is Phase 5E. |
-| Vision not supported for local models | Image attachments are parsed as filenames only for Ollama models. Vision support requires a cloud provider. |
+| Small model format compliance | `qwen2.5-coder:1.5b/7b` often ignores the `write:path` format. Fallback parser handles most cases. Use ≥14b or cloud for best results. |
+| Diff view for staged files | Some staged files show empty diff due to a server-side git process issue. See Known Bugs. |
+| PDF/DOCX file attach | Only plain text and code files supported in chat. PDF/DOCX is Phase 5G. |
+| Vision not supported for local models | Image attachments require a cloud provider with vision support. |
 
 ---
 
