@@ -107,6 +107,134 @@ function buildSystemPrompt(modelName: string, summary?: string | null, knowledge
   )
 }
 
+// Classify API errors into user-friendly actionable messages
+function classifyApiError(err: Error, provider: string, model: string): string {
+  const msg = err.message.toLowerCase()
+  const isGroq    = provider === 'groq'
+  const isGemini  = provider === 'gemini'
+  const isClaude  = provider === 'claude'
+  const isOpenAI  = provider === 'openai'
+
+  // Rate limit (429)
+  if (msg.includes('429') || msg.includes('rate limit') || msg.includes('rate_limit') || msg.includes('too many requests')) {
+    if (isGroq) return [
+      '⚠️ **Groq rate limit reached**',
+      '',
+      'Groq\'s free tier limits: **30 requests/min** and **6,000 tokens/min**.',
+      '',
+      '**Immediate options:**',
+      '- Wait 60 seconds and retry',
+      '- Switch to a smaller model: `llama-3.1-8b-instant` uses fewer tokens',
+      '- Switch to Gemini Flash (also free, higher limits) in **Settings → Cloud**',
+      '- Pull a local Ollama model: `ollama pull qwen2.5-coder:1.5b` — no rate limits',
+    ].join('\n')
+    if (isGemini) return [
+      '⚠️ **Gemini rate limit reached**',
+      '',
+      'Gemini free tier: **15 requests/min**, **1M tokens/day**.',
+      '',
+      '**Immediate options:**',
+      '- Wait 60 seconds and retry',
+      '- Switch to `gemini-2.0-flash-lite` (lighter model, same free tier)',
+      '- Switch to Groq in **Settings → Cloud** (also free)',
+      '- Pull a local model: `ollama pull qwen2.5-coder:1.5b`',
+    ].join('\n')
+    if (isOpenAI) return [
+      '⚠️ **OpenAI rate limit reached**',
+      '',
+      'Your OpenAI account has hit its rate or spending limit.',
+      '',
+      '**Immediate options:**',
+      '- Check your limits at [platform.openai.com/limits](https://platform.openai.com/limits)',
+      '- Switch to `gpt-4o-mini` (cheaper, higher rate limits)',
+      '- Switch to Gemini or Groq (free) in **Settings → Cloud**',
+      '- Pull a local model to avoid API costs entirely',
+    ].join('\n')
+    if (isClaude) return [
+      '⚠️ **Anthropic rate limit reached**',
+      '',
+      'Your Claude API key has hit its rate limit.',
+      '',
+      '**Immediate options:**',
+      '- Switch to `claude-haiku-4-5` (fastest, cheapest, higher rate limits)',
+      '- Check usage at [console.anthropic.com](https://console.anthropic.com)',
+      '- Switch to Gemini or Groq (free) in **Settings → Cloud**',
+    ].join('\n')
+    return `⚠️ **Rate limit reached for ${provider}**\n\nWait 60 seconds then retry, or switch providers in **Settings → Cloud**.`
+  }
+
+  // Token / context limit
+  if (msg.includes('context') && (msg.includes('length') || msg.includes('limit') || msg.includes('exceed') || msg.includes('too long'))) {
+    return [
+      '⚠️ **Context length exceeded**',
+      '',
+      `The conversation is too long for **${model}** to process in one request.`,
+      '',
+      '**Immediate options:**',
+      '- Start a new chat (this one has too much history)',
+      '- Reduce **Max tokens** in **Settings → LLM**',
+      ...(provider === 'ollama' ? ['- Increase **Ollama context length (num_ctx)** in **Settings → LLM**'] : []),
+      '- Use a model with a larger context window',
+    ].join('\n')
+  }
+
+  // Quota / billing exceeded
+  if (msg.includes('quota') || msg.includes('billing') || msg.includes('insufficient_quota') || msg.includes('exceeded your') || msg.includes('payment')) {
+    return [
+      '⚠️ **API quota or billing limit reached**',
+      '',
+      `Your **${provider}** account has run out of credits or hit its monthly quota.`,
+      '',
+      '**Immediate options:**',
+      '- Add billing/credits at your provider dashboard',
+      '- Switch to a free provider (Gemini or Groq) in **Settings → Cloud**',
+      '- Pull a local Ollama model — completely free, no quotas',
+    ].join('\n')
+  }
+
+  // Invalid API key
+  if (msg.includes('401') || msg.includes('invalid api key') || msg.includes('unauthorized') || msg.includes('invalid_api_key') || msg.includes('authentication')) {
+    return [
+      '⚠️ **Invalid API key**',
+      '',
+      `The API key for **${provider}** is invalid or has been revoked.`,
+      '',
+      '**Fix:** Go to **Settings → Cloud** → ${provider} → enter a new API key.',
+    ].join('\n')
+  }
+
+  // Model not found
+  if (msg.includes('model') && (msg.includes('not found') || msg.includes('does not exist') || msg.includes('invalid'))) {
+    return [
+      `⚠️ **Model not found: ${model}**`,
+      '',
+      `The model **${model}** is not available on **${provider}**.`,
+      '',
+      '**Fix:** Go to **Settings → Cloud** → ${provider} → select a different model.',
+    ].join('\n')
+  }
+
+  // Ollama-specific
+  if (msg.includes('out of memory') || msg.includes('cannot allocate') || msg.includes('ggml_') || msg.includes('metal')) {
+    return [
+      '⚠️ **Not enough RAM for this model**',
+      '',
+      '**Immediate options:**',
+      '- Close other apps to free memory',
+      '- Use a smaller model: `ollama pull qwen2.5-coder:1.5b` (1.1 GB)',
+      '- Switch to a cloud provider (Gemini/Groq are free) in **Settings → Cloud**',
+    ].join('\n')
+  }
+
+  if (msg.includes('fetch') || msg.includes('timeout') || msg.includes('abort') || msg.includes('econnrefused')) {
+    return provider === 'ollama'
+      ? '⚠️ **Cannot reach Ollama**\n\nMake sure Ollama is running:\n```\nollama serve\n```'
+      : `⚠️ **Connection failed for ${provider}**\n\nCheck your internet connection and retry.`
+  }
+
+  return `⚠️ **Error from ${provider}:** ${err.message}`
+}
+
 function mapHistory(h: Array<{ role: string; content: string }>) {
   return h.slice(-20).map(x => ({ role: x.role as ChatRole, content: x.content }))
 }
@@ -285,6 +413,18 @@ async function bootstrap() {
     }
   })
   server.get('/system', async () => profileSystem())
+  server.get('/system/info', async () => {
+    const os_ = await import('os')
+    const cpus = os_.default.cpus()
+    return {
+      totalRam: os_.default.totalmem(),
+      freeRam:  os_.default.freemem(),
+      platform: os_.default.platform(),
+      arch:     os_.default.arch(),
+      cpuModel: cpus[0]?.model ?? 'Unknown',
+      cpuCount: cpus.length,
+    }
+  })
   server.post<{ Body: { mode: 'sequential'|'parallel'; maxParallel?: number } }>('/system/mode', async (req) => { taskQueue.setMode(req.body.mode, req.body.maxParallel); saveConfig({ executionMode: req.body.mode, maxParallel: req.body.maxParallel ?? 1 }); return { success: true } })
   server.get('/network/info', async () => ({ lanIp: LAN_IP, hostname: os.hostname(), platform: os.platform() }))
 
@@ -478,7 +618,9 @@ async function bootstrap() {
         reply.raw.write('data: [DONE]\n\n'); reply.raw.end()
         try { saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: full }) } catch { }
       } catch (err: any) {
-        try { send({ chunk: `\n\n⚠️ **Error:** ${err.message}` }); reply.raw.write('data: [DONE]\n\n'); reply.raw.end() } catch { }
+        const s2 = loadSettings()
+        const errMsg = classifyApiError(err, s2.activeProvider, s2.cloudModels[s2.activeProvider as CloudProvider] ?? '')
+        try { send({ chunk: `\n\n${errMsg}` }); reply.raw.write('data: [DONE]\n\n'); reply.raw.end() } catch { }
       }
     }
   )
@@ -512,7 +654,9 @@ async function bootstrap() {
         reply.raw.write('data: [DONE]\n\n'); reply.raw.end()
         try { saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: full }) } catch { }
       } catch (err: any) {
-        try { send({ chunk: `\n\n⚠️ **Error:** ${err.message}` }); reply.raw.write('data: [DONE]\n\n'); reply.raw.end() } catch { }
+        const s2 = loadSettings()
+        const errMsg = classifyApiError(err, s2.activeProvider, s2.cloudModels[s2.activeProvider as CloudProvider] ?? '')
+        try { send({ chunk: `\n\n${errMsg}` }); reply.raw.write('data: [DONE]\n\n'); reply.raw.end() } catch { }
       }
     }
   )
