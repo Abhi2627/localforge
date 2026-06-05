@@ -603,6 +603,82 @@ async function bootstrap() {
     return { exists: fs.existsSync(filePath), isDir: fs.existsSync(filePath) && fs.statSync(filePath).isDirectory() }
   })
 
+  server.get('/project/search/files', async (req: any) => {
+    const { rootPath: root, query, caseSensitive, wholeWord, includeGlob, excludeGlob } = req.query as Record<string, string>
+    if (!root || !query || !fs.existsSync(root)) return { results: [], total: 0 }
+
+    const MAX = 500
+    const MAXSZ = 512 * 1024
+    const SKIP = new Set(['node_modules', '.git', 'dist', 'build', '.next', '__pycache__', '.cache', 'coverage', '.turbo'])
+    const results: any[] = []
+    let total = 0
+
+    function esc(s: string) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') }
+    let rx: RegExp
+    try {
+      const flags = caseSensitive === 'true' ? 'g' : 'gi'
+      rx = new RegExp(wholeWord === 'true' ? `\\b${esc(query)}\\b` : esc(query), flags)
+    } catch {
+      return { results: [], total: 0 }
+    }
+
+    function glob(rel: string, pat: string): boolean {
+      return pat.split(',').map(p => p.trim()).filter(Boolean).some(p => {
+        const r = new RegExp('^' + p.replace(/\./g, '\\.').replace(/\*\*/g, '__D__').replace(/\*/g, '[^/]*').replace(/__D__/g, '.*').replace(/\?/g, '[^/]') + '$')
+        return r.test(rel) || r.test(path.basename(rel))
+      })
+    }
+
+    function walk(dir: string) {
+      if (total >= MAX) return
+      let ents: string[]
+      try { ents = fs.readdirSync(dir) } catch { return }
+
+      for (const e of ents) {
+        if (total >= MAX) return
+        const full = path.join(dir, e)
+        const rel = path.relative(root, full).replace(/\\/g, '/')
+        let st: fs.Stats
+        try { st = fs.statSync(full) } catch { continue }
+
+        if (st.isDirectory()) {
+          if (!SKIP.has(e) && !e.startsWith('.')) walk(full)
+          continue
+        }
+        if (!st.isFile() || st.size > MAXSZ) continue
+        if (excludeGlob && glob(rel, excludeGlob)) continue
+        if (includeGlob && !glob(rel, includeGlob)) continue
+
+        let txt: string
+        try { txt = fs.readFileSync(full, 'utf8') } catch { continue }
+        if (txt.includes('\0')) continue
+
+        const hits: any[] = []
+        txt.split('\n').forEach((ln, i) => {
+          rx.lastIndex = 0
+          let m: RegExpExecArray | null
+          while ((m = rx.exec(ln)) !== null) {
+            const s = Math.min(m.index, 30)
+            hits.push({
+              line: i + 1,
+              col: m.index,
+              text: ln.slice(Math.max(0, m.index - 30), m.index + m[0].length + 60).trimEnd(),
+              matchStart: s,
+              matchEnd: s + m[0].length,
+            })
+            total++
+            if (total >= MAX) break
+          }
+        })
+
+        if (hits.length > 0) results.push({ file: full, relPath: rel, matches: hits })
+      }
+    }
+
+    walk(root)
+    return { results, total, capped: total >= MAX }
+  })
+
   // ── Git ────────────────────────────────────────────────────────────────────
   server.get<{ Params: { sessionId: string } }>('/project/:sessionId/git/status', async (req) => { const s = getSession(req.params.sessionId); if (!s?.rootPath) return { isRepo: false }; return { isRepo: true, status: getStatus(s.rootPath) } })
   server.get<{ Params: { sessionId: string }; Querystring: { limit?: string; branch?: string } }>('/project/:sessionId/git/log', async (req) => { const s = getSession(req.params.sessionId); if (!s?.rootPath) return { commits: [] }; return { commits: getLog(s.rootPath, Math.min(parseInt(req.query.limit ?? '50'), 200), req.query.branch ?? '') } })

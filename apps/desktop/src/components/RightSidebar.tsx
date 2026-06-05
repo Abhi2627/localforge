@@ -9,6 +9,7 @@ import { useAppStore } from '../store/appStore'
 import AgentModal from './AgentModal'
 import ProjectGraph from './ProjectGraph'
 import GitPanel from './GitPanel'
+import FindInFiles from './FindInFiles'
 
 interface RightSidebarProps { onOpenTerminal: (cwd: string) => void }
 
@@ -625,7 +626,7 @@ function SidebarSection({ title, expanded, onToggle, children }: {
 }
 
 // ── Main sidebar ──────────────────────────────────────────────────────────────
-type ModalPanel = 'knowledge' | 'contracts' | 'agents' | 'graph' | null
+type ModalPanel = 'knowledge' | 'contracts' | 'agents' | 'graph' | 'search' | null
 
 export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps) {
   const { sessions, activeSessionId, rightExpanded, setRightExpanded } = useAppStore()
@@ -697,9 +698,28 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
     contracts: 'API Contracts',
     agents:    'Agents',
     graph:     'Project Graph',
+    search:    'Find in Files',
   }
 
+  // Cmd+Shift+F opens Find in Files (just like VSCode)
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'f') {
+        e.preventDefault()
+        setOpenModal('search')
+      }
+    }
+    document.addEventListener('keydown', handleKey)
+    return () => document.removeEventListener('keydown', handleKey)
+  }, [])
+
   function renderModalBody() {
+    if (openModal === 'search') return session?.rootPath
+      ? <FindInFiles
+          rootPath={session.rootPath}
+          onOpenFile={(filePath, _line) => { setOpenModal(null); if (activeSessionId) { const store = useAppStore.getState(); store.openFile(activeSessionId, filePath) } }}
+        />
+      : <div style={{padding:24,color:'var(--text-muted)',fontSize:13}}>Open a project to search files</div>
     if (openModal === 'knowledge') return session
       ? <KnowledgeGraphModalBody sessionId={session.id}/>
       : <div style={{padding:24,color:'var(--text-muted)',fontSize:13}}>Open a project to view the knowledge graph</div>
