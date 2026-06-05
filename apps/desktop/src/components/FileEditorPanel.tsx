@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Save, Copy, Check, FileCode, Loader } from 'lucide-react'
+import path from 'path-browserify'
 import { api } from '../hooks/useApi'
 
 interface Props {
   filePath: string
+  rootPath?: string
   onSaveSuccess?: () => void
 }
 
@@ -55,83 +57,100 @@ function escHtml(s: string) {
 }
 
 // ── Minimap ───────────────────────────────────────────────────────────────────
-const MINIMAP_W      = 80    // px width of minimap
-const MINIMAP_LINE_H = 2     // px per line in minimap
-const MINIMAP_CHAR_W = 0.6   // px per character in minimap
+const MINIMAP_W      = 100
+const MINIMAP_LINE_H = 2    // px per line
+const MINIMAP_FONT   = '1.7px monospace'  // tiny font renders actual character shapes
+
+// Assign a colour to a line based on its content (mimics VSCode token colours)
+function lineColor(line: string): string {
+  const t = line.trim()
+  if (!t) return ''
+  if (t.startsWith('//') || t.startsWith('#') || t.startsWith('*'))  return '#6a9955'
+  if (/^(import|export|from|const|let|var|function|class|interface|type|enum|return|if|else|for|while|async|await|def|fn)\b/.test(t)) return '#569cd6'
+  if (/^[A-Z][a-zA-Z]/.test(t))                                       return '#4ec9b0'
+  if (t.startsWith("'") || t.startsWith('"') || t.startsWith('`'))   return '#ce9178'
+  if (t.startsWith('<') || t.startsWith('}') || t.startsWith('{'))   return '#ffd700'
+  return '#9cdcfe'
+}
 
 interface MinimapProps {
   lines:        string[]
-  visibleStart: number   // 0-based first visible line
-  visibleCount: number   // number of visible lines
+  visibleStart: number
+  visibleCount: number
   totalLines:   number
   onClickLine:  (line: number) => void
-  changedLines?: Set<number>  // for diff highlights
+  changedLines?: Set<number>
 }
 
 function Minimap({ lines, visibleStart, visibleCount, onClickLine, changedLines }: MinimapProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const FULL_H    = lines.length * MINIMAP_LINE_H
+  const canvasRef  = useRef<HTMLCanvasElement>(null)
+  const scrollRef  = useRef<HTMLDivElement>(null)
+  const FULL_H     = lines.length * MINIMAP_LINE_H
 
   useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
+    const canvas = canvasRef.current; if (!canvas) return
     canvas.width  = MINIMAP_W
-    canvas.height = Math.max(FULL_H, 1)
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    ctx.clearRect(0, 0, MINIMAP_W, Math.max(FULL_H, 1))
+    canvas.height = Math.max(lines.length * MINIMAP_LINE_H, 1)
+    const ctx = canvas.getContext('2d'); if (!ctx) return
     ctx.fillStyle = '#1e1e1e'
-    ctx.fillRect(0, 0, MINIMAP_W, Math.max(FULL_H, 1))
+    ctx.fillRect(0, 0, MINIMAP_W, canvas.height)
+    ctx.font = MINIMAP_FONT
+    ctx.textBaseline = 'top'
     lines.forEach((line, i) => {
       const y = i * MINIMAP_LINE_H
       if (changedLines?.has(i + 1)) {
-        ctx.fillStyle = 'rgba(61,214,140,0.35)'
+        ctx.fillStyle = 'rgba(61,214,140,0.18)'
         ctx.fillRect(0, y, MINIMAP_W, MINIMAP_LINE_H)
       }
-      const trimmed = line.trimStart()
-      const indent  = line.length - trimmed.length
-      const x       = indent * MINIMAP_CHAR_W
-      const w       = Math.min(trimmed.length * MINIMAP_CHAR_W, MINIMAP_W - x)
-      if (w > 0) {
-        ctx.fillStyle = changedLines?.has(i + 1) ? '#7ec8a0' : '#555770'
-        ctx.fillRect(x, y + 0.3, w, 1)
-      }
+      const color = changedLines?.has(i + 1) ? '#3dd68c' : lineColor(line)
+      if (!color || !line.trim()) return
+      ctx.fillStyle = color
+      // Draw tiny text — actual characters, slightly indented for structure
+      const indent = (line.length - line.trimStart().length) * 0.5
+      ctx.fillText(line.trimStart(), Math.min(indent, MINIMAP_W * 0.25), y + 0.1, MINIMAP_W - Math.min(indent, MINIMAP_W * 0.25))
     })
   }, [lines, changedLines]) // eslint-disable-line
 
+  // Auto-scroll minimap so viewport indicator stays centred
+  useEffect(() => {
+    const el = scrollRef.current; if (!el) return
+    const viewportTop = visibleStart * MINIMAP_LINE_H
+    const viewportH   = visibleCount * MINIMAP_LINE_H
+    const targetScroll = viewportTop + viewportH / 2 - el.clientHeight / 2
+    el.scrollTop = Math.max(0, targetScroll)
+  }, [visibleStart, visibleCount])
+
   function handleClick(e: React.MouseEvent<HTMLDivElement>) {
-    const rect = e.currentTarget.getBoundingClientRect()
-    const y    = e.clientY - rect.top
-    const line = Math.floor(y / MINIMAP_LINE_H)
-    onClickLine(Math.max(0, Math.min(line, lines.length - 1)))
+    const el   = scrollRef.current; if (!el) return
+    const rect = el.getBoundingClientRect()
+    const y    = e.clientY - rect.top + el.scrollTop
+    onClickLine(Math.max(0, Math.min(Math.floor(y / MINIMAP_LINE_H), lines.length - 1)))
   }
 
-  const viewportH  = Math.max(visibleCount * MINIMAP_LINE_H, 20)
-  const viewportY  = visibleStart * MINIMAP_LINE_H
-  const scaleRatio = FULL_H > 0 ? 1 : 1
+  const viewportH = Math.max(visibleCount * MINIMAP_LINE_H, 20)
+  const viewportY = visibleStart * MINIMAP_LINE_H
 
   return (
-    <div
-      onClick={handleClick}
-      style={{ width: MINIMAP_W, flexShrink: 0, background: '#1e1e1e', borderLeft: '1px solid #2a2a2a', overflow: 'hidden', position: 'relative', cursor: 'pointer' }}
-    >
-      {/* Canvas — full file overview */}
-      <div style={{ width: MINIMAP_W, height: FULL_H, position: 'relative' }}>
-        <canvas
-          ref={canvasRef}
-          width={MINIMAP_W}
-          height={Math.max(FULL_H, 1)}
-          style={{ display: 'block', imageRendering: 'pixelated' }}
-        />
-        {/* Viewport indicator — shows which part of the file is visible */}
-        <div style={{
-          position: 'absolute', left: 0, top: viewportY * scaleRatio,
-          width: MINIMAP_W, height: viewportH,
-          background: 'rgba(255,255,255,0.07)',
-          border: '1px solid rgba(255,255,255,0.12)',
-          pointerEvents: 'none',
-          boxSizing: 'border-box',
-        }}/>
+    <div style={{ width: MINIMAP_W, flexShrink: 0, background: '#1e1e1e', borderLeft: '1px solid #2a2a2a', display: 'flex', flexDirection: 'column' }}>
+      <div ref={scrollRef} onClick={handleClick}
+        style={{ flex: 1, overflow: 'hidden', cursor: 'pointer', position: 'relative' }}>
+        <div style={{ width: MINIMAP_W, height: FULL_H, position: 'relative' }}>
+          <canvas
+            ref={canvasRef}
+            width={MINIMAP_W}
+            height={Math.max(FULL_H, 1)}
+            style={{ display: 'block', imageRendering: 'pixelated' }}
+          />
+          <div style={{
+            position: 'absolute', left: 0, top: viewportY,
+            width: MINIMAP_W, height: viewportH,
+            background: 'rgba(255,255,255,0.13)',
+            border: '1px solid rgba(255,255,255,0.35)',
+            pointerEvents: 'none',
+            boxSizing: 'border-box',
+            borderRadius: 2,
+          }}/>
+        </div>
       </div>
     </div>
   )
@@ -180,7 +199,7 @@ function BreakpointGutter({ lineCount, breakpoints, onToggle, lineHeight, paddin
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function FileEditorPanel({ filePath, onSaveSuccess }: Props) {
+export default function FileEditorPanel({ filePath, rootPath, onSaveSuccess }: Props) {
   const [content,     setContent]     = useState('')
   const [loading,     setLoading]     = useState(true)
   const [saving,      setSaving]      = useState(false)
@@ -202,12 +221,19 @@ export default function FileEditorPanel({ filePath, onSaveSuccess }: Props) {
   const LINE_H    = 19.2   // lineHeight 1.6 × fontSize 12
   const PAD_TOP   = 10
 
+  const resolvedPath = (() => {
+    if (!filePath) return ''
+    const isAbsolute = filePath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(filePath)
+    if (isAbsolute) return filePath
+    return rootPath ? path.join(rootPath, filePath) : filePath
+  })()
+
   useEffect(() => {
     setLoading(true); setError(''); setSuccess(false); setBreakpoints(new Set())
-    api.readFile(filePath)
+    api.readFile(resolvedPath)
       .then(res => { setContent(res.content ?? ''); setLoading(false) })
       .catch(err => { setError(`Failed to read: ${err.message}`); setLoading(false) })
-  }, [filePath])
+  }, [resolvedPath])
 
   // Sync scroll: textarea → line numbers and highlight layer, update minimap viewport
   const syncScroll = useCallback((e: React.UIEvent<HTMLTextAreaElement>) => {
@@ -238,7 +264,7 @@ export default function FileEditorPanel({ filePath, onSaveSuccess }: Props) {
     if (saving) return
     setSaving(true); setError(''); setSuccess(false)
     try {
-      await api.writeFile(filePath, content)
+      await api.writeFile(resolvedPath, content)
       setSuccess(true); setTimeout(() => setSuccess(false), 2000)
       onSaveSuccess?.()
     } catch (err: any) { setError(`Save failed: ${err.message}`) }

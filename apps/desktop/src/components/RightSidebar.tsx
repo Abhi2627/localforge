@@ -634,7 +634,6 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
   const [openModal,      setOpenModal]      = useState<ModalPanel>(null)
   const [showAgentModal, setShowAgentModal] = useState(false)
   const [fileSearch,     setFileSearch]     = useState('')
-  const [showSearch,     setShowSearch]     = useState(false)
   const [explorerOpen,   setExplorerOpen]   = useState(true)
   const [gitOpen,        setGitOpen]        = useState(true)
   const [clipboard,      setClipboard]      = useState<{ node: TreeNode; mode: 'copy'|'cut' } | null>(null)
@@ -800,12 +799,19 @@ export default function RightSidebar({ onOpenTerminal: _ot }: RightSidebarProps)
           expanded={explorerOpen}
           onToggle={() => setExplorerOpen(v=>!v)}
         >
-          {/* Search bar */}
-          <div style={{padding:'4px 8px',flexShrink:0,display:'flex',alignItems:'center',gap:4,borderBottom:'1px solid var(--border)'}}>
-            <button className="icon-btn" style={{width:20,height:20}} onClick={()=>setShowSearch(v=>!v)}><Search size={11}/></button>
-            {showSearch && (
-              <input autoFocus placeholder="Search…" value={fileSearch} onChange={e=>setFileSearch(e.target.value)}
-                style={{flex:1,background:'var(--bg-tertiary)',border:'none',borderRadius:4,padding:'2px 6px',color:'var(--text-primary)',fontSize:11,outline:'none'}}/>
+          {/* Permanent search bar — always visible */}
+          <div style={{padding:'4px 8px',flexShrink:0,display:'flex',alignItems:'center',gap:6,borderBottom:'1px solid var(--border)',background:'var(--bg-tertiary)'}}>
+            <Search size={11} style={{color:'var(--text-muted)',flexShrink:0}}/>
+            <input
+              placeholder="Search files…"
+              value={fileSearch}
+              onChange={e=>setFileSearch(e.target.value)}
+              style={{flex:1,background:'transparent',border:'none',color:'var(--text-primary)',fontSize:11,outline:'none',minWidth:0}}
+            />
+            {fileSearch && (
+              <button onClick={()=>setFileSearch('')} style={{background:'none',border:'none',cursor:'pointer',color:'var(--text-muted)',display:'flex',padding:0,flexShrink:0}}>
+                <X size={11}/>
+              </button>
             )}
           </div>
           {/* Clipboard indicator */}

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { GitBranch, RefreshCw, User, GitCommit, ArrowUp, ArrowDown, Plus, Minus, Circle, Clock } from 'lucide-react'
+import { GitBranch, RefreshCw, User, GitCommit, ArrowUp, ArrowDown, Clock, ChevronRight, ChevronDown, FileText } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 
 interface FileChange { status: string; file: string; oldFile?: string }
@@ -21,6 +21,7 @@ interface Commit {
   message: string
   refs:    string[]
 }
+interface CommitFile { file: string; status: string }
 interface Branch {
   name:      string
   isCurrent: boolean
@@ -28,10 +29,9 @@ interface Branch {
   upstream?: string
 }
 
-// GitPanel accepts either sessionId (for server lookup) or rootPath (direct, more reliable)
 interface Props {
   sessionId: string
-  rootPath?: string   // preferred — bypasses DB lookup, works even before session is persisted
+  rootPath?: string
 }
 type Tab = 'status' | 'history' | 'branches'
 
@@ -51,12 +51,8 @@ function formatRelTime(iso: string): string {
   if (diff < 2592000000) return `${Math.floor(diff/86400000)}d ago`
   return new Date(iso).toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' })
 }
-
 function formatAbsTime(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, {
-    month:'short', day:'numeric', year:'numeric',
-    hour:'2-digit', minute:'2-digit',
-  })
+  return new Date(iso).toLocaleString(undefined, { month:'short', day:'numeric', year:'numeric', hour:'2-digit', minute:'2-digit' })
 }
 
 function RefBadge({ label }: { label: string }) {
@@ -72,6 +68,29 @@ function RefBadge({ label }: { label: string }) {
   )
 }
 
+// ── Single file row used in both status and commit detail ─────────────────────
+function FileRow({ file, status, onClick }: {
+  file: string; status: string; onClick: () => void
+}) {
+  const color  = STATUS_COLOR[status] ?? '#888'
+  const letter = STATUS_LETTER[status] ?? 'M'
+  return (
+    <div
+      onClick={onClick}
+      style={{ display:'flex', alignItems:'center', gap:6, padding:'4px 10px', cursor:'pointer', borderBottom:'1px solid rgba(255,255,255,0.03)' }}
+      onMouseEnter={e => (e.currentTarget as HTMLElement).style.background='var(--bg-hover)'}
+      onMouseLeave={e => (e.currentTarget as HTMLElement).style.background='transparent'}>
+      <span style={{ width:14, height:14, borderRadius:3, background:`${color}22`, color, fontSize:9, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>{letter}</span>
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ fontSize:11, color:'var(--text-primary)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontFamily:'monospace' }}>
+          {file.split('/').pop()}
+        </div>
+        <div style={{ fontSize:9, color:'var(--text-muted)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontFamily:'monospace' }}>{file}</div>
+      </div>
+    </div>
+  )
+}
+
 export default function GitPanel({ sessionId, rootPath }: Props) {
   const [tab,      setTab]      = useState<Tab>('status')
   const [status,   setStatus]   = useState<GitStatus | null>(null)
@@ -81,12 +100,17 @@ export default function GitPanel({ sessionId, rootPath }: Props) {
   const [isRepo,   setIsRepo]   = useState(true)
   const [limit,    setLimit]    = useState(100)
   const [hasMore,  setHasMore]  = useState(false)
+
+  // Commit detail: expanded commit hash → list of changed files
+  const [expandedCommit, setExpandedCommit]  = useState<string | null>(null)
+  const [commitFiles,    setCommitFiles]     = useState<Record<string, CommitFile[]>>({})
+  const [loadingCommit,  setLoadingCommit]   = useState<string | null>(null)
+
   const retryRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   const activeSessionId = useAppStore(s => s.activeSessionId)
   const openFileFn      = useAppStore(s => s.openFile)
 
-  // Build endpoint URL helper — uses rootPath directly when available
   function url(endpoint: string, params?: Record<string, string>) {
     const base = rootPath
       ? `http://localhost:3001/git/direct/${endpoint}?rootPath=${encodeURIComponent(rootPath)}`
@@ -146,9 +170,35 @@ export default function GitPanel({ sessionId, rootPath }: Props) {
     return () => clearInterval(interval)
   }, [tab, limit, loadStatus, loadHistory, loadBranches])
 
-  function openFileDiff(file: string, staged: boolean) {
+  // Load files changed in a commit
+  async function toggleCommit(hash: string) {
+    if (expandedCommit === hash) { setExpandedCommit(null); return }
+    setExpandedCommit(hash)
+    if (commitFiles[hash]) return  // already loaded
+    setLoadingCommit(hash)
+    try {
+      const res  = await fetch(url(`commit/${hash}`))
+      const data = await res.json()
+      // diffs array from server — extract file + status
+      const files: CommitFile[] = (data.diffs ?? []).map((d: any) => ({ file: d.file, status: d.status ?? 'modified' }))
+      setCommitFiles(prev => ({ ...prev, [hash]: files }))
+    } catch {
+      setCommitFiles(prev => ({ ...prev, [hash]: [] }))
+    }
+    setLoadingCommit(null)
+  }
+
+  // Open a file diff for a commit (shows commit version vs parent)
+  function openCommitFileDiff(file: string, hash: string) {
     if (activeSessionId) {
-      openFileFn(activeSessionId, `git-diff::${sessionId}::${file}::${staged}`)
+      // Use special git-commit:: path format
+      openFileFn(activeSessionId, `git-commit::${sessionId}::${file}::${hash}`)
+    }
+  }
+
+  function openFileDiff(file: string) {
+    if (activeSessionId) {
+      openFileFn(activeSessionId, `git-diff::${sessionId}::${file}`)
     }
   }
 
@@ -164,6 +214,14 @@ export default function GitPanel({ sessionId, rootPath }: Props) {
   const remoteBranches = branches.filter(b => b.isRemote)
   const currentBranch  = status?.branch ?? ''
 
+  // Merge staged + unstaged into single CHANGES list (VSCode style)
+  const allChanges: Array<FileChange & { staged: boolean }> = [
+    ...(status?.staged   ?? []).map(f => ({ ...f, staged: true  })),
+    ...(status?.unstaged ?? []).map(f => ({ ...f, staged: false })),
+  ]
+  const totalChanges = allChanges.length + (status?.untracked.length ?? 0)
+
+  // Group commits by date
   const grouped: Array<{ date: string; items: Commit[] }> = []
   for (const c of commits) {
     const day = new Date(c.date).toLocaleDateString(undefined, { weekday:'short', month:'short', day:'numeric', year:'numeric' })
@@ -175,6 +233,7 @@ export default function GitPanel({ sessionId, rootPath }: Props) {
   return (
     <div style={{ display:'flex', flexDirection:'column', flex:1, overflow:'hidden', minHeight:0 }}>
 
+      {/* Branch bar */}
       <div style={{ display:'flex', alignItems:'center', gap:6, padding:'5px 10px', borderBottom:'1px solid var(--border)', flexShrink:0, background:'var(--bg-tertiary)' }}>
         <GitBranch size={11} style={{ color:'var(--accent)', flexShrink:0 }}/>
         <span style={{ fontSize:11, fontWeight:600, color:'var(--accent)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1 }}>{currentBranch}</span>
@@ -183,15 +242,14 @@ export default function GitPanel({ sessionId, rootPath }: Props) {
         {loading && <RefreshCw size={10} style={{ animation:'spin 1s linear infinite', color:'var(--text-muted)', flexShrink:0 }}/>}
       </div>
 
+      {/* Tabs */}
       <div style={{ display:'flex', borderBottom:'1px solid var(--border)', flexShrink:0 }}>
         {(['status', 'history', 'branches'] as Tab[]).map(t => (
           <button key={t} onClick={() => setTab(t)}
             style={{ padding:'4px 0', border:'none', background:'transparent', cursor:'pointer', fontSize:10, fontWeight:tab===t?700:400, color:tab===t?'var(--accent)':'var(--text-muted)', borderBottom:tab===t?'2px solid var(--accent)':'2px solid transparent', textTransform:'capitalize', flex:1 }}>
             {t}
-            {t==='status' && status && !status.isClean && (
-              <span style={{ marginLeft:3, fontSize:9, background:'var(--accent)', color:'white', borderRadius:8, padding:'0 4px' }}>
-                {status.staged.length + status.unstaged.length + status.untracked.length}
-              </span>
+            {t==='status' && totalChanges > 0 && (
+              <span style={{ marginLeft:3, fontSize:9, background:'var(--accent)', color:'white', borderRadius:8, padding:'0 4px' }}>{totalChanges}</span>
             )}
             {t==='history' && commits.length > 0 && (
               <span style={{ marginLeft:3, fontSize:9, color:'var(--text-muted)' }}>{commits.length}{hasMore?'+':''}</span>
@@ -202,56 +260,37 @@ export default function GitPanel({ sessionId, rootPath }: Props) {
 
       <div style={{ flex:1, overflowY:'auto', minHeight:0 }}>
 
+        {/* ── Status: single CHANGES section (VSCode style) ── */}
         {tab === 'status' && (
           !status
             ? <div style={{ padding:'10px 12px', fontSize:11, color:'var(--text-muted)' }}>Loading…</div>
-            : status.isClean
+            : status.isClean && !status.untracked.length
               ? <div style={{ padding:'14px 12px', fontSize:12, color:'var(--green)', display:'flex', alignItems:'center', gap:6 }}>
                   <span style={{ fontSize:16 }}>✓</span> Working tree clean
                 </div>
               : <>
-                  {status.staged.length > 0 && (
+                  {/* Single CHANGES section */}
+                  {allChanges.length > 0 && (
                     <div>
-                      <div style={{ padding:'5px 10px', fontSize:10, fontWeight:700, color:'var(--green)', textTransform:'uppercase', letterSpacing:'0.07em', background:'rgba(61,214,140,0.06)', display:'flex', alignItems:'center', gap:4, borderBottom:'1px solid var(--border)' }}>
-                        <Plus size={9}/> Staged changes ({status.staged.length})
+                      <div style={{ padding:'5px 10px', fontSize:10, fontWeight:700, color:'var(--text-secondary)', textTransform:'uppercase', letterSpacing:'0.07em', background:'var(--bg-tertiary)', display:'flex', alignItems:'center', gap:4, borderBottom:'1px solid var(--border)' }}>
+                        Changes ({allChanges.length})
                       </div>
-                      {status.staged.map((f, i) => (
-                        <div key={i} onClick={() => openFileDiff(f.file, true)}
-                          style={{ display:'flex', alignItems:'center', gap:6, padding:'4px 10px', cursor:'pointer', borderBottom:'1px solid rgba(255,255,255,0.03)' }}
-                          onMouseEnter={e => (e.currentTarget as HTMLElement).style.background='var(--bg-hover)'}
-                          onMouseLeave={e => (e.currentTarget as HTMLElement).style.background='transparent'}>
-                          <span style={{ width:14, height:14, borderRadius:3, background:`${STATUS_COLOR[f.status]??'#888'}22`, color:STATUS_COLOR[f.status]??'#888', fontSize:9, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>{STATUS_LETTER[f.status]??'M'}</span>
-                          <div style={{ flex:1, minWidth:0 }}>
-                            <div style={{ fontSize:11, color:'var(--text-primary)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontFamily:'monospace' }}>{f.file.split('/').pop()}</div>
-                            <div style={{ fontSize:9, color:'var(--text-muted)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontFamily:'monospace' }}>{f.file}</div>
-                          </div>
-                        </div>
+                      {allChanges.map((f, i) => (
+                        <FileRow
+                          key={i}
+                          file={f.file}
+                          status={f.status}
+                          onClick={() => openFileDiff(f.file)}
+                        />
                       ))}
                     </div>
                   )}
-                  {status.unstaged.length > 0 && (
-                    <div style={{ marginTop:status.staged.length?4:0 }}>
-                      <div style={{ padding:'5px 10px', fontSize:10, fontWeight:700, color:'#f59e0b', textTransform:'uppercase', letterSpacing:'0.07em', background:'rgba(245,158,11,0.06)', display:'flex', alignItems:'center', gap:4, borderBottom:'1px solid var(--border)' }}>
-                        <Minus size={9}/> Unstaged changes ({status.unstaged.length})
-                      </div>
-                      {status.unstaged.map((f, i) => (
-                        <div key={i} onClick={() => openFileDiff(f.file, false)}
-                          style={{ display:'flex', alignItems:'center', gap:6, padding:'4px 10px', cursor:'pointer', borderBottom:'1px solid rgba(255,255,255,0.03)' }}
-                          onMouseEnter={e => (e.currentTarget as HTMLElement).style.background='var(--bg-hover)'}
-                          onMouseLeave={e => (e.currentTarget as HTMLElement).style.background='transparent'}>
-                          <span style={{ width:14, height:14, borderRadius:3, background:`${STATUS_COLOR[f.status]??'#888'}22`, color:STATUS_COLOR[f.status]??'#888', fontSize:9, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>{STATUS_LETTER[f.status]??'M'}</span>
-                          <div style={{ flex:1, minWidth:0 }}>
-                            <div style={{ fontSize:11, color:'var(--text-secondary)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontFamily:'monospace' }}>{f.file.split('/').pop()}</div>
-                            <div style={{ fontSize:9, color:'var(--text-muted)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontFamily:'monospace' }}>{f.file}</div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+
+                  {/* Untracked files */}
                   {status.untracked.length > 0 && (
-                    <div style={{ marginTop:4 }}>
+                    <div style={{ marginTop: allChanges.length ? 4 : 0 }}>
                       <div style={{ padding:'5px 10px', fontSize:10, fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.07em', background:'var(--bg-tertiary)', display:'flex', alignItems:'center', gap:4, borderBottom:'1px solid var(--border)' }}>
-                        <Circle size={9}/> Untracked ({status.untracked.length})
+                        Untracked ({status.untracked.length})
                       </div>
                       {status.untracked.map((f, i) => (
                         <div key={i} style={{ display:'flex', alignItems:'center', gap:6, padding:'4px 10px', borderBottom:'1px solid rgba(255,255,255,0.03)' }}>
@@ -267,6 +306,7 @@ export default function GitPanel({ sessionId, rootPath }: Props) {
                 </>
         )}
 
+        {/* ── History: click commit → show files → click file → open diff ── */}
         {tab === 'history' && (
           loading && commits.length === 0
             ? <div style={{ padding:'14px 12px', fontSize:11, color:'var(--text-muted)', display:'flex', alignItems:'center', gap:6 }}>
@@ -280,27 +320,73 @@ export default function GitPanel({ sessionId, rootPath }: Props) {
                       <div style={{ padding:'5px 10px 4px', fontSize:10, fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.07em', background:'var(--bg-tertiary)', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', gap:5, position:'sticky', top:0, zIndex:1 }}>
                         <Clock size={9}/>{group.date}
                       </div>
-                      {group.items.map((c, i) => (
-                        <div key={i}
-                          style={{ padding:'6px 10px', borderBottom:'1px solid rgba(255,255,255,0.04)' }}
-                          onMouseEnter={e => (e.currentTarget as HTMLElement).style.background='var(--bg-hover)'}
-                          onMouseLeave={e => (e.currentTarget as HTMLElement).style.background='transparent'}>
-                          <div style={{ fontSize:12, color:'var(--text-primary)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', marginBottom:4, fontWeight:500 }}>
-                            {c.message}
+                      {group.items.map((c, i) => {
+                        const isExpanded = expandedCommit === c.hash
+                        const files      = commitFiles[c.hash]
+                        const isLoading  = loadingCommit === c.hash
+                        return (
+                          <div key={i}>
+                            {/* Commit row — click to expand/collapse */}
+                            <div
+                              onClick={() => toggleCommit(c.hash)}
+                              style={{ padding:'6px 10px', borderBottom:'1px solid rgba(255,255,255,0.04)', cursor:'pointer', background: isExpanded ? 'var(--bg-hover)' : 'transparent' }}
+                              onMouseEnter={e => { if (!isExpanded) (e.currentTarget as HTMLElement).style.background='var(--bg-hover)' }}
+                              onMouseLeave={e => { if (!isExpanded) (e.currentTarget as HTMLElement).style.background='transparent' }}>
+                              <div style={{ display:'flex', alignItems:'center', gap:5, marginBottom:3 }}>
+                                {isExpanded
+                                  ? <ChevronDown size={11} style={{ color:'var(--text-muted)', flexShrink:0 }}/>
+                                  : <ChevronRight size={11} style={{ color:'var(--text-muted)', flexShrink:0 }}/>
+                                }
+                                <div style={{ fontSize:12, color:'var(--text-primary)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontWeight:500, flex:1 }}>
+                                  {c.message}
+                                </div>
+                              </div>
+                              <div style={{ display:'flex', alignItems:'center', gap:5, flexWrap:'wrap', paddingLeft:16 }}>
+                                <GitCommit size={9} style={{ color:'var(--text-muted)', flexShrink:0 }}/>
+                                <code style={{ fontSize:10, color:'var(--accent)', fontFamily:'monospace', flexShrink:0 }}>{c.hash}</code>
+                                {c.refs.map((r,ri) => <RefBadge key={ri} label={r}/>)}
+                                <span style={{ fontSize:10, color:'var(--text-muted)', display:'flex', alignItems:'center', gap:3, marginLeft:'auto', flexShrink:0 }}>
+                                  <User size={9}/>{c.author}
+                                </span>
+                                <span title={formatAbsTime(c.date)} style={{ fontSize:10, color:'var(--text-muted)', flexShrink:0 }}>
+                                  {formatRelTime(c.date)}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Expanded: list of files changed in this commit */}
+                            {isExpanded && (
+                              <div style={{ background:'rgba(0,0,0,0.15)', borderBottom:'1px solid var(--border)' }}>
+                                {isLoading
+                                  ? <div style={{ padding:'8px 16px', fontSize:11, color:'var(--text-muted)', display:'flex', alignItems:'center', gap:6 }}>
+                                      <RefreshCw size={11} style={{ animation:'spin 1s linear infinite' }}/> Loading files…
+                                    </div>
+                                  : !files || files.length === 0
+                                    ? <div style={{ padding:'8px 16px', fontSize:11, color:'var(--text-muted)' }}>No file changes</div>
+                                    : files.map((f, fi) => (
+                                        <div key={fi}
+                                          onClick={() => openCommitFileDiff(f.file, c.hash)}
+                                          style={{ display:'flex', alignItems:'center', gap:6, padding:'3px 16px 3px 24px', cursor:'pointer', borderBottom:'1px solid rgba(255,255,255,0.02)' }}
+                                          onMouseEnter={e => (e.currentTarget as HTMLElement).style.background='var(--bg-hover)'}
+                                          onMouseLeave={e => (e.currentTarget as HTMLElement).style.background='transparent'}>
+                                          <FileText size={11} style={{ color:'var(--text-muted)', flexShrink:0 }}/>
+                                          <span style={{ fontSize:11, color:'var(--text-secondary)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1, fontFamily:'monospace' }}>
+                                            {f.file.split('/').pop()}
+                                          </span>
+                                          <span style={{ fontSize:9, color:STATUS_COLOR[f.status]??'#888', flexShrink:0, fontWeight:600, fontFamily:'monospace' }}>
+                                            {f.file.split('/').slice(0,-1).join('/')}
+                                          </span>
+                                          <span style={{ fontSize:9, color:STATUS_COLOR[f.status]??'#888', flexShrink:0, fontWeight:700, width:14, textAlign:'center' }}>
+                                            {STATUS_LETTER[f.status]??'M'}
+                                          </span>
+                                        </div>
+                                      ))
+                                }
+                              </div>
+                            )}
                           </div>
-                          <div style={{ display:'flex', alignItems:'center', gap:5, flexWrap:'wrap' }}>
-                            <GitCommit size={9} style={{ color:'var(--text-muted)', flexShrink:0 }}/>
-                            <code style={{ fontSize:10, color:'var(--accent)', fontFamily:'monospace', flexShrink:0 }}>{c.hash}</code>
-                            {c.refs.map((r,ri) => <RefBadge key={ri} label={r}/>)}
-                            <span style={{ fontSize:10, color:'var(--text-muted)', display:'flex', alignItems:'center', gap:3, marginLeft:'auto', flexShrink:0 }}>
-                              <User size={9}/>{c.author}
-                            </span>
-                            <span title={formatAbsTime(c.date)} style={{ fontSize:10, color:'var(--text-muted)', flexShrink:0 }}>
-                              {formatRelTime(c.date)}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
+                        )
+                      })}
                     </div>
                   ))}
                   {hasMore && (
@@ -315,6 +401,7 @@ export default function GitPanel({ sessionId, rootPath }: Props) {
                 </>
         )}
 
+        {/* ── Branches ── */}
         {tab === 'branches' && (
           branches.length === 0
             ? <div style={{ padding:'14px 12px', fontSize:11, color:'var(--text-muted)' }}>No branches</div>

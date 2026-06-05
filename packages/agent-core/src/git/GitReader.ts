@@ -5,7 +5,7 @@
  * No npm dependencies. All operations are read-only — nothing mutates the repo.
  */
 
-import { execSync } from 'child_process'
+import { execSync, execFileSync } from 'child_process'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -221,16 +221,49 @@ export function getBranches(rootPath: string): Branch[] {
 
 // ── Diff ──────────────────────────────────────────────────────────────────────
 
+function runFile(args: string[], cwd: string): string {
+  try {
+    return execFileSync('git', args, {
+      cwd,
+      encoding:  'utf8',
+      timeout:   10000,
+      maxBuffer: 1024 * 1024 * 20,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    }).trim()
+  } catch {
+    return ''
+  }
+}
+
 export function getDiff(rootPath: string, file?: string, staged = false): FileDiff[] {
   if (!isGitRepo(rootPath)) return []
-  const stagedFlag = staged ? '--cached' : ''
-  const fileArg    = file   ? `-- "${file}"` : ''
-  return parseDiff(run(`git diff ${stagedFlag} --unified=3 ${fileArg}`, rootPath))
+  const args = ['diff', '--unified=3']
+  if (staged) args.push('--cached')
+  if (file)   args.push('--', file)
+  return parseDiff(runFile(args, rootPath))
+}
+
+// getDiffAll: shows all changes vs HEAD (staged + unstaged combined) — like VSCode default diff view
+export function getDiffAll(rootPath: string, file?: string): FileDiff[] {
+  if (!isGitRepo(rootPath)) return []
+  const args = ['diff', 'HEAD', '--unified=3']
+  if (file) args.push('--', file)
+  const result = parseDiff(runFile(args, rootPath))
+  // If HEAD diff is empty (e.g. new repo with no commits), fall back to staged diff
+  if (result.length === 0) return getDiff(rootPath, file, false)
+  return result
+}
+
+export function getCombinedDiff(rootPath: string, file?: string): FileDiff[] {
+  if (!isGitRepo(rootPath)) return []
+  const args = ['diff', 'HEAD', '--unified=3']
+  if (file) args.push('--', file)
+  return parseDiff(runFile(args, rootPath))
 }
 
 export function getCommitDiff(rootPath: string, hash: string): FileDiff[] {
   if (!isGitRepo(rootPath)) return []
-  return parseDiff(run(`git show ${hash} --unified=3`, rootPath))
+  return parseDiff(runFile(['show', hash, '--unified=3'], rootPath))
 }
 
 function parseDiff(raw: string): FileDiff[] {

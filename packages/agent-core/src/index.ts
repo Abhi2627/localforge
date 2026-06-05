@@ -20,7 +20,7 @@ import { scanProjectFiles, generateProjectSummary } from './mcp/ProjectScanner.j
 import { connectMCP } from './mcp/MCPClient.js'
 import { scanProject, updateFile, getSymbols, findSymbol, getSummary, getConflicts, buildAgentContext, clearGraph } from './knowledge/KnowledgeGraph.js'
 import { runEnforcer, getCachedReport, clearReport, buildContractContext } from './knowledge/ContractEnforcer.js'
-import { getStatus, getLog, getBranches, getDiff, getCommitDiff } from './git/GitReader.js'
+import { getStatus, getLog, getBranches, getDiff, getCombinedDiff, getDiffAll, getCommitDiff } from './git/GitReader.js'
 import { runRAG, injectRAGContext, hasWebTrigger } from './rag/RAGPipeline.js'
 
 type ChatRole = 'system' | 'user' | 'assistant'
@@ -393,7 +393,33 @@ async function bootstrap() {
   })
   server.get<{ Querystring: { rootPath: string; file?: string; staged?: string } }>('/git/direct/diff', async (req) => {
     const p = req.query.rootPath; if (!p) return { diffs: [] }
+    if (req.query.staged === 'all') return { diffs: getDiffAll(p, req.query.file) }
     return { diffs: getDiff(p, req.query.file, req.query.staged === 'true') }
+  })
+
+  // Commit diff — all files changed in a commit
+  server.get<{ Params: { hash: string }; Querystring: { rootPath: string } }>('/git/direct/commit/:hash', async (req) => {
+    const { rootPath: p } = req.query; const { hash } = req.params
+    if (!p || !hash) return { diffs: [] }
+    return { diffs: getCommitDiff(p, hash) }
+  })
+
+  // File content at a specific commit (or its parent)
+  server.get<{ Querystring: { rootPath: string; file: string; hash: string; parent?: string } }>('/git/direct/file-at-commit', async (req) => {
+    const { rootPath: p, file, hash, parent } = req.query
+    if (!p || !file || !hash) return { content: '' }
+    try {
+      const { execFileSync } = await import('child_process')
+      const ref     = parent === 'true' ? `${hash}^:${file}` : `${hash}:${file}`
+      const content = execFileSync('git', ['show', ref], {
+        cwd: p, encoding: 'utf8', timeout: 10000,
+        maxBuffer: 1024 * 1024 * 20,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      })
+      return { content }
+    } catch {
+      return { content: '' }
+    }
   })
 
   // Returns the committed (HEAD) or staged version of a file — used for full-file diff view
@@ -401,15 +427,19 @@ async function bootstrap() {
     const { rootPath: p, file, staged } = req.query
     if (!p || !file) return { content: '' }
     try {
-      const ref = staged === 'true' ? `:${file}` : `HEAD:${file}`
-      const content = execSync(`git show "${ref}"`, {
-        cwd: p, encoding: 'utf8', timeout: 8000,
-        maxBuffer: 1024 * 1024 * 10,
+      // Use execFileSync with array args to avoid ALL shell quoting issues
+      // staged=true  → :0:filepath  (index/staging area, stage 0)
+      // staged=false → HEAD:filepath (last commit)
+      const { execFileSync } = await import('child_process')
+      const ref     = staged === 'true' ? `:0:${file}` : `HEAD:${file}`
+      const content = execFileSync('git', ['show', ref], {
+        cwd: p, encoding: 'utf8', timeout: 10000,
+        maxBuffer: 1024 * 1024 * 20,
         env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
       })
       return { content }
     } catch {
-      return { content: '' }  // new file — no HEAD version
+      return { content: '' }  // new file — no HEAD/index version
     }
   })
   server.get('/system', async () => profileSystem())

@@ -687,11 +687,14 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
             // For git-diff tabs, show a readable label instead of the raw path
             let name: string
             if (file.startsWith('git-diff::')) {
-              const parts  = file.split('::')
-              const fp     = parts[2] ?? 'diff'
-              const staged = parts[3] === 'true'
-              // Use plain ASCII brackets to avoid font rendering eating characters
-              name = `[diff] ${fp.split('/').pop() ?? fp}${staged ? ' +' : ''}`
+              const parts = file.split('::')
+              const fp    = parts[2] ?? 'diff'
+              name = `[diff] ${fp.split('/').pop() ?? fp}`
+            } else if (file.startsWith('git-commit::')) {
+              const parts = file.split('::')
+              const fp    = parts[2] ?? 'diff'
+              const hash  = parts[3] ?? ''
+              name = `[${hash.slice(0,6)}] ${fp.split('/').pop() ?? fp}`
             } else {
               name = file.replace(/\\/g,'/').split('/').pop() ?? 'file'
             }
@@ -712,19 +715,27 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
 
       {/* Render: diff view, file editor, or chat */}
       {currentActiveFile?.startsWith('git-diff::') ? (() => {
-        // Format: git-diff::{sessionId}::{filePath}::{staged}
         const parts    = currentActiveFile.split('::')
         const sessId   = parts[1] ?? activeSessionId ?? ''
         const filePath = parts[2] ?? ''
-        const staged   = parts[3] === 'true'
         return (
           <div style={{ flex:1, overflow:'hidden', minHeight:0, display:'flex', flexDirection:'column' }}>
-            <DiffEditorPanel sessionId={sessId} filePath={filePath} staged={staged}/>
+            <DiffEditorPanel sessionId={sessId} filePath={filePath}/>
+          </div>
+        )
+      })() : currentActiveFile?.startsWith('git-commit::') ? (() => {
+        const parts    = currentActiveFile.split('::')
+        const sessId   = parts[1] ?? activeSessionId ?? ''
+        const filePath = parts[2] ?? ''
+        const hash     = parts[3] ?? ''
+        return (
+          <div style={{ flex:1, overflow:'hidden', minHeight:0, display:'flex', flexDirection:'column' }}>
+            <DiffEditorPanel sessionId={sessId} filePath={filePath} commitHash={hash}/>
           </div>
         )
       })() : currentActiveFile ? (
         <div style={{ flex:1, overflow:'hidden', minHeight:0, display:'flex', flexDirection:'column' }}>
-          <FileEditorPanel filePath={currentActiveFile}/>
+          <FileEditorPanel filePath={currentActiveFile} rootPath={session?.rootPath}/>
         </div>
       ) : (
         <>

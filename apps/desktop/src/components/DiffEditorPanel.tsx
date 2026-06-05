@@ -7,151 +7,287 @@ interface DiffHunk  { header: string; lines: DiffLine[] }
 interface FileDiff  { file: string; status: string; hunks: DiffHunk[]; isBinary: boolean }
 
 interface Props {
-  sessionId: string
-  filePath:  string
-  staged:    boolean
+  sessionId:   string
+  filePath:    string
+  commitHash?: string   // if set, shows this commit's diff instead of working-tree diff
 }
 
-// Per-line decoration derived from diff hunks
-type LineDecor = 'added' | 'removed' | 'normal'
+type LineDecor = 'added' | 'removed' | 'normal' | 'placeholder'
 
 interface FullLine {
   lineNo:  number
   content: string
   decor:   LineDecor
+  // character-level ranges that changed within this line (for inline highlighting)
+  inlineRanges?: Array<{ start: number; end: number }>
 }
 
-// Build a Set of changed line numbers from diff hunks.
-// Returns { removedLines: Set<number>, addedLines: Set<number> } for each side.
-function buildChangesets(hunks: DiffHunk[]): {
-  removedLines: Set<number>  // old-file line numbers that were removed
-  addedLines:   Set<number>  // new-file line numbers that were added
-} {
-  const removedLines = new Set<number>()
-  const addedLines   = new Set<number>()
+interface AlignedPair { left: FullLine; right: FullLine }
 
+const PLACEHOLDER_LINE: FullLine = { lineNo: 0, content: '', decor: 'placeholder' }
+
+// ── Character-level diff (LCS-based) ─────────────────────────────────────────
+function charDiff(oldStr: string, newStr: string): { oldRanges: Array<{start:number;end:number}>; newRanges: Array<{start:number;end:number}> } {
+  // Simple token-level diff — find longest common subsequence of characters
+  const a = oldStr.split(''), b = newStr.split('')
+  const m = a.length, n = b.length
+  // For very long lines skip (performance)
+  if (m + n > 800) return { oldRanges: [], newRanges: [] }
+  const dp = Array.from({ length: m+1 }, () => new Array(n+1).fill(0))
+  for (let i=m-1; i>=0; i--) for (let j=n-1; j>=0; j--)
+    dp[i][j] = a[i]===b[j] ? 1+dp[i+1][j+1] : Math.max(dp[i+1][j], dp[i][j+1])
+  // Trace back
+  const oldChanged: boolean[] = new Array(m).fill(true)
+  const newChanged: boolean[] = new Array(n).fill(true)
+  let i=0, j=0
+  while (i<m && j<n) {
+    if (a[i]===b[j]) { oldChanged[i]=false; newChanged[j]=false; i++; j++ }
+    else if (dp[i+1]?.[j] >= dp[i]?.[j+1]) i++
+    else j++
+  }
+  function toRanges(changed: boolean[]): Array<{start:number;end:number}> {
+    const ranges: Array<{start:number;end:number}> = []
+    let start = -1
+    for (let k=0; k<=changed.length; k++) {
+      if (changed[k] && start===-1) start=k
+      else if (!changed[k] && start!==-1) { ranges.push({start,end:k}); start=-1 }
+    }
+    return ranges
+  }
+  return { oldRanges: toRanges(oldChanged), newRanges: toRanges(newChanged) }
+}
+
+// ── Changeset builder ─────────────────────────────────────────────────────────
+function buildChangesets(hunks: DiffHunk[]) {
+  const removedLines = new Map<number, string>()  // lineNo → content
+  const addedLines   = new Map<number, string>()
   for (const hunk of hunks) {
     const m = hunk.header.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/)
-    let ol = m ? parseInt(m[1]) : 1
-    let nl = m ? parseInt(m[2]) : 1
-
+    let ol = m ? parseInt(m[1]) : 1, nl = m ? parseInt(m[2]) : 1
     for (const line of hunk.lines) {
-      if      (line.type === 'removed') { removedLines.add(ol++); }
-      else if (line.type === 'added')   { addedLines.add(nl++);   }
-      else                              { ol++; nl++ }
+      if      (line.type==='removed') removedLines.set(ol++, line.content)
+      else if (line.type==='added')   addedLines.set(nl++, line.content)
+      else                            { ol++; nl++ }
     }
   }
   return { removedLines, addedLines }
 }
 
-const MONO: React.CSSProperties = {
-  fontFamily: "'SF Mono','Fira Code','Cascadia Code',Menlo,monospace",
-  fontSize: 12,
-  lineHeight: '20px',
-  whiteSpace: 'pre',
-  overflowWrap: 'normal',
+// ── Aligned pairs builder ─────────────────────────────────────────────────────
+function buildAlignedPairs(leftLines: FullLine[], rightLines: FullLine[], hunks: DiffHunk[]): AlignedPair[] {
+  const pairs: AlignedPair[] = []
+  let li = 0, ri = 0
+
+  for (const hunk of hunks) {
+    const m = hunk.header.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/)
+    const hunkOldStart = m ? parseInt(m[1])-1 : 0
+    const hunkNewStart = m ? parseInt(m[2])-1 : 0
+
+    // Context lines before this hunk
+    while (li < hunkOldStart && ri < hunkNewStart && li < leftLines.length && ri < rightLines.length) {
+      pairs.push({ left: leftLines[li++], right: rightLines[ri++] })
+    }
+
+    const removedBuf: FullLine[] = [], addedBuf: FullLine[] = []
+    for (const line of hunk.lines) {
+      if      (line.type==='removed') { if (leftLines[li])  removedBuf.push(leftLines[li]);  li++ }
+      else if (line.type==='added')   { if (rightLines[ri]) addedBuf.push(rightLines[ri]);   ri++ }
+      else {
+        flushBuffers(pairs, removedBuf, addedBuf)
+        pairs.push({ left: leftLines[li] ?? PLACEHOLDER_LINE, right: rightLines[ri] ?? PLACEHOLDER_LINE })
+        li++; ri++
+      }
+    }
+    flushBuffers(pairs, removedBuf, addedBuf)
+  }
+
+  // Remaining unchanged lines
+  while (li < leftLines.length && ri < rightLines.length) pairs.push({ left: leftLines[li++], right: rightLines[ri++] })
+  while (li < leftLines.length)  pairs.push({ left: leftLines[li++],  right: { ...PLACEHOLDER_LINE } })
+  while (ri < rightLines.length) pairs.push({ left: { ...PLACEHOLDER_LINE }, right: rightLines[ri++] })
+  return pairs
 }
 
-const MINIMAP_W      = 60
-const MINIMAP_LINE_H = 2
-const MINIMAP_CHAR_W = 0.5
+function flushBuffers(pairs: AlignedPair[], removed: FullLine[], added: FullLine[]) {
+  const maxLen = Math.max(removed.length, added.length)
 
-function DiffMinimap({ lines, visibleStart, visibleCount, onClickLine, label }: {
-  lines: FullLine[]; visibleStart: number; visibleCount: number
-  onClickLine: (i: number) => void; label: string
+  // Compute inline diffs for paired remove/add lines
+  const inlineDiffs: Array<ReturnType<typeof charDiff>> = []
+  for (let k=0; k<Math.min(removed.length, added.length); k++) {
+    inlineDiffs.push(charDiff(removed[k].content, added[k].content))
+  }
+
+  for (let k=0; k<maxLen; k++) {
+    const l = removed[k]
+    const r = added[k]
+    const id = inlineDiffs[k]
+    pairs.push({
+      left:  l ? { ...l, inlineRanges: id?.oldRanges } : { ...PLACEHOLDER_LINE },
+      right: r ? { ...r, inlineRanges: id?.newRanges } : { ...PLACEHOLDER_LINE },
+    })
+  }
+  removed.length = 0; added.length = 0
+}
+
+// ── Styled line content with inline highlights ────────────────────────────────
+function InlineContent({ content, ranges, isAdded }: {
+  content: string; ranges?: Array<{start:number;end:number}>; isAdded: boolean
 }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const FULL_H = lines.length * MINIMAP_LINE_H
+  if (!ranges || ranges.length === 0) return <>{content}</>
+  const parts: React.ReactNode[] = []
+  let pos = 0
+  const hlBg = isAdded ? 'rgba(42,180,102,0.5)' : 'rgba(220,50,47,0.5)'
+  for (const { start, end } of ranges) {
+    if (start > pos) parts.push(<span key={`n${pos}`}>{content.slice(pos, start)}</span>)
+    parts.push(<span key={`h${start}`} style={{ background: hlBg, borderRadius: 2 }}>{content.slice(start, end)}</span>)
+    pos = end
+  }
+  if (pos < content.length) parts.push(<span key={`t${pos}`}>{content.slice(pos)}</span>)
+  return <>{parts}</>
+}
+
+// ── Combined minimap ──────────────────────────────────────────────────────────
+const MM_W = 100, MM_LH = 2, MM_FONT = '1.7px monospace'
+
+function mmLineColor(content: string): string {
+  const t = content.trim()
+  if (!t) return ''
+  if (t.startsWith('//') || t.startsWith('#') || t.startsWith('*'))  return '#6a9955'
+  if (/^(import|export|from|const|let|var|function|class|interface|type|enum|return|if|else|for|while|async|await|def|fn)\b/.test(t)) return '#569cd6'
+  if (/^[A-Z][a-zA-Z]/.test(t))                                       return '#4ec9b0'
+  if (t.startsWith("'") || t.startsWith('"') || t.startsWith('`'))   return '#ce9178'
+  if (t.startsWith('<') || t.startsWith('}') || t.startsWith('{'))   return '#ffd700'
+  return '#9cdcfe'
+}
+
+function CombinedMinimap({ leftLines, rightLines, visibleStart, visibleCount, onClickLine }: {
+  leftLines: FullLine[]; rightLines: FullLine[]
+  visibleStart: number; visibleCount: number
+  onClickLine: (i: number) => void
+}) {
+  const canvasRef    = useRef<HTMLCanvasElement>(null)
+  const scrollRef    = useRef<HTMLDivElement>(null)
+  const totalRows = Math.max(leftLines.length, rightLines.length)
+  const FULL_H    = totalRows * MM_LH
 
   useEffect(() => {
     const canvas = canvasRef.current; if (!canvas) return
-    canvas.width = MINIMAP_W; canvas.height = Math.max(FULL_H, 1)
+    canvas.width = MM_W; canvas.height = Math.max(FULL_H, 1)
     const ctx = canvas.getContext('2d'); if (!ctx) return
-    ctx.fillStyle = '#1e1e1e'; ctx.fillRect(0, 0, MINIMAP_W, Math.max(FULL_H, 1))
-    lines.forEach(({ content, decor }, i) => {
-      const y = i * MINIMAP_LINE_H
-      if      (decor === 'removed') { ctx.fillStyle = 'rgba(220,50,47,0.35)';    ctx.fillRect(0, y, MINIMAP_W, MINIMAP_LINE_H) }
-      else if (decor === 'added')   { ctx.fillStyle = 'rgba(42,180,102,0.35)';   ctx.fillRect(0, y, MINIMAP_W, MINIMAP_LINE_H) }
-      const trimmed = content.trimStart()
-      const indent  = content.length - trimmed.length
-      const x = indent * MINIMAP_CHAR_W
-      const w = Math.min(trimmed.length * MINIMAP_CHAR_W, MINIMAP_W - x)
-      if (w > 0) {
-        ctx.fillStyle = decor === 'removed' ? '#f88' : decor === 'added' ? '#7ec' : '#555770'
-        ctx.fillRect(x, y + 0.3, w, 1)
-      }
+    ctx.fillStyle = '#1e1e1e'; ctx.fillRect(0, 0, MM_W, Math.max(FULL_H, 1))
+    ctx.font = MM_FONT
+    ctx.textBaseline = 'top'
+    const half = MM_W / 2
+    // Left column (before) — draws in left half
+    leftLines.forEach(({ content, decor }, i) => {
+      const y = i * MM_LH
+      if (decor === 'removed') { ctx.fillStyle='rgba(220,50,47,0.3)'; ctx.fillRect(0, y, half, MM_LH) }
+      if (!content.trim() || decor === 'placeholder') return
+      const color = decor === 'removed' ? '#f99' : mmLineColor(content)
+      if (!color) return
+      ctx.fillStyle = color
+      const indent = (content.length - content.trimStart().length) * 0.25
+      ctx.fillText(content.trimStart(), Math.min(indent, half * 0.2), y + 0.1, half - Math.min(indent, half * 0.2))
     })
-  }, [lines]) // eslint-disable-line
+    // Right column (after) — draws in right half
+    rightLines.forEach(({ content, decor }, i) => {
+      const y = i * MM_LH
+      if (decor === 'added') { ctx.fillStyle='rgba(42,180,102,0.25)'; ctx.fillRect(half, y, half, MM_LH) }
+      if (!content.trim() || decor === 'placeholder') return
+      const color = decor === 'added' ? '#7ec' : mmLineColor(content)
+      if (!color) return
+      ctx.fillStyle = color
+      const indent = (content.length - content.trimStart().length) * 0.25
+      ctx.fillText(content.trimStart(), half + Math.min(indent, half * 0.2), y + 0.1, half - Math.min(indent, half * 0.2))
+    })
+    // Centre divider
+    ctx.fillStyle = '#444'; ctx.fillRect(half - 0.5, 0, 1, Math.max(FULL_H, 1))
+  }, [leftLines, rightLines]) // eslint-disable-line
+
+  // Auto-scroll minimap when viewport indicator goes out of view
+  useEffect(() => {
+    const el = scrollRef.current; if (!el) return
+    const viewportTop = visibleStart * MM_LH
+    const viewportH   = visibleCount * MM_LH
+    const elH = el.clientHeight
+    // Keep viewport indicator centred in the minimap scroll area
+    const targetScroll = viewportTop + viewportH / 2 - elH / 2
+    el.scrollTop = Math.max(0, targetScroll)
+  }, [visibleStart, visibleCount])
 
   function handleClick(e: React.MouseEvent<HTMLDivElement>) {
-    const rect = e.currentTarget.getBoundingClientRect()
-    onClickLine(Math.floor((e.clientY - rect.top) / MINIMAP_LINE_H))
+    const el   = scrollRef.current; if (!el) return
+    const rect = el.getBoundingClientRect()
+    const y    = e.clientY - rect.top + el.scrollTop
+    onClickLine(Math.floor(y / MM_LH))
   }
 
+  const viewportTop = visibleStart * MM_LH
+  const viewportH   = Math.max(visibleCount * MM_LH, 20)
+
   return (
-    <div onClick={handleClick} style={{ width:MINIMAP_W, flexShrink:0, background:'#1e1e1e', borderLeft:'1px solid #2a2a2a', overflow:'hidden', position:'relative', cursor:'pointer' }}>
-      <div style={{ fontSize:8, color:'#444', padding:'2px 4px', position:'sticky', top:0, background:'#1e1e1e', zIndex:1 }}>{label}</div>
-      <div style={{ width:MINIMAP_W, height:FULL_H, position:'relative' }}>
-        <canvas ref={canvasRef} width={MINIMAP_W} height={Math.max(FULL_H,1)} style={{ display:'block', imageRendering:'pixelated' }}/>
-        <div style={{ position:'absolute', left:0, top: visibleStart * MINIMAP_LINE_H, width:MINIMAP_W, height: Math.max(visibleCount * MINIMAP_LINE_H, 20), background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.12)', pointerEvents:'none', boxSizing:'border-box' }}/>
+    <div style={{ width:MM_W, flexShrink:0, background:'#1e1e1e', borderLeft:'1px solid #2a2a2a', display:'flex', flexDirection:'column' }}>
+      {/* Fixed label */}
+      <div style={{ fontSize:8, color:'#444', padding:'2px 4px 1px', display:'flex', justifyContent:'space-between', flexShrink:0, background:'#1e1e1e', zIndex:1, borderBottom:'1px solid #2a2a2a' }}>
+        <span>before</span><span>after</span>
+      </div>
+      {/* Scrollable canvas area */}
+      <div ref={scrollRef} onClick={handleClick}
+        style={{ flex:1, overflow:'hidden', cursor:'pointer', position:'relative' }}>
+        <div style={{ width:MM_W, height:FULL_H, position:'relative' }}>
+          <canvas ref={canvasRef} width={MM_W} height={Math.max(FULL_H,1)}
+            style={{ display:'block', imageRendering:'pixelated' }}/>
+          <div style={{
+            position:'absolute', left:0, top: viewportTop,
+            width:MM_W, height: viewportH,
+            background:'rgba(255,255,255,0.13)',
+            border:'1px solid rgba(255,255,255,0.35)',
+            pointerEvents:'none', boxSizing:'border-box', borderRadius:2,
+          }}/>
+        </div>
       </div>
     </div>
   )
 }
 
-function FullFileColumn({
-  lines, label, isRight, onScroll,
-}: {
-  lines: FullLine[]
-  label: string
-  isRight: boolean
+// ── Column ────────────────────────────────────────────────────────────────────
+const MONO: React.CSSProperties = {
+  fontFamily: "'SF Mono','Fira Code','Cascadia Code',Menlo,monospace",
+  fontSize: 12, lineHeight: '20px', whiteSpace: 'pre', overflowWrap: 'normal',
+}
+
+function DiffColumn({ lines, label, isRight, onScroll }: {
+  lines: FullLine[]; label: string; isRight: boolean
   onScroll: (e: React.UIEvent<HTMLDivElement>) => void
 }) {
   return (
-    <div
-      data-scroll-col={isRight ? 'right' : 'left'}
-      onScroll={onScroll}
-      style={{ flex:1, display:'flex', flexDirection:'column', overflow:'auto', minWidth:0, borderRight: isRight ? 'none' : '2px solid #333' }}
-    >
-      {/* Sticky header */}
-      <div style={{ padding:'3px 12px 3px 62px', background:'#2d2d2d', borderBottom:'1px solid #3a3a3a', fontSize:10, color:'#6a6a6a', flexShrink:0, fontFamily:'monospace', position:'sticky', top:0, zIndex:2 }}>
-        {label}
-      </div>
-
+    <div data-scroll-col={isRight?'right':'left'} onScroll={onScroll}
+      style={{ flex:1, display:'flex', flexDirection:'column', overflow:'auto', minWidth:0, borderRight: isRight?'none':'2px solid #333' }}>
+      <div style={{ padding:'3px 12px 3px 62px', background:'#2d2d2d', borderBottom:'1px solid #3a3a3a', fontSize:10, color:'#6a6a6a', flexShrink:0, fontFamily:'monospace', position:'sticky', top:0, zIndex:2 }}>{label}</div>
       {lines.map((line, i) => {
+        const isPlaceholder = line.decor === 'placeholder'
         const bg =
-          line.decor === 'removed' ? 'rgba(220,50,47,0.18)'  :
-          line.decor === 'added'   ? 'rgba(42,180,102,0.14)' :
+          line.decor==='removed'     ? 'rgba(220,50,47,0.14)'  :
+          line.decor==='added'       ? 'rgba(42,180,102,0.12)' :
+          isPlaceholder              ? '#252526'               :
           'transparent'
-
-        const lineNumColor =
-          line.decor === 'removed' ? '#c55' :
-          line.decor === 'added'   ? '#3a9' :
-          '#858585'   // brighter than before (#3d3d3d was too faint)
-
-        const textColor =
-          line.decor === 'removed' ? '#ff9999' :
-          line.decor === 'added'   ? '#99e8b4' :
-          '#d4d4d4'
-
-        const prefix =
-          line.decor === 'removed' ? '-' :
-          line.decor === 'added'   ? '+' :
-          ' '
-
+        const lineNumColor = line.decor==='removed' ? '#c55' : line.decor==='added' ? '#3a9' : '#858585'
+        const textColor    = line.decor==='removed' ? '#ffaaaa' : line.decor==='added' ? '#aaeeca' : isPlaceholder ? 'transparent' : '#d4d4d4'
+        const prefix       = line.decor==='removed' ? '-' : line.decor==='added' ? '+' : isPlaceholder ? '' : ' '
         return (
           <div key={i} style={{ display:'flex', background:bg, minHeight:20 }}>
-            {/* Line number */}
             <div style={{ width:44, flexShrink:0, textAlign:'right', paddingRight:8, color:lineNumColor, userSelect:'none', ...MONO, borderRight:'1px solid #2e2e2e' }}>
-              {line.lineNo}
+              {isPlaceholder ? '' : line.lineNo}
             </div>
-            {/* +/- marker */}
-            <div style={{ width:16, flexShrink:0, textAlign:'center', color:textColor, userSelect:'none', ...MONO, opacity:0.85 }}>
-              {prefix}
-            </div>
-            {/* Content */}
+            <div style={{ width:16, flexShrink:0, textAlign:'center', color:textColor, userSelect:'none', ...MONO, opacity:0.85 }}>{prefix}</div>
             <div style={{ flex:1, color:textColor, ...MONO, paddingLeft:4, paddingRight:16 }}>
-              {line.content}
+              {isPlaceholder ? '' : (
+                <InlineContent
+                  content={line.content}
+                  ranges={line.inlineRanges}
+                  isAdded={line.decor==='added'}
+                />
+              )}
             </div>
           </div>
         )
@@ -160,73 +296,89 @@ function FullFileColumn({
   )
 }
 
-export default function DiffEditorPanel({ sessionId, filePath, staged }: Props) {
-  const [diffs,       setDiffs]      = useState<FileDiff[]>([])
-  const [oldContent,  setOldContent] = useState<string>('')
-  const [newContent,  setNewContent] = useState<string>('')
-  const [loading,     setLoading]    = useState(true)
-  const [error,       setError]      = useState('')
-  const [fileIdx,     setFileIdx]    = useState(0)
-  const [leftVisible,  setLeftVisible]  = useState({ start: 0, count: 40 })
-  const [rightVisible, setRightVisible] = useState({ start: 0, count: 40 })
+// ── Main component ────────────────────────────────────────────────────────────
+export default function DiffEditorPanel({ sessionId, filePath, commitHash }: Props) {
+  const [diffs,      setDiffs]      = useState<FileDiff[]>([])
+  const [oldContent, setOldContent] = useState('')
+  const [newContent, setNewContent] = useState('')
+  const [loading,    setLoading]    = useState(true)
+  const [error,      setError]      = useState('')
+  const [fileIdx,    setFileIdx]    = useState(0)
+  const [visible,    setVisible]    = useState({ start:0, count:40 })
   const containerRef = useRef<HTMLDivElement>(null)
 
-  const sessions  = useAppStore(s => s.sessions)
-  const activeId  = useAppStore(s => s.activeSessionId)
-  const session   = sessions.find(s => s.id === (sessionId || activeId))
-  const rootPath  = session?.rootPath
-
+  const sessions = useAppStore(s => s.sessions)
+  const activeId = useAppStore(s => s.activeSessionId)
+  const session  = sessions.find(s => s.id === (sessionId || activeId))
+  const rootPath = session?.rootPath
+  const resolvedFilePath = (() => {
+    if (!filePath) return ''
+    const isAbsolute = filePath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(filePath)
+    if (isAbsolute) return filePath
+    return rootPath ? `${rootPath.replace(/\/+$/, '')}/${filePath.replace(/^\//, '')}` : filePath
+  })()
   const filename = filePath.replace(/\\/g, '/').split('/').pop() ?? filePath
 
   useEffect(() => {
     if (!rootPath) return
     setLoading(true); setError(''); setFileIdx(0)
-
     const enc = encodeURIComponent
-    const diffUrl = `http://localhost:3001/git/direct/diff?rootPath=${enc(rootPath)}&file=${enc(filePath)}&staged=${staged}`
-    // old = committed/staged version, new = working tree
-    const oldUrl  = `http://localhost:3001/git/direct/file-at-head?rootPath=${enc(rootPath)}&file=${enc(filePath)}&staged=${staged}`
-    const newUrl  = `http://localhost:3001/project/file?path=${enc(`${rootPath}/${filePath}`)}`
 
-    Promise.all([
-      fetch(diffUrl).then(r => r.json()),
-      fetch(oldUrl).then(r => r.json()).catch(() => ({ content: '' })),
-      fetch(newUrl).then(r => r.json()).catch(() => ({ content: '' })),
-    ])
-      .then(([diffData, oldData, newData]) => {
+    if (commitHash) {
+      // Commit diff mode — show what changed in this specific commit
+      const diffUrl = rootPath
+        ? `http://localhost:3001/git/direct/commit/${commitHash}?rootPath=${enc(rootPath)}`
+        : `http://localhost:3001/project/${sessionId}/git/commit/${commitHash}`
+      const oldUrl  = `http://localhost:3001/git/direct/file-at-commit?rootPath=${enc(rootPath)}&file=${enc(filePath)}&hash=${enc(commitHash)}&parent=true`
+      const newUrl  = `http://localhost:3001/git/direct/file-at-commit?rootPath=${enc(rootPath)}&file=${enc(filePath)}&hash=${enc(commitHash)}&parent=false`
+      Promise.all([
+        fetch(diffUrl).then(r => r.json()),
+        fetch(oldUrl).then(r => r.json()).catch(() => ({ content: '' })),
+        fetch(newUrl).then(r => r.json()).catch(() => ({ content: '' })),
+      ]).then(([diffData, oldData, newData]) => {
+        // Filter diffs to just this file
+        const all = diffData.diffs ?? []
+        const filtered = all.filter((d: FileDiff) => d.file === filePath || d.file.endsWith(`/${filePath}`) || filePath.endsWith(d.file))
+        setDiffs(filtered.length > 0 ? filtered : all.length > 0 ? [all[0]] : [])
+        setOldContent(oldData.content ?? '')
+        setNewContent(newData.content ?? '')
+        setLoading(false)
+      }).catch(e => { setError(e.message); setLoading(false) })
+    } else {
+      // Working tree diff mode — one VS Code-style view against HEAD (combined staged + unstaged changes)
+      const diffUrl = `http://localhost:3001/git/direct/diff?rootPath=${enc(rootPath)}&file=${enc(filePath)}&staged=all`
+      const oldUrl  = `http://localhost:3001/git/direct/file-at-head?rootPath=${enc(rootPath)}&file=${enc(filePath)}&staged=false`
+      const newUrl  = `http://localhost:3001/project/file?path=${enc(resolvedFilePath)}`
+
+      Promise.all([
+        fetch(diffUrl).then(r => r.json()).catch(() => ({ diffs: [] })),
+        fetch(oldUrl).then(r => r.json()).catch(() => ({ content: '' })),
+        fetch(newUrl).then(r => r.json()).catch(() => ({ content: '' })),
+      ]).then(([diffData, oldData, newData]) => {
         setDiffs(diffData.diffs ?? [])
         setOldContent(oldData.content ?? '')
         setNewContent(newData.content ?? '')
         setLoading(false)
-      })
-      .catch(e => { setError(e.message); setLoading(false) })
-  }, [sessionId, filePath, staged, rootPath])
+      }).catch(e => { setError(e.message); setLoading(false) })
+    }
+  }, [sessionId, filePath, rootPath, commitHash])
 
   const DIFF_LINE_H = 20
 
   function syncScroll(e: React.UIEvent<HTMLDivElement>) {
     const src = e.currentTarget
-    const container = containerRef.current
-    if (!container) return
+    const container = containerRef.current; if (!container) return
     container.querySelectorAll<HTMLElement>('[data-scroll-col]').forEach(el => {
       if (el !== src) el.scrollTop = src.scrollTop
     })
-    const isLeft = src.dataset.scrollCol === 'left'
-    const start  = Math.floor(src.scrollTop / DIFF_LINE_H)
-    const count  = Math.ceil(src.clientHeight / DIFF_LINE_H)
-    if (isLeft) setLeftVisible({ start, count })
-    else        setRightVisible({ start, count })
+    setVisible({ start: Math.floor(src.scrollTop/DIFF_LINE_H), count: Math.ceil(src.clientHeight/DIFF_LINE_H) })
   }
 
-  const scrollToLine = useCallback((colSide: 'left'|'right', lineIdx: number) => {
+  const scrollToLine = useCallback((lineIdx: number) => {
     const container = containerRef.current; if (!container) return
-    const col = container.querySelector<HTMLElement>(`[data-scroll-col="${colSide}"]`)
-    if (!col) return
-    const targetTop = lineIdx * DIFF_LINE_H - col.clientHeight / 2
-    col.scrollTop = Math.max(0, targetTop)
-    // sync other col
-    const other = container.querySelector<HTMLElement>(`[data-scroll-col="${colSide === 'left' ? 'right' : 'left'}"]`)
-    if (other) other.scrollTop = col.scrollTop
+    container.querySelectorAll<HTMLElement>('[data-scroll-col]').forEach(col => {
+      col.scrollTop = Math.max(0, lineIdx * DIFF_LINE_H - col.clientHeight / 2)
+    })
   }, [])
 
   if (loading) return (
@@ -236,13 +388,11 @@ export default function DiffEditorPanel({ sessionId, filePath, staged }: Props) 
       <style>{`@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}`}</style>
     </div>
   )
-
   if (error) return (
     <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', background:'#1e1e1e', color:'var(--red)', fontSize:12, padding:20, textAlign:'center' }}>
       Failed to load diff: {error}
     </div>
   )
-
   if (diffs.length === 0) return (
     <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', background:'#1e1e1e', gap:8 }}>
       <GitBranch size={28} style={{ opacity:0.3, color:'#858585' }}/>
@@ -250,36 +400,41 @@ export default function DiffEditorPanel({ sessionId, filePath, staged }: Props) 
     </div>
   )
 
-  const currentDiff = diffs[Math.min(fileIdx, diffs.length - 1)]
-
+  const currentDiff = diffs[Math.min(fileIdx, diffs.length-1)]
   if (currentDiff.isBinary) return (
     <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'#858585', fontSize:13, background:'#1e1e1e' }}>
       Binary file — no diff available
     </div>
   )
 
-  // Build decoration maps from diff hunks
   const { removedLines, addedLines } = buildChangesets(currentDiff.hunks)
-
   const addedCount   = addedLines.size
   const removedCount = removedLines.size
 
-  // Build full left (old) and right (new) line arrays
-  const leftLines:  FullLine[] = oldContent.split('\n').map((content, i) => ({
-    lineNo:  i + 1,
-    content,
-    decor:   removedLines.has(i + 1) ? 'removed' : 'normal',
+  const rawLeft: FullLine[] = oldContent.split('\n').map((content, i) => ({
+    lineNo: i+1, content, decor: removedLines.has(i+1) ? 'removed' : 'normal',
   }))
-
-  const rightLines: FullLine[] = newContent.split('\n').map((content, i) => ({
-    lineNo:  i + 1,
-    content,
-    decor:   addedLines.has(i + 1) ? 'added' : 'normal',
+  const rawRight: FullLine[] = newContent.split('\n').map((content, i) => ({
+    lineNo: i+1, content, decor: addedLines.has(i+1) ? 'added' : 'normal',
   }))
+  if (rawLeft.length  > 0 && rawLeft[rawLeft.length-1].content   === '') rawLeft.pop()
+  if (rawRight.length > 0 && rawRight[rawRight.length-1].content === '') rawRight.pop()
 
-  // Remove trailing empty line added by split('\n') on files ending with \n
-  if (leftLines.length  > 0 && leftLines[leftLines.length - 1].content  === '') leftLines.pop()
-  if (rightLines.length > 0 && rightLines[rightLines.length - 1].content === '') rightLines.pop()
+  const pairs      = buildAlignedPairs(rawLeft, rawRight, currentDiff.hunks)
+  const leftLines  = pairs.map(p => p.left)
+  const rightLines = pairs.map(p => p.right)
+  const fallbackLines = currentDiff.hunks.flatMap((hunk, hIdx) =>
+    hunk.lines.map((line, lineIdx) => ({
+      key: `${hIdx}-${lineIdx}`,
+      kind: line.type,
+      content: line.content,
+    }))
+  )
+  const hasVisibleRows = leftLines.some(l => l.decor !== 'placeholder') || rightLines.some(l => l.decor !== 'placeholder')
+
+  const modeLabel = commitHash ? `commit ${commitHash.slice(0,7)}` : 'working tree'
+  const modeBg    = commitHash ? 'rgba(124,106,247,0.15)' : 'rgba(61,214,140,0.15)'
+  const modeColor = commitHash ? '#8b7cf8' : '#3dd68c'
 
   return (
     <div style={{ flex:1, display:'flex', flexDirection:'column', background:'#1e1e1e', overflow:'hidden', minHeight:0 }}>
@@ -288,71 +443,52 @@ export default function DiffEditorPanel({ sessionId, filePath, staged }: Props) 
       {/* Header */}
       <div style={{ display:'flex', alignItems:'center', gap:8, padding:'5px 12px', borderBottom:'1px solid #333', background:'#252526', flexShrink:0, flexWrap:'wrap' }}>
         <GitBranch size={13} style={{ color:'var(--accent)', flexShrink:0 }}/>
-        <span style={{ fontSize:12, fontWeight:600, color:'#d4d4d4', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1 }}>
-          {currentDiff.file}
-        </span>
-        <span style={{ fontSize:10, padding:'1px 7px', borderRadius:4, fontWeight:600, flexShrink:0,
-          background: staged ? 'rgba(61,214,140,0.15)' : 'rgba(245,158,11,0.15)',
-          color:      staged ? '#3dd68c' : '#f59e0b',
-        }}>
-          {staged ? 'staged' : 'unstaged'}
-        </span>
+        <span style={{ fontSize:12, fontWeight:600, color:'#d4d4d4', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1 }}>{currentDiff.file}</span>
+        <span style={{ fontSize:10, padding:'1px 7px', borderRadius:4, fontWeight:600, flexShrink:0, background:modeBg, color:modeColor }}>{modeLabel}</span>
         {addedCount   > 0 && <span style={{ fontSize:11, color:'#3dd68c', fontWeight:700, flexShrink:0 }}>+{addedCount}</span>}
         {removedCount > 0 && <span style={{ fontSize:11, color:'#f97575', fontWeight:700, flexShrink:0 }}>-{removedCount}</span>}
-        <span style={{ fontSize:10, color:'#4a4a4a', flexShrink:0 }}>
-          {leftLines.length} lines (before) · {rightLines.length} lines (after)
-        </span>
-
+        <span style={{ fontSize:10, color:'#4a4a4a', flexShrink:0 }}>{leftLines.filter(l=>l.decor!=='placeholder').length}L · {rightLines.filter(l=>l.decor!=='placeholder').length}R</span>
         {diffs.length > 1 && (
           <div style={{ display:'flex', alignItems:'center', gap:4, marginLeft:'auto' }}>
-            <span style={{ fontSize:11, color:'#858585' }}>{fileIdx + 1} / {diffs.length}</span>
-            <button onClick={() => setFileIdx(i => Math.max(0, i - 1))} disabled={fileIdx === 0}
-              style={{ background:'none', border:'none', cursor: fileIdx===0?'default':'pointer', color: fileIdx===0?'#333':'#858585', display:'flex', padding:2 }}>
-              <ChevronLeft size={13}/>
-            </button>
-            <button onClick={() => setFileIdx(i => Math.min(diffs.length-1, i+1))} disabled={fileIdx===diffs.length-1}
-              style={{ background:'none', border:'none', cursor: fileIdx===diffs.length-1?'default':'pointer', color: fileIdx===diffs.length-1?'#333':'#858585', display:'flex', padding:2 }}>
-              <ChevronRight size={13}/>
-            </button>
+            <span style={{ fontSize:11, color:'#858585' }}>{fileIdx+1}/{diffs.length}</span>
+            <button onClick={() => setFileIdx(i=>Math.max(0,i-1))} disabled={fileIdx===0}
+              style={{ background:'none', border:'none', cursor:fileIdx===0?'default':'pointer', color:fileIdx===0?'#333':'#858585', display:'flex', padding:2 }}><ChevronLeft size={13}/></button>
+            <button onClick={() => setFileIdx(i=>Math.min(diffs.length-1,i+1))} disabled={fileIdx===diffs.length-1}
+              style={{ background:'none', border:'none', cursor:fileIdx===diffs.length-1?'default':'pointer', color:fileIdx===diffs.length-1?'#333':'#858585', display:'flex', padding:2 }}><ChevronRight size={13}/></button>
           </div>
         )}
       </div>
 
-      {/* Side-by-side full file diff — each column has its own minimap */}
-      <div ref={containerRef} style={{ flex:1, display:'flex', overflow:'hidden', minHeight:0 }}>
-        {/* Left: old file + minimap */}
-        <div style={{ flex:1, display:'flex', overflow:'hidden', minWidth:0, borderRight:'2px solid #333' }}>
-          <FullFileColumn
-            lines={leftLines}
-            label={`${currentDiff.file}  (before — ${leftLines.length} lines)`}
-            isRight={false}
-            onScroll={syncScroll}
-          />
-          <DiffMinimap
-            lines={leftLines}
-            visibleStart={leftVisible.start}
-            visibleCount={leftVisible.count}
-            onClickLine={i => scrollToLine('left', i)}
-            label="before"
+      {/* Body: two columns + ONE combined minimap on right */}
+      {hasVisibleRows ? (
+        <div ref={containerRef} style={{ flex:1, display:'flex', overflow:'hidden', minHeight:0 }}>
+          <DiffColumn lines={leftLines}  label={`${currentDiff.file}  (before)`} isRight={false} onScroll={syncScroll}/>
+          <DiffColumn lines={rightLines} label={`${currentDiff.file}  (after)`}  isRight={true}  onScroll={syncScroll}/>
+          {/* Single combined minimap on far right */}
+          <CombinedMinimap
+            leftLines={leftLines}
+            rightLines={rightLines}
+            visibleStart={visible.start}
+            visibleCount={visible.count}
+            onClickLine={scrollToLine}
           />
         </div>
-        {/* Right: new file + minimap */}
-        <div style={{ flex:1, display:'flex', overflow:'hidden', minWidth:0 }}>
-          <FullFileColumn
-            lines={rightLines}
-            label={`${currentDiff.file}  (after — ${rightLines.length} lines)`}
-            isRight={true}
-            onScroll={syncScroll}
-          />
-          <DiffMinimap
-            lines={rightLines}
-            visibleStart={rightVisible.start}
-            visibleCount={rightVisible.count}
-            onClickLine={i => scrollToLine('right', i)}
-            label="after"
-          />
+      ) : (
+        <div style={{ flex:1, overflow:'auto', minHeight:0, background:'#1e1e1e' }}>
+          {fallbackLines.map(line => (
+            <div key={line.key} style={{
+              display:'flex', gap:8, padding:'2px 10px', fontFamily:'monospace', fontSize:12,
+              color: line.kind === 'added' ? '#99e8b4' : line.kind === 'removed' ? '#ff9999' : '#d4d4d4',
+              background: line.kind === 'added' ? 'rgba(42,180,102,0.08)' : line.kind === 'removed' ? 'rgba(220,50,47,0.10)' : 'transparent',
+            }}>
+              <span style={{ width:18, color: line.kind === 'added' ? '#3dd68c' : line.kind === 'removed' ? '#f97575' : '#858585', userSelect:'none' }}>
+                {line.kind === 'added' ? '+' : line.kind === 'removed' ? '-' : ' '}
+              </span>
+              <span style={{ whiteSpace:'pre-wrap', wordBreak:'break-word' }}>{line.content}</span>
+            </div>
+          ))}
         </div>
-      </div>
+      )}
     </div>
   )
 }
