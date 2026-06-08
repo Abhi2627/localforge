@@ -9,6 +9,7 @@ import RightSidebar from './components/RightSidebar'
 import WelcomeScreen from './components/WelcomeScreen'
 import TabStrip from './components/TabStrip'
 import TerminalPanel from './components/TerminalPanel'
+import SetupGate from './components/SetupGate'
 import { getDeletedIds, markDeleted } from './hooks/deletedSessions'
 import './index.css'
 
@@ -68,6 +69,7 @@ export default function App() {
   const [terminalCwd,  setTerminalCwd]  = useState<string | undefined>(undefined)
   const [serverReady,  setServerReady]  = useState(false)
   const [serverError,  setServerError]  = useState(false)
+  const [setupDone,    setSetupDone]    = useState(false)
 
   const openSystemTerminal  = useCallback(() => { setTerminalCwd(undefined); setTerminalOpen(true) }, [])
   const openProjectTerminal = useCallback((cwd: string) => { setTerminalCwd(cwd); setTerminalOpen(true) }, [])
@@ -116,10 +118,21 @@ export default function App() {
       api.getModels()
         .then(({ models }) => {
           setModels(models)
-          const selected = models.find((m: any) => m.isSelected)
+          const selected = models.find((m: any) => m.isSelected) ?? models[0]
           if (selected) setSelectedModel(selected.name)
+          // Auto-proceed setup if models already exist
+          if (models.length > 0) setSetupDone(true)
         })
         .catch(err => console.error('[App] getModels:', err))
+
+      // Also check cloud API keys for setup gate
+      fetch('http://localhost:3001/settings')
+        .then(r => r.json())
+        .then(data => {
+          const hasKey = Object.values(data.apiKeyStatus ?? {}).some(Boolean)
+          if (hasKey) setSetupDone(true)
+        })
+        .catch(() => {})
 
       // Load and clean sessions
       api.getSessions()
@@ -214,6 +227,10 @@ export default function App() {
         </button>
       </div>
     )
+  }
+
+  if (serverReady && !setupDone) {
+    return <SetupGate onComplete={() => setSetupDone(true)}/>
   }
 
   return (

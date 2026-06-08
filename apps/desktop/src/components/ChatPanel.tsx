@@ -328,12 +328,15 @@ function ThinkingBubble() {
   )
 }
 
-function ModelSelector({ selectedModel, models, activeProvider, cloudModel, isOnline, apiKeyStatus, onOpenSettings, onChange, onProviderChange }: {
-  selectedModel: string; models: any[]; activeProvider: string; cloudModel: string
+function ModelSelector({ selectedModel, models, activeProvider, isOnline, apiKeyStatus, onOpenSettings, onChange, onProviderChange, effort, thinking, onEffortChange }: {
+  selectedModel: string; models: any[]; activeProvider: string
   isOnline: boolean; apiKeyStatus: Record<string, boolean>
   onOpenSettings: () => void
   onChange: (model: string) => void
   onProviderChange: (provider: string) => void
+  effort: 'low' | 'medium' | 'high' | 'max'
+  thinking: boolean
+  onEffortChange: (effort: 'low'|'medium'|'high'|'max', thinking?: boolean) => void
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -344,19 +347,15 @@ function ModelSelector({ selectedModel, models, activeProvider, cloudModel, isOn
     return () => document.removeEventListener('mousedown', close)
   }, [open])
   const isCloud     = activeProvider !== 'ollama'
-  // Display: always show a short readable name
+  // Short display name — model name for Ollama, provider name for cloud
   const displayName = isCloud
     ? activeProvider.charAt(0).toUpperCase() + activeProvider.slice(1)
-    : (selectedModel?.split(':')[0] ?? 'No model')
-  const COLORS: Record<string,string> = { ollama:'#3dd68c', openai:'#10b981', gemini:'#4285f4', claude:'#d97706', groq:'#8b5cf6', custom:'#94a3b8' }
-  const dotColor = COLORS[activeProvider] ?? '#888'
+    : (selectedModel?.split(':')[0] || 'Select model')
   return (
     <div ref={ref} style={{ position:'relative', flexShrink:0 }}>
       <button onClick={() => setOpen(v => !v)}
-        style={{ display:'flex', alignItems:'center', gap:5, padding:'3px 8px', borderRadius:6, background:'transparent', border:'1px solid var(--border)', color:'var(--text-muted)', fontSize:11, fontWeight:400, cursor:'pointer', whiteSpace:'nowrap', maxWidth:180 }}>
-        {/* Small coloured dot shows which provider */}
-        <div style={{ width:6, height:6, borderRadius:'50%', background:dotColor, flexShrink:0 }}/>
-        <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:130, color:'var(--text-secondary)' }}>{displayName}</span>
+        style={{ display:'flex', alignItems:'center', gap:4, padding:'3px 8px', borderRadius:6, background:'transparent', border:'1px solid var(--border)', color:'var(--text-muted)', fontSize:11, cursor:'pointer', whiteSpace:'nowrap', maxWidth:200 }}>
+        <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:150, color:'var(--text-secondary)', fontFamily:'monospace' }}>{displayName}</span>
         <ChevronDown size={10} style={{ flexShrink:0, color:'var(--text-muted)' }}/>
       </button>
       {open && (
@@ -406,6 +405,44 @@ function ModelSelector({ selectedModel, models, activeProvider, cloudModel, isOn
           })()}
           {!isOnline && <div style={{ padding:'7px 10px', fontSize:11, color:'var(--text-muted)', borderTop:'1px solid var(--border)', marginTop:4 }}>Offline - cloud providers unavailable</div>}
           <div style={{ height:1, background:'var(--border)', margin:'6px 4px' }}/>
+          {/* ── Effort / Thinking section ── */}
+          <div style={{ padding:'4px 8px 4px', fontSize:10, fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.05em', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+            <span>Effort</span>
+            {/* Thinking toggle — only meaningful for Claude */}
+            {activeProvider === 'claude' && (
+              <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+                <span style={{ fontSize:10, color:'var(--text-muted)' }}>Thinking</span>
+                <div
+                  onClick={() => onEffortChange(effort, !thinking)}
+                  style={{ width:28, height:15, borderRadius:8, background:thinking?'var(--accent)':'var(--bg-primary)', border:`1px solid ${thinking?'var(--accent)':'var(--border)'}`, cursor:'pointer', position:'relative', transition:'background 0.2s', flexShrink:0 }}>
+                  <div style={{ position:'absolute', top:1, left:thinking?13:1, width:11, height:11, borderRadius:'50%', background:'white', transition:'left 0.2s', boxShadow:'0 1px 3px rgba(0,0,0,0.3)' }}/>
+                </div>
+              </div>
+            )}
+          </div>
+          <div style={{ display:'flex', gap:4, padding:'2px 8px 8px' }}>
+            {(['low','medium','high','max'] as const).map(lvl => {
+              const LABELS: Record<string,string> = { low:'Low', medium:'Med', high:'High', max:'Max' }
+              const DESCS:  Record<string,string> = { low:'Fast, minimal reasoning', medium:'Balanced', high:'Thorough, slower', max:'Deepest reasoning, slowest' }
+              const isActive = effort === lvl
+              return (
+                <button key={lvl}
+                  title={DESCS[lvl]}
+                  onClick={() => onEffortChange(lvl)}
+                  style={{
+                    flex:1, padding:'4px 2px', border:`1px solid ${isActive?'var(--accent)':'var(--border)'}`,
+                    borderRadius:5, background:isActive?'var(--accent-dim)':'transparent',
+                    color:isActive?'var(--accent)':'var(--text-muted)',
+                    fontSize:10, fontWeight:isActive?600:400, cursor:'pointer', transition:'all 0.1s',
+                  }}
+                  onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background='var(--bg-hover)' }}
+                  onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background='transparent' }}>
+                  {LABELS[lvl]}
+                </button>
+              )
+            })}
+          </div>
+          <div style={{ height:1, background:'var(--border)', margin:'0 4px 6px' }}/>
           <button onClick={() => { setOpen(false); onOpenSettings() }}
             style={{ display:'flex', alignItems:'center', gap:6, width:'100%', padding:'7px 10px', background:'transparent', border:'none', borderRadius:6, cursor:'pointer', color:'var(--text-secondary)', fontSize:12, textAlign:'left' }}
             onMouseEnter={e => (e.currentTarget as HTMLElement).style.background='var(--bg-hover)'}
@@ -426,13 +463,12 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
     openFiles, activeFile, setActiveFile, closeFile,
     sendingSessionId, streamingSessionId,
     setSendingSession, setStreamingSession,
-    isOnline, setSessionProvider,
+    isOnline, setSessionProvider, setSessionEffort,
   } = useAppStore()
 
   const [input,          setInput]          = useState('')
   const [attachments,    setAttachments]    = useState<AttachedFile[]>([])
   const [globalProvider, setGlobalProvider] = useState('ollama')
-  const [cloudModel,     setCloudModel]     = useState('')
   const [apiKeyStatus,   setApiKeyStatus]   = useState<Record<string,boolean>>({})
   const [showSettings,   setShowSettings]   = useState(false)
   const [isAtBottom,     setIsAtBottom]     = useState(true)
@@ -459,6 +495,8 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
 
   // Per-session provider — falls back to global when session has no override
   const activeProvider = session?.sessionProvider ?? globalProvider
+  const effort         = session?.sessionEffort  ?? 'medium'
+  const thinking       = session?.sessionThinking ?? false
 
   const scrollToBottom = useCallback((force = false) => {
     const el = scrollRef.current; if (!el) return
@@ -485,7 +523,6 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
         const data = await res.json()
         setGlobalProvider(data.activeProvider ?? 'ollama')
         setApiKeyStatus(data.apiKeyStatus ?? {})
-        if (data.activeProvider !== 'ollama') setCloudModel(data.cloudModels?.[data.activeProvider] ?? '')
       } catch { }
     }
     loadProvider()
@@ -569,6 +606,10 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
   function handleProviderChange(provider: string) {
     if (session) setSessionProvider(session.id, provider)
     else setGlobalProvider(provider)
+  }
+
+  function handleEffortChange(newEffort: 'low'|'medium'|'high'|'max', newThinking?: boolean) {
+    if (session) setSessionEffort(session.id, newEffort, newThinking)
   }
 
   async function exportChat() {
@@ -813,7 +854,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
                 style={{ flex:1, background:'transparent', border:'none', outline:'none', resize:'none', color:'var(--text-primary)', fontSize:13, lineHeight:'20px', fontFamily:'inherit', padding:0, maxHeight:140, overflowY:'auto', verticalAlign:'middle', alignSelf:'center' }}
               />
               <div style={{ display:'flex', alignItems:'center', gap:4, flexShrink:0 }}>
-                <ModelSelector selectedModel={selectedModel} models={models} activeProvider={activeProvider} cloudModel={cloudModel} isOnline={isOnline} apiKeyStatus={apiKeyStatus} onOpenSettings={() => setShowSettings(true)} onChange={handleModelChange} onProviderChange={handleProviderChange}/>
+                <ModelSelector selectedModel={selectedModel} models={models} activeProvider={activeProvider} isOnline={isOnline} apiKeyStatus={apiKeyStatus} onOpenSettings={() => setShowSettings(true)} onChange={handleModelChange} onProviderChange={handleProviderChange} effort={effort} thinking={thinking} onEffortChange={handleEffortChange}/>
                 <button className="icon-btn" title="Voice (coming soon)" style={{ width:28, height:28, display:'flex', alignItems:'center', justifyContent:'center' }}><Mic size={14}/></button>
                 <button onClick={() => send()} disabled={!canSend}
                   style={{ width:32, height:32, borderRadius:8, border:'none', background:canSend?'var(--accent)':'var(--bg-hover)', color:canSend?'white':'var(--text-muted)', cursor:canSend?'pointer':'not-allowed', display:'flex', alignItems:'center', justifyContent:'center', transition:'background 0.15s', flexShrink:0 }}>

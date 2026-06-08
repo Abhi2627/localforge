@@ -28,8 +28,10 @@ export interface Session {
   agents: Agent[]; messages: Message[]; allFiles: string[]; writtenFiles: string[]
   summary?: string; lastAccessedAt: number; isActive: boolean
   createdAt?: string; updatedAt?: string
-  sessionProvider?: string   // per-session provider override (e.g. 'gemini', 'groq', 'ollama')
-  sessionModel?: string      // per-session model override
+  sessionProvider?: string
+  sessionModel?: string
+  sessionEffort?: 'low' | 'medium' | 'high' | 'max'  // maps to thinking budget / temperature
+  sessionThinking?: boolean                            // extended thinking toggle (Claude only)
 }
 export interface OllamaModel {
   name: string; sizeGb: string; isSelected: boolean; isFallback: boolean
@@ -68,6 +70,7 @@ interface AppState {
   setAllFiles:        (sessionId: string, files: string[]) => void
   setSessionSummary:  (sessionId: string, summary: string) => void
   setSessionProvider:  (sessionId: string, provider: string, model?: string) => void
+  setSessionEffort:    (sessionId: string, effort: 'low'|'medium'|'high'|'max', thinking?: boolean) => void
   setModels:          (models: OllamaModel[]) => void
   setSelectedModel:   (model: string) => void
   setLeftExpanded:    (v: boolean) => void
@@ -224,6 +227,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSessionProvider: (sessionId, provider, model) => set(s => ({
     sessions: s.sessions.map(sess =>
       sess.id === sessionId ? { ...sess, sessionProvider: provider, sessionModel: model } : sess
+    )
+  })),
+  setSessionEffort: (sessionId, effort, thinking) => set(s => ({
+    sessions: s.sessions.map(sess =>
+      sess.id === sessionId ? { ...sess, sessionEffort: effort, sessionThinking: thinking ?? sess.sessionThinking } : sess
     )
   })),
   setModels:        (models)        => set({ models }),
