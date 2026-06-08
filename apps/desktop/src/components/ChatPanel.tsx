@@ -344,20 +344,23 @@ function ModelSelector({ selectedModel, models, activeProvider, cloudModel, isOn
     return () => document.removeEventListener('mousedown', close)
   }, [open])
   const isCloud     = activeProvider !== 'ollama'
+  // Display: always show a short readable name
   const displayName = isCloud
-    ? `${activeProvider.charAt(0).toUpperCase() + activeProvider.slice(1)} · ${(cloudModel || activeProvider).split(':')[0]}`
+    ? activeProvider.charAt(0).toUpperCase() + activeProvider.slice(1)
     : (selectedModel?.split(':')[0] ?? 'No model')
   const COLORS: Record<string,string> = { ollama:'#3dd68c', openai:'#10b981', gemini:'#4285f4', claude:'#d97706', groq:'#8b5cf6', custom:'#94a3b8' }
-  const color = COLORS[activeProvider] ?? '#888'
+  const dotColor = COLORS[activeProvider] ?? '#888'
   return (
     <div ref={ref} style={{ position:'relative', flexShrink:0 }}>
       <button onClick={() => setOpen(v => !v)}
-        style={{ display:'flex', alignItems:'center', gap:4, padding:'3px 8px', borderRadius:7, background:`${color}15`, border:`1px solid ${color}35`, color, fontSize:11, fontWeight:500, cursor:'pointer', whiteSpace:'nowrap', maxWidth:160, overflow:'hidden' }}>
-        <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:120 }}>{displayName}</span>
-        <ChevronDown size={10} style={{ flexShrink:0 }}/>
+        style={{ display:'flex', alignItems:'center', gap:5, padding:'3px 8px', borderRadius:6, background:'transparent', border:'1px solid var(--border)', color:'var(--text-muted)', fontSize:11, fontWeight:400, cursor:'pointer', whiteSpace:'nowrap', maxWidth:180 }}>
+        {/* Small coloured dot shows which provider */}
+        <div style={{ width:6, height:6, borderRadius:'50%', background:dotColor, flexShrink:0 }}/>
+        <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:130, color:'var(--text-secondary)' }}>{displayName}</span>
+        <ChevronDown size={10} style={{ flexShrink:0, color:'var(--text-muted)' }}/>
       </button>
       {open && (
-        <div style={{ position:'absolute', bottom:'calc(100% + 6px)', left:0, background:'var(--bg-secondary)', border:'1px solid var(--border)', borderRadius:10, padding:6, minWidth:220, maxHeight:300, overflowY:'auto', boxShadow:'0 8px 24px rgba(0,0,0,0.5)', zIndex:100 }}>
+        <div style={{ position:'fixed', bottom: 72, right: 80, background:'var(--bg-secondary)', border:'1px solid var(--border)', borderRadius:10, padding:6, minWidth:220, maxHeight:320, overflowY:'auto', boxShadow:'0 8px 24px rgba(0,0,0,0.5)', zIndex:500 }}>
           {models.length > 0 && <>
             <div style={{ padding:'4px 8px 2px', fontSize:10, fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.05em' }}>Local (Ollama)</div>
             {models.map((m: any) => (
@@ -428,16 +431,13 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
 
   const [input,          setInput]          = useState('')
   const [attachments,    setAttachments]    = useState<AttachedFile[]>([])
-  const [globalProvider, setGlobalProvider] = useState('ollama')   // fallback when session has no override
+  const [globalProvider, setGlobalProvider] = useState('ollama')
   const [cloudModel,     setCloudModel]     = useState('')
   const [apiKeyStatus,   setApiKeyStatus]   = useState<Record<string,boolean>>({})
   const [showSettings,   setShowSettings]   = useState(false)
   const [isAtBottom,     setIsAtBottom]     = useState(true)
   const [toast,          setToast]          = useState<{ msg: string; type: 'info'|'success'|'error' } | null>(null)
   const [mcpConnected,   setMcpConnected]   = useState(false)
-
-  // Per-session provider — falls back to global when session has no override
-  const activeProvider = session?.sessionProvider ?? globalProvider
 
   const showToast = useCallback((msg: string, type: 'info'|'success'|'error' = 'info', ms = 3000) => {
     setToast({ msg, type }); setTimeout(() => setToast(null), ms)
@@ -456,6 +456,9 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
   const isSending         = sendingSessionId   === activeSessionId
   const isStreaming       = streamingSessionId === activeSessionId
   const isBusy            = isSending || isStreaming
+
+  // Per-session provider — falls back to global when session has no override
+  const activeProvider = session?.sessionProvider ?? globalProvider
 
   const scrollToBottom = useCallback((force = false) => {
     const el = scrollRef.current; if (!el) return
