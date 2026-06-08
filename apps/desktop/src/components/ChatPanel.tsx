@@ -202,7 +202,7 @@ function saveApplied(ids: Set<string>) {
   try { localStorage.setItem(APPLIED_KEY, JSON.stringify([...ids])) } catch { }
 }
 
-function AgentBubble({ msg, onReload, rootPath, userPrompt }: { msg: Message; onReload?: () => void; rootPath?: string; userPrompt?: string }) {
+function AgentBubble({ msg, onReload, rootPath, userPrompt, autoApply }: { msg: Message; onReload?: () => void; rootPath?: string; userPrompt?: string; autoApply?: boolean }) {
   const [hovered, setHovered] = useState(false)
 
   // Patches derived from stable content — IDs are deterministic so they match across reloads
@@ -225,6 +225,15 @@ function AgentBubble({ msg, onReload, rootPath, userPrompt }: { msg: Message; on
   const [rejected, setRejected] = useState<Set<string>>(new Set())
 
   const displayContent = patches.length > 0 ? cleanContent : msg.content
+
+  // Auto-apply: when autoApply=true, apply all patches immediately on mount (no confirm needed)
+  useEffect(() => {
+    if (!autoApply || msg.type === 'stream') return  // don't auto-apply while still streaming
+    for (const patch of patches) {
+      if (appliedIds.has(patch.id)) continue  // already applied
+      handleApply(patch).catch(() => {})
+    }
+  }, [autoApply, msg.type, patches.length]) // eslint-disable-line
 
   async function handleApply(patch: FilePatch) {
     if (appliedIds.has(patch.id)) return   // already applied — guard
@@ -258,8 +267,8 @@ function AgentBubble({ msg, onReload, rootPath, userPrompt }: { msg: Message; on
   )
 }
 
-function MessageBubble({ msg, onEdit, onReload, rootPath, userPrompt }: {
-  msg: Message; onEdit?: (c: string) => void; onReload?: () => void; rootPath?: string; userPrompt?: string
+function MessageBubble({ msg, onEdit, onReload, rootPath, userPrompt, autoApply }: {
+  msg: Message; onEdit?: (c: string) => void; onReload?: () => void; rootPath?: string; userPrompt?: string; autoApply?: boolean
 }) {
   const [hovered,     setHovered]     = useState(false)
   const [previewFile, setPreviewFile] = useState<{ name: string; content: string } | null>(null)
@@ -283,7 +292,7 @@ function MessageBubble({ msg, onEdit, onReload, rootPath, userPrompt }: {
       </div>
     </div>
   )
-  if (msg.type === 'agent') return <AgentBubble msg={msg} onReload={onReload} rootPath={rootPath} userPrompt={userPrompt}/>
+  if (msg.type === 'agent') return <AgentBubble msg={msg} onReload={onReload} rootPath={rootPath} userPrompt={userPrompt} autoApply={autoApply}/>
   const time = formatTime(msg.timestamp)
   return (
     <>
@@ -470,6 +479,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
   const [attachments,    setAttachments]    = useState<AttachedFile[]>([])
   const [globalProvider, setGlobalProvider] = useState('ollama')
   const [apiKeyStatus,   setApiKeyStatus]   = useState<Record<string,boolean>>({})
+  const [autoApply,      setAutoApply]      = useState(false)
   const [showSettings,   setShowSettings]   = useState(false)
   const [isAtBottom,     setIsAtBottom]     = useState(true)
   const [toast,          setToast]          = useState<{ msg: string; type: 'info'|'success'|'error' } | null>(null)
@@ -523,6 +533,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
         const data = await res.json()
         setGlobalProvider(data.activeProvider ?? 'ollama')
         setApiKeyStatus(data.apiKeyStatus ?? {})
+        setAutoApply(data.autoApply ?? false)
       } catch { }
     }
     loadProvider()
@@ -818,6 +829,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
                 <MessageBubble key={msg.id} msg={msg} onEdit={handleEdit}
                   rootPath={session?.rootPath}
                   userPrompt={prevUserMsg?.displayContent ?? prevUserMsg?.content}
+                  autoApply={autoApply}
                   onReload={i===messages.length-1 && msg.type==='agent' ? handleReload : undefined}
                 />
               )

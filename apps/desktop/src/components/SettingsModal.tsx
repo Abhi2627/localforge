@@ -11,6 +11,7 @@ interface PublicSettings {
   apiKeyStatus:   Record<string, boolean>
   llmDefaults:    { temperature: number; maxTokens: number; systemPrompt: string; contextLength: number }
   fontSize:       number
+  autoApply:      boolean
 }
 
 interface ProviderInfo {
@@ -605,6 +606,23 @@ export default function SettingsModal({ onClose }: Props) {
                       rows={4}
                       style={{ width:'100%', background:'var(--bg-tertiary)', border:'1px solid var(--border)', borderRadius:6, padding:'8px 10px', color:'var(--text-primary)', fontSize:12, outline:'none', resize:'vertical', fontFamily:'inherit', lineHeight:1.6, boxSizing:'border-box' }}
                     />
+                  </div>
+                  {/* Auto-Apply toggle */}
+                  <div style={{ display:'flex', alignItems:'flex-start', gap:14, padding:'12px 14px', background:'var(--bg-tertiary)', border:'1px solid var(--border)', borderRadius:8 }}>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontSize:13, fontWeight:500, color:'var(--text-primary)', marginBottom:3 }}>Agent Auto-Apply</div>
+                      <div style={{ fontSize:11, color:'var(--text-muted)', lineHeight:1.6 }}>When enabled, file patches proposed by the agent are written to disk immediately — no Apply button required. Each applied file still shows an "Applied" badge in chat so you can track what changed.</div>
+                    </div>
+                    {/* Toggle pill */}
+                    <div
+                      onClick={async () => {
+                        const next = !(settings?.autoApply ?? false)
+                        setSettings(s => s ? { ...s, autoApply: next } : s)
+                        await fetch('http://localhost:3001/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ autoApply: next }) })
+                      }}
+                      style={{ width:44, height:24, borderRadius:12, background:settings?.autoApply?'var(--accent)':'var(--bg-primary)', border:`1px solid ${settings?.autoApply?'var(--accent)':'var(--border)'}`, cursor:'pointer', position:'relative', transition:'background 0.2s', flexShrink:0, marginTop:2 }}>
+                      <div style={{ position:'absolute', top:2, left:settings?.autoApply?20:2, width:18, height:18, borderRadius:'50%', background:'white', transition:'left 0.2s', boxShadow:'0 1px 4px rgba(0,0,0,0.35)' }}/>
+                    </div>
                   </div>
                 </div>
               ) : (

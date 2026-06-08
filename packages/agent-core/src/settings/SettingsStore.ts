@@ -31,6 +31,7 @@ export interface AppSettings {
   apiKeys:        ApiKeys
   llmDefaults:    LLMDefaults
   fontSize:       number
+  autoApply:      boolean   // auto-apply agent file patches without confirm dialog
 }
 
 const DEFAULTS: AppSettings = {
@@ -44,6 +45,7 @@ const DEFAULTS: AppSettings = {
   apiKeys: {},
   llmDefaults: { temperature: 0.7, maxTokens: 4096, systemPrompt: '', contextLength: 4096 },
   fontSize: 13,
+  autoApply: false,
 }
 
 export function loadSettings(): AppSettings {
@@ -95,5 +97,6 @@ export function getPublicSettings() {
       groq:   !!s.apiKeys.groq,
       custom: !!(s.apiKeys.customKey && s.apiKeys.customUrl),
     },
+    autoApply: s.autoApply ?? false,
   }
 }

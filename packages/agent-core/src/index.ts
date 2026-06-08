@@ -460,6 +460,14 @@ async function bootstrap() {
 
   // ── Settings ───────────────────────────────────────────────────────────────
   server.get('/settings', async () => getPublicSettings())
+  server.post<{ Body: Record<string, any> }>('/settings', async (req) => {
+    // Generic settings update — handles autoApply, fontSize, and other top-level fields
+    const allowed = ['autoApply', 'fontSize']
+    const update: Record<string, any> = {}
+    for (const key of allowed) { if (key in req.body) update[key] = req.body[key] }
+    if (Object.keys(update).length > 0) saveSettings(update as any)
+    return { success: true, settings: getPublicSettings() }
+  })
   server.post<{ Body: { provider: string; apiKey: string; baseUrl?: string } }>('/settings/apikey', async (req) => {
     const { provider, apiKey, baseUrl } = req.body
     if (!provider || !apiKey) return { success: false, error: 'provider and apiKey required' }
