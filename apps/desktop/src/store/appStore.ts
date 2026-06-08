@@ -28,6 +28,8 @@ export interface Session {
   agents: Agent[]; messages: Message[]; allFiles: string[]; writtenFiles: string[]
   summary?: string; lastAccessedAt: number; isActive: boolean
   createdAt?: string; updatedAt?: string
+  sessionProvider?: string   // per-session provider override (e.g. 'gemini', 'groq', 'ollama')
+  sessionModel?: string      // per-session model override
 }
 export interface OllamaModel {
   name: string; sizeGb: string; isSelected: boolean; isFallback: boolean
@@ -65,6 +67,7 @@ interface AppState {
   addWrittenFile:     (sessionId: string, filePath: string) => void
   setAllFiles:        (sessionId: string, files: string[]) => void
   setSessionSummary:  (sessionId: string, summary: string) => void
+  setSessionProvider:  (sessionId: string, provider: string, model?: string) => void
   setModels:          (models: OllamaModel[]) => void
   setSelectedModel:   (model: string) => void
   setLeftExpanded:    (v: boolean) => void
@@ -218,6 +221,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     )
   })),
 
+  setSessionProvider: (sessionId, provider, model) => set(s => ({
+    sessions: s.sessions.map(sess =>
+      sess.id === sessionId ? { ...sess, sessionProvider: provider, sessionModel: model } : sess
+    )
+  })),
   setModels:        (models)        => set({ models }),
   setSelectedModel: (selectedModel) => set({ selectedModel }),
   setLeftExpanded:  (v) => set({ leftExpanded: v }),

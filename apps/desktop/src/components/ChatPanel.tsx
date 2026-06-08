@@ -328,10 +328,12 @@ function ThinkingBubble() {
   )
 }
 
-function ModelSelector({ selectedModel, models, activeProvider, cloudModel, isOnline, apiKeyStatus, onOpenSettings, onChange }: {
+function ModelSelector({ selectedModel, models, activeProvider, cloudModel, isOnline, apiKeyStatus, onOpenSettings, onChange, onProviderChange }: {
   selectedModel: string; models: any[]; activeProvider: string; cloudModel: string
   isOnline: boolean; apiKeyStatus: Record<string, boolean>
-  onOpenSettings: () => void; onChange: (model: string) => void
+  onOpenSettings: () => void
+  onChange: (model: string) => void
+  onProviderChange: (provider: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -359,7 +361,7 @@ function ModelSelector({ selectedModel, models, activeProvider, cloudModel, isOn
           {models.length > 0 && <>
             <div style={{ padding:'4px 8px 2px', fontSize:10, fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.05em' }}>Local (Ollama)</div>
             {models.map((m: any) => (
-              <button key={m.name} onClick={() => { onChange(m.name); setOpen(false) }}
+              <button key={m.name} onClick={() => { onChange(m.name); onProviderChange('ollama'); setOpen(false) }}
                 style={{ display:'flex', alignItems:'center', gap:8, width:'100%', padding:'7px 10px', background:m.name===selectedModel&&!isCloud?'var(--accent-dim)':'transparent', border:'none', borderRadius:6, cursor:'pointer', textAlign:'left' }}
                 onMouseEnter={e => { if (!(m.name===selectedModel&&!isCloud)) (e.currentTarget as HTMLElement).style.background='var(--bg-hover)' }}
                 onMouseLeave={e => { if (!(m.name===selectedModel&&!isCloud)) (e.currentTarget as HTMLElement).style.background='transparent' }}>
@@ -384,8 +386,10 @@ function ModelSelector({ selectedModel, models, activeProvider, cloudModel, isOn
               {available.map(p => (
                 <button key={p.id}
                   onClick={async () => {
+                    // Per-session: save to session store only, no global server call
                     await fetch('http://localhost:3001/settings/provider', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ activeProvider: p.id }) })
-                    setOpen(false); window.dispatchEvent(new CustomEvent('provider-changed'))
+                    onProviderChange(p.id)
+                    setOpen(false)
                   }}
                   style={{ display:'flex', alignItems:'center', gap:8, width:'100%', padding:'7px 10px', background:isCloud&&activeProvider===p.id?`${p.color}18`:'transparent', border:'none', borderRadius:6, cursor:'pointer', textAlign:'left' }}
                   onMouseEnter={e => { if (!(isCloud&&activeProvider===p.id)) (e.currentTarget as HTMLElement).style.background='var(--bg-hover)' }}
@@ -419,18 +423,21 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
     openFiles, activeFile, setActiveFile, closeFile,
     sendingSessionId, streamingSessionId,
     setSendingSession, setStreamingSession,
-    isOnline,
+    isOnline, setSessionProvider,
   } = useAppStore()
 
   const [input,          setInput]          = useState('')
   const [attachments,    setAttachments]    = useState<AttachedFile[]>([])
-  const [activeProvider, setActiveProvider] = useState('ollama')
+  const [globalProvider, setGlobalProvider] = useState('ollama')   // fallback when session has no override
   const [cloudModel,     setCloudModel]     = useState('')
   const [apiKeyStatus,   setApiKeyStatus]   = useState<Record<string,boolean>>({})
   const [showSettings,   setShowSettings]   = useState(false)
   const [isAtBottom,     setIsAtBottom]     = useState(true)
   const [toast,          setToast]          = useState<{ msg: string; type: 'info'|'success'|'error' } | null>(null)
   const [mcpConnected,   setMcpConnected]   = useState(false)
+
+  // Per-session provider — falls back to global when session has no override
+  const activeProvider = session?.sessionProvider ?? globalProvider
 
   const showToast = useCallback((msg: string, type: 'info'|'success'|'error' = 'info', ms = 3000) => {
     setToast({ msg, type }); setTimeout(() => setToast(null), ms)
@@ -473,7 +480,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
       try {
         const res = await fetch('http://localhost:3001/settings')
         const data = await res.json()
-        setActiveProvider(data.activeProvider ?? 'ollama')
+        setGlobalProvider(data.activeProvider ?? 'ollama')
         setApiKeyStatus(data.apiKeyStatus ?? {})
         if (data.activeProvider !== 'ollama') setCloudModel(data.cloudModels?.[data.activeProvider] ?? '')
       } catch { }
@@ -550,8 +557,15 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
   async function handleModelChange(modelName: string) {
     try {
       await fetch('http://localhost:3001/settings/provider', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ activeProvider: 'ollama' }) })
-      await api.selectModel(modelName); setActiveProvider('ollama')
+      await api.selectModel(modelName)
+      if (session) setSessionProvider(session.id, 'ollama', modelName)
+      else setGlobalProvider('ollama')
     } catch { }
+  }
+
+  function handleProviderChange(provider: string) {
+    if (session) setSessionProvider(session.id, provider)
+    else setGlobalProvider(provider)
   }
 
   async function exportChat() {
@@ -796,7 +810,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
                 style={{ flex:1, background:'transparent', border:'none', outline:'none', resize:'none', color:'var(--text-primary)', fontSize:13, lineHeight:'20px', fontFamily:'inherit', padding:0, maxHeight:140, overflowY:'auto', verticalAlign:'middle', alignSelf:'center' }}
               />
               <div style={{ display:'flex', alignItems:'center', gap:4, flexShrink:0 }}>
-                <ModelSelector selectedModel={selectedModel} models={models} activeProvider={activeProvider} cloudModel={cloudModel} isOnline={isOnline} apiKeyStatus={apiKeyStatus} onOpenSettings={() => setShowSettings(true)} onChange={handleModelChange}/>
+                <ModelSelector selectedModel={selectedModel} models={models} activeProvider={activeProvider} cloudModel={cloudModel} isOnline={isOnline} apiKeyStatus={apiKeyStatus} onOpenSettings={() => setShowSettings(true)} onChange={handleModelChange} onProviderChange={handleProviderChange}/>
                 <button className="icon-btn" title="Voice (coming soon)" style={{ width:28, height:28, display:'flex', alignItems:'center', justifyContent:'center' }}><Mic size={14}/></button>
                 <button onClick={() => send()} disabled={!canSend}
                   style={{ width:32, height:32, borderRadius:8, border:'none', background:canSend?'var(--accent)':'var(--bg-hover)', color:canSend?'white':'var(--text-muted)', cursor:canSend?'pointer':'not-allowed', display:'flex', alignItems:'center', justifyContent:'center', transition:'background 0.15s', flexShrink:0 }}>
