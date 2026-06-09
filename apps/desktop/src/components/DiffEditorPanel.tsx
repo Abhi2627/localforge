@@ -2,6 +2,34 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { GitBranch, Loader, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 
+// ── Syntax highlighting (same as FileEditorPanel) ─────────────────────────────
+function escHtml(s: string) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;')
+}
+
+function highlightLine(content: string, ext: string): string {
+  if (!['ts','tsx','js','jsx','py','json','css','scss','html','sh','rs','go'].includes(ext)) return escHtml(content)
+  let s = escHtml(content)
+  const keywords: Record<string, string[]> = {
+    ts:  ['import','export','from','const','let','var','function','class','interface','type','enum','extends','implements','return','if','else','for','while','do','switch','case','break','continue','new','this','super','async','await','try','catch','finally','throw','typeof','instanceof','void','null','undefined','true','false','in','of','default','static','readonly','abstract','public','private','protected','declare','namespace','module','as','is'],
+    tsx: ['import','export','from','const','let','var','function','class','interface','type','enum','extends','implements','return','if','else','for','while','do','switch','case','break','continue','new','this','super','async','await','try','catch','finally','throw','typeof','instanceof','void','null','undefined','true','false','in','of','default','static'],
+    js:  ['import','export','from','const','let','var','function','class','return','if','else','for','while','do','switch','case','break','continue','new','this','super','async','await','try','catch','finally','throw','typeof','instanceof','void','null','undefined','true','false','in','of','default','static'],
+    jsx: ['import','export','from','const','let','var','function','class','return','if','else','for','while','do','switch','case','break','continue','new','this','super','async','await','try','catch','finally','throw','typeof','instanceof','void','null','undefined','true','false','in','of','default','static'],
+    py:  ['import','from','def','class','return','if','elif','else','for','while','break','continue','try','except','finally','raise','with','as','in','is','not','and','or','None','True','False','pass','lambda','yield'],
+    rs:  ['fn','let','mut','const','static','struct','enum','impl','trait','use','mod','pub','crate','super','self','match','if','else','for','while','loop','return','break','continue','true','false'],
+    go:  ['func','var','const','type','struct','interface','import','package','return','if','else','for','range','switch','case','break','continue','defer','go','nil','true','false'],
+  }
+  const kws = keywords[ext] ?? keywords['js']
+  if (ext === 'py') s = s.replace(/(#[^\n]*)/g, '<span style="color:#6a9955">$1</span>')
+  else { s = s.replace(/(\/\/[^\n]*)/g, '<span style="color:#6a9955">$1</span>') }
+  s = s.replace(/(&quot;(?:[^&]|&(?!quot;))*&quot;|&#x27;(?:[^&]|&(?!#x27;))*&#x27;|`[^`]*`)/g, '<span style="color:#ce9178">$1</span>')
+  s = s.replace(/\b(\d+\.?\d*)\b/g, '<span style="color:#b5cea8">$1</span>')
+  s = s.replace(new RegExp(`\\b(${kws.join('|')})\\b`, 'g'), '<span style="color:#569cd6">$1</span>')
+  s = s.replace(/\b([a-zA-Z_$][\w$]*)\s*(?=\()/g, '<span style="color:#dcdcaa">$1</span>')
+  s = s.replace(/\b([A-Z][a-zA-Z0-9_]*)\b/g, '<span style="color:#4ec9b0">$1</span>')
+  return s
+}
+
 interface DiffLine  { type: 'context' | 'added' | 'removed'; content: string }
 interface DiffHunk  { header: string; lines: DiffLine[] }
 interface FileDiff  { file: string; status: string; hunks: DiffHunk[]; isBinary: boolean }
@@ -130,21 +158,6 @@ function flushBuffers(pairs: AlignedPair[], removed: FullLine[], added: FullLine
 }
 
 // ── Styled line content with inline highlights ────────────────────────────────
-function InlineContent({ content, ranges, isAdded }: {
-  content: string; ranges?: Array<{start:number;end:number}>; isAdded: boolean
-}) {
-  if (!ranges || ranges.length === 0) return <>{content}</>
-  const parts: React.ReactNode[] = []
-  let pos = 0
-  const hlBg = isAdded ? 'rgba(42,180,102,0.5)' : 'rgba(220,50,47,0.5)'
-  for (const { start, end } of ranges) {
-    if (start > pos) parts.push(<span key={`n${pos}`}>{content.slice(pos, start)}</span>)
-    parts.push(<span key={`h${start}`} style={{ background: hlBg, borderRadius: 2 }}>{content.slice(start, end)}</span>)
-    pos = end
-  }
-  if (pos < content.length) parts.push(<span key={`t${pos}`}>{content.slice(pos)}</span>)
-  return <>{parts}</>
-}
 
 // ── Combined minimap ──────────────────────────────────────────────────────────
 const MM_W = 100, MM_LH = 2, MM_FONT = '1.7px monospace'
@@ -256,8 +269,8 @@ const MONO: React.CSSProperties = {
   fontSize: 12, lineHeight: '20px', whiteSpace: 'pre', overflowWrap: 'normal',
 }
 
-function DiffColumn({ lines, label, isRight, onScroll }: {
-  lines: FullLine[]; label: string; isRight: boolean
+function DiffColumn({ lines, label, isRight, onScroll, ext }: {
+  lines: FullLine[]; label: string; isRight: boolean; ext: string
   onScroll: (e: React.UIEvent<HTMLDivElement>) => void
 }) {
   return (
@@ -272,23 +285,42 @@ function DiffColumn({ lines, label, isRight, onScroll }: {
           isPlaceholder              ? '#252526'               :
           'transparent'
         const lineNumColor = line.decor==='removed' ? '#c55' : line.decor==='added' ? '#3a9' : '#858585'
-        const textColor    = line.decor==='removed' ? '#ffaaaa' : line.decor==='added' ? '#aaeeca' : isPlaceholder ? 'transparent' : '#d4d4d4'
-        const prefix       = line.decor==='removed' ? '-' : line.decor==='added' ? '+' : isPlaceholder ? '' : ' '
+        const prefix = line.decor==='removed' ? '-' : line.decor==='added' ? '+' : isPlaceholder ? '' : ' '
+        // Syntax-highlight the content — apply coloured spans over the highlighted HTML
+        // For changed lines, we additionally wrap inline-diff ranges with darker bg spans
+        const getHtml = () => {
+          if (isPlaceholder || !line.content) return ''
+          const baseHtml = highlightLine(line.content, ext)
+          if (!line.inlineRanges || line.inlineRanges.length === 0) return baseHtml
+          // We can't easily apply inline ranges on top of HTML — show plain coloured text for changed chars
+          // Simple approach: bold the changed chars in the raw content before highlighting
+          const isAdded = line.decor === 'added'
+          const hlBg    = isAdded ? 'rgba(42,180,102,0.5)' : 'rgba(220,50,47,0.5)'
+          // Build plain text with marker chars, highlight, then replace markers with spans
+          // Use non-printable sentinels that won't appear in code
+          const OPEN = '\x02', CLOSE = '\x03'
+          const chars = line.content.split('')
+          let marked = ''
+          let inRange = false
+          for (let ci = 0; ci <= chars.length; ci++) {
+            const inNext = line.inlineRanges.some(r => ci >= r.start && ci < r.end)
+            if (inNext && !inRange) { marked += OPEN; inRange = true }
+            if (!inNext && inRange) { marked += CLOSE; inRange = false }
+            if (ci < chars.length) marked += chars[ci]
+          }
+          const markedHtml = highlightLine(marked, ext)
+          return markedHtml
+            .replace(/\x02/g, `<span style="background:${hlBg};border-radius:2px">`)
+            .replace(/\x03/g, '</span>')
+        }
         return (
           <div key={i} style={{ display:'flex', background:bg, minHeight:20 }}>
             <div style={{ width:44, flexShrink:0, textAlign:'right', paddingRight:8, color:lineNumColor, userSelect:'none', ...MONO, borderRight:'1px solid #2e2e2e' }}>
               {isPlaceholder ? '' : line.lineNo}
             </div>
-            <div style={{ width:16, flexShrink:0, textAlign:'center', color:textColor, userSelect:'none', ...MONO, opacity:0.85 }}>{prefix}</div>
-            <div style={{ flex:1, color:textColor, ...MONO, paddingLeft:4, paddingRight:16 }}>
-              {isPlaceholder ? '' : (
-                <InlineContent
-                  content={line.content}
-                  ranges={line.inlineRanges}
-                  isAdded={line.decor==='added'}
-                />
-              )}
-            </div>
+            <div style={{ width:16, flexShrink:0, textAlign:'center', color: line.decor==='removed'?'#f97575': line.decor==='added'?'#3dd68c':'#858585', userSelect:'none', ...MONO, opacity:0.85 }}>{prefix}</div>
+            <div style={{ flex:1, ...MONO, paddingLeft:4, paddingRight:16 }}
+              dangerouslySetInnerHTML={{ __html: getHtml() }}/>
           </div>
         )
       })}
@@ -318,10 +350,11 @@ export default function DiffEditorPanel({ sessionId, filePath, commitHash }: Pro
     return rootPath ? `${rootPath.replace(/\/+$/, '')}/${filePath.replace(/^\//, '')}` : filePath
   })()
   const filename = filePath.replace(/\\/g, '/').split('/').pop() ?? filePath
+  const ext = filename.split('.').pop()?.toLowerCase() ?? ''
 
-  useEffect(() => {
+  const loadDiff = useCallback(async (showLoading = false) => {
     if (!rootPath) return
-    setLoading(true); setError(''); setFileIdx(0)
+    if (showLoading) { setLoading(true); setError(''); setFileIdx(0) }
     const enc = encodeURIComponent
 
     if (commitHash) {
@@ -361,7 +394,21 @@ export default function DiffEditorPanel({ sessionId, filePath, commitHash }: Pro
         setLoading(false)
       }).catch(e => { setError(e.message); setLoading(false) })
     }
-  }, [sessionId, filePath, rootPath, commitHash])
+  }, [sessionId, filePath, rootPath, commitHash, resolvedFilePath]) // eslint-disable-line
+
+  // Initial load
+  useEffect(() => {
+    loadDiff(true)
+  }, [loadDiff])
+
+  // Poll every 3s — auto-reload when diff changes (e.g. after git push, the diff should clear)
+  useEffect(() => {
+    if (commitHash) return  // commit diffs are immutable, no need to poll
+    const interval = setInterval(() => {
+      loadDiff()
+    }, 3000)
+    return () => clearInterval(interval)
+  }, [loadDiff, commitHash])
 
   const DIFF_LINE_H = 20
 
@@ -462,8 +509,8 @@ export default function DiffEditorPanel({ sessionId, filePath, commitHash }: Pro
       {/* Body: two columns + ONE combined minimap on right */}
       {hasVisibleRows ? (
         <div ref={containerRef} style={{ flex:1, display:'flex', overflow:'hidden', minHeight:0 }}>
-          <DiffColumn lines={leftLines}  label={`${currentDiff.file}  (before)`} isRight={false} onScroll={syncScroll}/>
-          <DiffColumn lines={rightLines} label={`${currentDiff.file}  (after)`}  isRight={true}  onScroll={syncScroll}/>
+          <DiffColumn lines={leftLines}  label={`${currentDiff.file}  (before)`} isRight={false} onScroll={syncScroll} ext={ext}/>
+          <DiffColumn lines={rightLines} label={`${currentDiff.file}  (after)`}  isRight={true}  onScroll={syncScroll} ext={ext}/>
           {/* Single combined minimap on far right */}
           <CombinedMinimap
             leftLines={leftLines}
