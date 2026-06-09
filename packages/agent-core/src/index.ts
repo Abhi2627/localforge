@@ -605,6 +605,83 @@ async function bootstrap() {
     catch (err: any) { reply.status(500).send(err.message) }
   })
 
+  // ── File extraction (PDF, DOCX, plain text) ─────────────────────────────
+  server.post<{ Body: { path: string } }>('/project/file/extract', async (req, reply) => {
+    const { path: filePath } = req.body
+    if (!filePath) { reply.status(400).send({ error: 'path required' }); return }
+    if (!fs.existsSync(filePath)) { reply.status(404).send({ error: 'file not found' }); return }
+
+    const ext  = path.extname(filePath).toLowerCase()
+    const name = path.basename(filePath)
+    const MAX  = 1024 * 1024 * 10  // 10 MB raw size cap
+
+    try {
+      const stat = fs.statSync(filePath)
+      if (stat.size > MAX) {
+        reply.status(413).send({ error: `File too large (${(stat.size/1024/1024).toFixed(1)} MB). Max 10 MB.` })
+        return
+      }
+
+      if (ext === '.pdf') {
+        // pdf-parse doesn't have a proper ESM default export — use createRequire
+        const { createRequire } = await import('module')
+        const require   = createRequire(import.meta.url)
+        const pdfParse  = require('pdf-parse')
+        const buf       = fs.readFileSync(filePath)
+        const data      = await pdfParse(buf)
+        return {
+          name, ext, type: 'pdf',
+          content:  data.text,
+          pages:    data.numpages,
+          size:     stat.size,
+          truncated: false,
+        }
+      }
+
+      if (ext === '.docx' || ext === '.doc') {
+        const mammoth = await import('mammoth')
+        const result  = await mammoth.extractRawText({ path: filePath })
+        return {
+          name, ext, type: 'docx',
+          content:  result.value,
+          size:     stat.size,
+          truncated: false,
+        }
+      }
+
+      // Plain text / code files
+      const TEXT_EXTS = new Set(['.ts','.tsx','.js','.jsx','.py','.go','.rs','.java','.kt','.swift','.c','.cpp','.h','.cs','.php','.html','.css','.scss','.json','.yaml','.yml','.toml','.xml','.env','.md','.mdx','.txt','.csv','.sh','.bash','.sql','.graphql','.proto'])
+      if (TEXT_EXTS.has(ext) || ext === '') {
+        const raw      = fs.readFileSync(filePath, 'utf8')
+        const CHAR_CAP = 200_000
+        return {
+          name, ext, type: 'text',
+          content:   raw.length > CHAR_CAP ? raw.slice(0, CHAR_CAP) + '\n\n[... truncated ...]' : raw,
+          size:      stat.size,
+          truncated: raw.length > CHAR_CAP,
+        }
+      }
+
+      // Image files — return base64 for vision-capable models
+      const IMG_EXTS = new Set(['.png','.jpg','.jpeg','.gif','.webp','.svg','.bmp'])
+      if (IMG_EXTS.has(ext)) {
+        const buf     = fs.readFileSync(filePath)
+        const base64  = buf.toString('base64')
+        const mimeMap: Record<string,string> = { '.png':'image/png', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.gif':'image/gif', '.webp':'image/webp', '.svg':'image/svg+xml', '.bmp':'image/bmp' }
+        return {
+          name, ext, type: 'image',
+          base64,
+          mimeType: mimeMap[ext] ?? 'image/png',
+          size:     stat.size,
+        }
+      }
+
+      reply.status(415).send({ error: `Unsupported file type: ${ext}` })
+    } catch (err: any) {
+      reply.status(500).send({ error: err.message })
+    }
+  })
+
   server.get<{ Querystring: { path: string } }>('/project/file/exists', async (req) => {
     const { path: filePath } = req.query
     if (!filePath) return { exists: false }

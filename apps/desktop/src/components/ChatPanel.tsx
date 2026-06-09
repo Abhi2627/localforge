@@ -10,6 +10,7 @@ import FileEditorPanel from './FileEditorPanel'
 import DiffEditorPanel from './DiffEditorPanel'
 import SettingsModal from './SettingsModal'
 import { FilePatchCard, type FilePatch } from './FilePatchCard'
+import ChartBlock from './ChartBlock'
 
 interface ChatPanelProps { onOpenTerminal?: (cwd: string) => void }
 interface AttachedFile { id: string; name: string; path: string; size: number; content: string; isImage: boolean }
@@ -91,11 +92,13 @@ function extractPatches(content: string, rootPath?: string, userPrompt?: string)
 
 const TEXT_EXTS  = new Set(['ts','tsx','js','jsx','mjs','cjs','vue','svelte','py','rb','go','rs','java','kt','swift','c','cpp','h','cs','php','html','css','scss','sass','less','json','yaml','yml','toml','xml','env','md','mdx','txt','csv','sh','bash','zsh','fish','sql','graphql','proto','dockerfile'])
 const IMAGE_EXTS = new Set(['png','jpg','jpeg','gif','webp','svg','bmp'])
+const DOC_EXTS   = new Set(['pdf','docx','doc'])
 const MAX_FILE_SIZE = 500 * 1024
 
 function getFileIcon(name: string) {
   const ext = name.split('.').pop()?.toLowerCase() ?? ''
   if (IMAGE_EXTS.has(ext)) return <Image size={12}/>
+  if (DOC_EXTS.has(ext) || name.includes('[PDF') || name.includes('[DOCX')) return <FileText size={12} style={{ color:'#f59e0b' }}/>
   if (['ts','tsx','js','jsx'].includes(ext)) return <FileText size={12}/>
   return <File size={12}/>
 }
@@ -157,6 +160,13 @@ function MarkdownContent({ content }: { content: string }) {
       a:    ({ children, href }) => <a href={href} target="_blank" rel="noreferrer" style={{ color:'var(--accent)', textDecoration:'underline' }}>{children}</a>,
       pre:  ({ children }) => <>{children}</>,
       code: ({ children, className }) => {
+        const lang    = className?.replace('language-', '') ?? ''
+        const content = String(children)
+        // Chart blocks: ```chart, ```chart:bar, ```chart:line, ```chart:pie, ```chart:area
+        if (lang === 'chart' || lang.startsWith('chart:')) {
+          const chartType = lang.includes(':') ? lang.split(':')[1] : undefined
+          return <ChartBlock raw={content} type={chartType}/>
+        }
         const isBlock = !!className?.includes('language-')
         return isBlock
           ? <code style={{ display:'block', background:'var(--bg-primary)', border:'1px solid var(--border)', borderRadius:6, padding:'10px 14px', fontSize:12, fontFamily:'monospace', overflowX:'auto', margin:'6px 0', lineHeight:1.6, color:'var(--text-primary)' }}>{children}</code>
@@ -566,7 +576,9 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
 
   async function handleAttach() {
     try {
-      const selected = await open({ multiple: true, filters: [{ name: 'Supported files', extensions: [...TEXT_EXTS, ...IMAGE_EXTS] }] })
+      const selected = await open({ multiple: true, filters: [
+        { name: 'All supported files', extensions: [...TEXT_EXTS, ...IMAGE_EXTS, 'pdf', 'docx', 'doc'] }
+      ] })
       if (!selected) return
       const paths = Array.isArray(selected) ? selected : [selected]
       for (const filePath of paths) {
@@ -574,6 +586,23 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
         const ext  = name.split('.').pop()?.toLowerCase() ?? ''
         if (attachments.find(a => a.path === filePath)) continue
         try {
+          // PDF and DOCX — use extract endpoint for text
+          if (ext === 'pdf' || ext === 'docx' || ext === 'doc') {
+            const res  = await fetch('http://localhost:3001/project/file/extract', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ path: filePath }),
+            })
+            if (!res.ok) continue
+            const data    = await res.json()
+            const content = data.content ?? ''
+            const label   = ext === 'pdf' ? `PDF (${data.pages ?? '?'} pages)` : 'DOCX'
+            setAttachments(prev => [...prev, {
+              id: nanoid(), name: `${name} [${label}]`, path: filePath,
+              size: data.size ?? content.length, content, isImage: false,
+            }])
+            continue
+          }
+          // Images and text files — existing flow
           if (IMAGE_EXTS.has(ext) || TEXT_EXTS.has(ext)) {
             const res  = await fetch(`http://localhost:3001/project/file?path=${encodeURIComponent(filePath)}`)
             if (!res.ok) continue
