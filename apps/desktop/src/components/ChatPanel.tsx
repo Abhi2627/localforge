@@ -11,6 +11,8 @@ import DiffEditorPanel from './DiffEditorPanel'
 import SettingsModal from './SettingsModal'
 import { FilePatchCard, type FilePatch } from './FilePatchCard'
 import ChartBlock from './ChartBlock'
+import GraphBlock from './GraphBlock'
+import MathBlock, { hasMath, parseContent, renderInline, type Segment } from './MathBlock'
 
 interface ChatPanelProps { onOpenTerminal?: (cwd: string) => void }
 interface AttachedFile { id: string; name: string; path: string; size: number; content: string; isImage: boolean }
@@ -143,7 +145,94 @@ function FilePreviewPopup({ name, content, onClose }: { name: string; content: s
   )
 }
 
+// ── Code block with copy button ─────────────────────────────────────────────
+function CodeBlock({ content, lang }: { content: string; lang: string }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <div style={{ position:'relative', margin:'6px 0', borderRadius:6, overflow:'hidden', border:'1px solid var(--border)' }}>
+      {/* Header bar: language label + copy button */}
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'4px 10px', background:'var(--bg-tertiary)', borderBottom:'1px solid var(--border)' }}>
+        <span style={{ fontSize:10, color:'var(--text-muted)', fontFamily:'monospace', userSelect:'none' }}>{lang || 'code'}</span>
+        <button
+          onClick={() => navigator.clipboard.writeText(content).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) })}
+          title="Copy code"
+          style={{ display:'flex', alignItems:'center', gap:4, background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', fontSize:10, padding:'2px 4px', borderRadius:3 }}
+          onMouseEnter={e => (e.currentTarget as HTMLElement).style.color='var(--text-primary)'}
+          onMouseLeave={e => (e.currentTarget as HTMLElement).style.color='var(--text-muted)'}>
+          {copied
+            ? <><Check size={11} style={{ color:'#3dd68c' }}/><span style={{ color:'#3dd68c' }}>Copied!</span></>
+            : <><Copy size={11}/><span>Copy</span></>}
+        </button>
+      </div>
+      <code style={{ display:'block', background:'var(--bg-primary)', padding:'10px 14px', fontSize:12, fontFamily:'monospace', overflowX:'auto', lineHeight:1.6, color:'var(--text-primary)', whiteSpace:'pre' }}>{content}</code>
+    </div>
+  )
+}
+
 function MarkdownContent({ content }: { content: string }) {
+  if (!hasMath(content)) return <MarkdownOnly content={content}/>
+  // Use custom parser for math-containing content
+  return <MathAwareContent content={content}/>
+}
+
+// ── MathAwareContent: full custom renderer for math-containing responses ──────
+function MathAwareContent({ content }: { content: string }) {
+  const segments: Segment[] = parseContent(content)
+  return (
+    <div style={{ lineHeight:1.7 }}>
+      {segments.map((seg, i) => {
+        switch (seg.type) {
+          case 'math-block':
+            return <MathBlock key={i} math={seg.value} block={true}/>
+
+          case 'fence':
+            if (seg.lang === 'graph' || seg.lang.startsWith('graph:')) {
+              return <GraphBlock key={i} raw={seg.value}/>
+            }
+            if (seg.lang === 'chart' || seg.lang.startsWith('chart:')) {
+              const chartType = seg.lang.includes(':') ? seg.lang.split(':')[1] : undefined
+              return <ChartBlock key={i} raw={seg.value} type={chartType}/>
+            }
+            return <CodeBlock key={i} content={seg.value} lang={seg.lang}/>
+
+          case 'heading': {
+            const sizes: Record<number, number> = { 1:18, 2:16, 3:14, 4:13 }
+            const weights: Record<number, number> = { 1:800, 2:700, 3:600, 4:600 }
+            return <div key={i} style={{ fontSize:sizes[seg.level], fontWeight:weights[seg.level], color:'var(--text-primary)', margin:'12px 0 5px' }}>{renderInline(seg.value)}</div>
+          }
+
+          case 'bullet-list':
+            return (
+              <ul key={i} style={{ margin:'4px 0 8px', paddingLeft:20 }}>
+                {seg.items.map((item, j) => <li key={j} style={{ margin:'3px 0', lineHeight:1.6 }}>{renderInline(item)}</li>)}
+              </ul>
+            )
+
+          case 'numbered-list':
+            return (
+              <ol key={i} style={{ margin:'4px 0 8px', paddingLeft:20 }}>
+                {seg.items.map((item, j) => <li key={j} style={{ margin:'3px 0', lineHeight:1.6 }}>{renderInline(item)}</li>)}
+              </ol>
+            )
+
+          case 'blockquote':
+            return <blockquote key={i} style={{ borderLeft:'3px solid var(--accent)', paddingLeft:12, margin:'6px 0', color:'var(--text-secondary)', fontStyle:'italic' }}>{renderInline(seg.value)}</blockquote>
+
+          case 'hr':
+            return <hr key={i} style={{ border:'none', borderTop:'1px solid var(--border)', margin:'10px 0' }}/>
+
+          case 'paragraph':
+            return <p key={i} style={{ margin:'0 0 8px' }}>{renderInline(seg.value)}</p>
+
+          default:
+            return null
+        }
+      })}
+    </div>
+  )
+}
+
+function MarkdownOnly({ content }: { content: string }) {
   return (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
       p:    ({ children }) => <p style={{ margin:'0 0 8px', lineHeight:1.7 }}>{children}</p>,
@@ -162,15 +251,17 @@ function MarkdownContent({ content }: { content: string }) {
       code: ({ children, className }) => {
         const lang    = className?.replace('language-', '') ?? ''
         const content = String(children)
-        // Chart blocks: ```chart, ```chart:bar, ```chart:line, ```chart:pie, ```chart:area
+        if (lang === 'graph' || lang.startsWith('graph:')) return <GraphBlock raw={content}/>
+        if (lang === 'math') return <MathBlock math={content} block={true}/>
         if (lang === 'chart' || lang.startsWith('chart:')) {
           const chartType = lang.includes(':') ? lang.split(':')[1] : undefined
           return <ChartBlock raw={content} type={chartType}/>
         }
         const isBlock = !!className?.includes('language-')
-        return isBlock
-          ? <code style={{ display:'block', background:'var(--bg-primary)', border:'1px solid var(--border)', borderRadius:6, padding:'10px 14px', fontSize:12, fontFamily:'monospace', overflowX:'auto', margin:'6px 0', lineHeight:1.6, color:'var(--text-primary)' }}>{children}</code>
-          : <code style={{ background:'var(--bg-primary)', border:'1px solid var(--border)', borderRadius:4, padding:'1px 5px', fontSize:12, fontFamily:'monospace', color:'var(--accent)' }}>{children}</code>
+        // Block code: show with header + copy button
+        if (isBlock) return <CodeBlock content={content} lang={lang}/>
+        // Inline code: plain styled span
+        return <code style={{ background:'var(--bg-primary)', border:'1px solid var(--border)', borderRadius:4, padding:'1px 5px', fontSize:12, fontFamily:'monospace', color:'var(--accent)' }}>{children}</code>
       },
       table: ({ children }) => <div style={{ overflowX:'auto', margin:'8px 0' }}><table style={{ borderCollapse:'collapse', fontSize:12, width:'100%' }}>{children}</table></div>,
       th:   ({ children }) => <th style={{ border:'1px solid var(--border)', padding:'5px 10px', background:'var(--bg-tertiary)', fontWeight:600, textAlign:'left' }}>{children}</th>,
@@ -183,7 +274,8 @@ function MsgActions({ content, onEdit, onReload, isUser, visible }: {
   content: string; onEdit?: () => void; onReload?: () => void; isUser: boolean; visible: boolean
 }) {
   const [copied, setCopied] = useState(false)
-  const copy = () => navigator.clipboard.writeText(stripMarkdown(content)).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
+  // Copy raw markdown/LaTeX — not the rendered DOM text which strips math
+  const copy = () => navigator.clipboard.writeText(content).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
   const btn: React.CSSProperties = { background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', padding:'3px 4px', borderRadius:4, display:'flex' }
   return (
     <div style={{ display:'flex', gap:2, opacity:visible?1:0, transition:'opacity 0.15s', alignItems:'center', pointerEvents:visible?'auto':'none' }}>

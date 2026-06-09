@@ -88,9 +88,9 @@ cd apps/desktop && npm run dev
 | 5D VSCode terminal | ✅ Done | PROBLEMS/OUTPUT/DEBUG CONSOLE/TERMINAL/PORTS tabs, right sidebar instance list, colored status dots, +/··· dropdowns, exact Dark+ theme 14px |
 | 5E Per-session provider | ✅ Done | Each chat/project independently remembers its own Ollama/Gemini/Groq/Claude selection |
 | 5F Agent Auto-Apply | ✅ Done | Toggle in Settings → LLM, writes patches to disk immediately, Applied badge still shown |
-| 5G Universal file reading | 📋 Next | PDF/DOCX/image attach in chat |
-| 5H Chart rendering | 📋 Planned | Render charts/graphs from agent data output |
-| 5I Math (KaTeX) | 📋 Planned | Math expression rendering in chat |
+| 5G Universal file reading | ✅ Done | PDF (pdf-parse server extraction), DOCX (mammoth), images — all attachable in chat via paperclip |
+| 5H Chart rendering | ✅ Done | ` ```chart ` blocks render as Line/Bar/Pie/Area charts using Recharts, dark VSCode theme |
+| 5I Math rendering (KaTeX) | 🔨 Next | Inline and block math expressions in chat |
 
 ### Setup Gate
 - On first launch with no model and no API key → dedicated setup screen (not welcome screen)
