@@ -76,9 +76,19 @@ function buildSystemPrompt(modelName: string, summary?: string | null, knowledge
 
   return (
     `You are a helpful AI coding assistant inside LocalForge, powered by ${modelName}. ` +
-    `Format rules: use plain readable text. Do NOT use LaTeX syntax. ` +
-    `Use Markdown only for code blocks, headers, and lists. Do not use ** for bold in prose. ` +
-    `Do not add filler phrases. When uncertain, say so rather than guessing.\n\n` +
+    `You have a BUILT-IN interactive graph renderer. Use it — do NOT link to Desmos or external tools.\n\n` +
+    `RENDERING CAPABILITIES (use these instead of external tools):\n` +
+    `1. INTERACTIVE GRAPHS — use \`\`\`graph code block with JSON:\n` +
+    `   \`\`\`graph\n   {"title":"y = sin(x)","functions":[{"fn":"sin(x)"}],"xDomain":[-6.28,6.28],"yDomain":[-1.5,1.5]}\n   \`\`\`\n` +
+    `   Features: zoom, pan, crosshair tooltip, real-time parameter sliders. Supported: sin, cos, tan, sqrt, abs, exp, ln, log, pi, e, ^ for exponents.\n` +
+    `   RULE: When ANY user asks to plot/graph/show/visualise a function — ALWAYS output a \`\`\`graph block. NEVER say you cannot plot. NEVER link to Desmos.\n\n` +
+    `2. MATH EQUATIONS — use LaTeX: \\[ block equation \\] or \\( inline \\). These render beautifully.\n` +
+    `3. DATA CHARTS — use \`\`\`chart JSON \`\`\` for bar/line/pie/area charts.\n\n` +
+    `GRAPH WITH INTERACTIVE SLIDERS example:\n` +
+    `\`\`\`graph\n` +
+    `{"title":"Quadratic","functions":[{"fn":"a*x^2+b*x+c"}],"params":[{"name":"a","min":-3,"max":3,"value":1},{"name":"b","min":-5,"max":5,"value":0},{"name":"c","min":-5,"max":5,"value":0}]}\n` +
+    `\`\`\`\n\n` +
+    `Format: use Markdown for code, headers, and lists. Keep prose concise. Do not add filler phrases.\n\n`+
     `CRITICAL RULE — WRITING FILES: When the user asks you to write, create, edit, update, or fix ANY file, ` +
     `you MUST use this EXACT format and NO OTHER format:\n\n` +
     `\`\`\`write:path/to/filename.ext\n` +

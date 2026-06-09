@@ -1,5 +1,75 @@
 import { useEffect, useRef, useState } from 'react'
 import type KatexType from 'katex'
+import { openUrl } from '@tauri-apps/plugin-opener'
+
+// ── Link with confirmation dialog + copy icon ───────────────────────────────
+export function LinkWithConfirm({ href, children }: { href: string; children?: React.ReactNode }) {
+  const [showConfirm, setShowConfirm] = useState(false)
+  const [copied, setCopied]           = useState(false)
+
+  async function openLink() {
+    try {
+      await openUrl(href)
+    } catch {
+      // Fallback for browser dev mode
+      window.open(href, '_blank', 'noopener,noreferrer')
+    }
+    setShowConfirm(false)
+  }
+
+  function copyLink() {
+    navigator.clipboard.writeText(href).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) })
+  }
+
+  return (
+    <>
+      <span style={{ display:'inline-flex', alignItems:'center', gap:2, verticalAlign:'middle' }}>
+        {/* Clickable link text */}
+        <a onClick={e => { e.preventDefault(); setShowConfirm(true) }} href={href}
+          style={{ color:'var(--accent)', textDecoration:'underline', cursor:'pointer' }}>
+          {children ?? href}
+        </a>
+        {/* Copy icon */}
+        <button onClick={copyLink} title={copied ? 'Copied!' : 'Copy link'}
+          style={{ background:'none', border:'none', cursor:'pointer', color: copied ? '#3dd68c' : 'var(--text-muted)', padding:'0 2px', display:'inline-flex', alignItems:'center', lineHeight:1 }}
+          onMouseEnter={e => { if (!copied) (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)' }}
+          onMouseLeave={e => { if (!copied) (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)' }}>
+          {copied
+            ? <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0z"/></svg>
+            : <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"/><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>
+          }
+        </button>
+      </span>
+
+      {/* Confirmation modal */}
+      {showConfirm && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.65)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }}
+          onClick={() => setShowConfirm(false)}>
+          <div style={{ background:'var(--bg-secondary)', border:'1px solid var(--border)', borderRadius:10, padding:'22px 24px', maxWidth:440, width:'90%', boxShadow:'0 8px 32px rgba(0,0,0,0.6)' }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize:14, fontWeight:600, color:'var(--text-primary)', marginBottom:6 }}>
+              Open link in browser?
+            </div>
+            <div style={{ fontSize:11, color:'var(--text-muted)', marginBottom:8 }}>LocalForge wants to open:</div>
+            <div style={{ fontSize:11, color:'var(--accent)', fontFamily:'monospace', background:'var(--bg-primary)', padding:'7px 10px', borderRadius:5, marginBottom:18, wordBreak:'break-all', lineHeight:1.5 }}>
+              {href}
+            </div>
+            <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+              <button onClick={() => setShowConfirm(false)}
+                style={{ padding:'7px 18px', borderRadius:6, border:'1px solid var(--border)', background:'transparent', color:'var(--text-secondary)', cursor:'pointer', fontSize:12 }}>
+                Cancel
+              </button>
+              <button onClick={openLink}
+                style={{ padding:'7px 18px', borderRadius:6, border:'none', background:'var(--accent)', color:'white', cursor:'pointer', fontSize:12, fontWeight:600 }}>
+                Open
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
 
 // ── KaTeX singleton ───────────────────────────────────────────────────────────
 let katexModule: typeof KatexType | null = null
@@ -235,11 +305,12 @@ export type InlineToken =
   | { t: 'italic';       v: string }
   | { t: 'code';         v: string }
   | { t: 'bold-italic';  v: string }
+  | { t: 'link';         v: string; href: string }
 
 export function parseInline(text: string): InlineToken[] {
   const tokens: InlineToken[] = []
-  // Combined regex: inline math \(...\), $...$, bold-italic, bold, italic, inline code
-  const rx = /\\\(((?:[^\\]|\\[\s\S])+?)\\\)|\$([^$\n]+?)\$|\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|__(.+?)__|_(.+?)_|\*(.+?)\*|`([^`]+)`/g
+  // Combined regex: inline math \(...\), $...$, bold-italic, bold, italic, inline code, markdown links
+  const rx = /\\\(((?:[^\\]|\\[\s\S])+?)\\\)|\$([^$\n]+?)\$|\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|__(.+?)__|_(.+?)_|\*(.+?)\*|`([^`]+)`|\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g
   let last = 0, m: RegExpExecArray | null
   while ((m = rx.exec(text)) !== null) {
     if (m.index > last) tokens.push({ t: 'text', v: text.slice(last, m.index) })
@@ -251,6 +322,7 @@ export function parseInline(text: string): InlineToken[] {
     else if (m[6] !== undefined) tokens.push({ t: 'italic', v: m[6] })       // _
     else if (m[7] !== undefined) tokens.push({ t: 'italic', v: m[7] })       // *
     else if (m[8] !== undefined) tokens.push({ t: 'code', v: m[8] })         // `
+    else if (m[9] !== undefined) tokens.push({ t: 'link', v: m[9], href: m[10] }) // [text](url)
     last = m.index + m[0].length
   }
   if (last < text.length) tokens.push({ t: 'text', v: text.slice(last) })
@@ -267,7 +339,12 @@ export function renderInline(text: string, key?: string | number): React.ReactNo
         if (tok.t === 'italic')      return <em key={i} style={{ color:'var(--text-secondary)' }}>{tok.v}</em>
         if (tok.t === 'bold-italic') return <strong key={i}><em>{tok.v}</em></strong>
         if (tok.t === 'code')        return <code key={i} style={{ background:'var(--bg-primary)', border:'1px solid var(--border)', borderRadius:4, padding:'1px 5px', fontSize:12, fontFamily:'monospace', color:'var(--accent)' }}>{tok.v}</code>
-        return <span key={i}>{tok.v}</span>
+        if (tok.t === 'link')        return <LinkWithConfirm key={i} href={tok.href ?? '#'}>{tok.v}</LinkWithConfirm>
+        // Plain text — detect bare URLs and make them clickable
+        const urlRx = /(https?:\/\/[^\s<>"']+)/g
+        const parts = tok.v.split(urlRx)
+        if (parts.length === 1) return <span key={i}>{tok.v}</span>
+        return <span key={i}>{parts.map((p, j) => urlRx.test(p) ? <LinkWithConfirm key={j} href={p}>{p}</LinkWithConfirm> : p)}</span>
       })}
     </span>
   )

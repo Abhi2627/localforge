@@ -12,7 +12,7 @@ import SettingsModal from './SettingsModal'
 import { FilePatchCard, type FilePatch } from './FilePatchCard'
 import ChartBlock from './ChartBlock'
 import GraphBlock from './GraphBlock'
-import MathBlock, { hasMath, parseContent, renderInline, type Segment } from './MathBlock'
+import MathBlock, { hasMath, parseContent, renderInline, type Segment, LinkWithConfirm } from './MathBlock'
 
 interface ChatPanelProps { onOpenTerminal?: (cwd: string) => void }
 interface AttachedFile { id: string; name: string; path: string; size: number; content: string; isImage: boolean }
@@ -246,7 +246,7 @@ function MarkdownOnly({ content }: { content: string }) {
       em:     ({ children }) => <em style={{ color:'var(--text-secondary)' }}>{children}</em>,
       blockquote: ({ children }) => <blockquote style={{ borderLeft:'3px solid var(--accent)', paddingLeft:12, margin:'6px 0', color:'var(--text-secondary)', fontStyle:'italic' }}>{children}</blockquote>,
       hr:   () => <hr style={{ border:'none', borderTop:'1px solid var(--border)', margin:'10px 0' }}/>,
-      a:    ({ children, href }) => <a href={href} target="_blank" rel="noreferrer" style={{ color:'var(--accent)', textDecoration:'underline' }}>{children}</a>,
+      a:    ({ children, href }) => <LinkWithConfirm href={href ?? '#'}>{children}</LinkWithConfirm>,
       pre:  ({ children }) => <>{children}</>,
       code: ({ children, className }) => {
         const lang    = className?.replace('language-', '') ?? ''
