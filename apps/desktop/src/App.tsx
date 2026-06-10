@@ -10,6 +10,7 @@ import WelcomeScreen from './components/WelcomeScreen'
 import TabStrip from './components/TabStrip'
 import TerminalPanel from './components/TerminalPanel'
 import SetupGate from './components/SetupGate'
+import StatusBar from './components/StatusBar'
 import { getDeletedIds, markDeleted } from './hooks/deletedSessions'
 import './index.css'
 
@@ -195,6 +196,8 @@ export default function App() {
   const rightW   = showRight ? (rightExpanded && winW >= BP_RIGHT_COLLAPSE ? '280px' : '40px') : '0px'
   const cols     = showRight ? `${leftW} 1fr ${rightW}` : `${leftW} 1fr`
   const TERM_H   = 260
+  // Grid rows: topbar | content | [terminal] | statusbar
+  const gridRows = `40px 1fr${terminalOpen ? ` ${TERM_H}px` : ''} 22px`
 
   if (!serverReady && !serverError) {
     return (
@@ -234,7 +237,7 @@ export default function App() {
   }
 
   return (
-    <div style={{ display:'grid', gridTemplateColumns:cols, gridTemplateRows:`40px 1fr${terminalOpen?` ${TERM_H}px`:''}`, height:'100vh', width:'100vw', overflow:'hidden', transition:'grid-template-columns 0.2s ease, grid-template-rows 0.2s ease' }}>
+    <div style={{ display:'grid', gridTemplateColumns:cols, gridTemplateRows:gridRows, height:'100vh', width:'100vw', overflow:'hidden', transition:'grid-template-columns 0.2s ease, grid-template-rows 0.2s ease' }}>
       <div style={{ gridColumn:'1 / -1', minWidth:0 }}><TopBar /></div>
 
       <div style={{ minWidth:0, overflow:'hidden' }}>
@@ -257,6 +260,11 @@ export default function App() {
           <TerminalPanel cwd={terminalCwd} onClose={() => setTerminalOpen(false)}/>
         </div>
       )}
+
+      {/* Status bar — spans full width, always at bottom */}
+      <div style={{ gridColumn:'1 / -1' }}>
+        <StatusBar/>
+      </div>
     </div>
   )
 }
