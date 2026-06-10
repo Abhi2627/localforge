@@ -1,13 +1,4 @@
-/**
- * GitReader.ts
- *
- * Reads git state by shelling out to the system `git` CLI.
- * No npm dependencies. All operations are read-only — nothing mutates the repo.
- */
-
 import { execSync, execFileSync } from 'child_process'
-
-// ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface GitStatus {
   branch:    string
@@ -37,10 +28,10 @@ export interface Commit {
 }
 
 export interface Branch {
-  name:       string
-  isCurrent:  boolean
-  isRemote:   boolean
-  upstream?:  string
+  name:        string
+  isCurrent:   boolean
+  isRemote:    boolean
+  upstream?:   string
   lastCommit?: string
 }
 
@@ -69,15 +60,20 @@ export interface FileDiff {
 function run(cmd: string, cwd: string): string {
   try {
     return execSync(cmd, {
-      cwd,
-      encoding:  'utf8',
-      timeout:   8000,
-      maxBuffer: 1024 * 1024 * 10,
+      cwd, encoding: 'utf8', timeout: 8000, maxBuffer: 1024 * 1024 * 10,
       env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
     }).trim()
-  } catch {
-    return ''
-  }
+  } catch { return '' }
+}
+
+// execFileSync avoids /bin/sh so %(…) git format strings are never mangled
+function runFile(args: string[], cwd: string): string {
+  try {
+    return execFileSync('git', args, {
+      cwd, encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024 * 20,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    }).trim()
+  } catch { return '' }
 }
 
 export function isGitRepo(rootPath: string): boolean {
@@ -97,42 +93,25 @@ function parseStatusChar(char: string): FileChange['status'] {
 }
 
 // ── Status ────────────────────────────────────────────────────────────────────
-// Uses -z (NUL-terminated output) so filenames with spaces are never mangled.
-// Format: XY<space>filename<NUL>  —  renames: XY<space>newname<NUL>oldname<NUL>
 
 export function getStatus(rootPath: string): GitStatus | null {
   if (!isGitRepo(rootPath)) return null
 
-  const staged:    FileChange[] = []
-  const unstaged:  FileChange[] = []
-  const untracked: string[]     = []
-
+  const staged: FileChange[] = [], unstaged: FileChange[] = [], untracked: string[] = []
   const raw = run('git status --porcelain=v1 -u -z', rootPath)
   if (!raw) return buildCleanStatus(rootPath)
 
-  // Split on NUL — each token is one porcelain entry
   const entries = raw.split('\0').filter(Boolean)
   let i = 0
   while (i < entries.length) {
     const entry = entries[i]
     if (entry.length < 3) { i++; continue }
-
-    const X    = entry[0]   // index (staged) status char
-    const Y    = entry[1]   // worktree (unstaged) status char
-    const file = entry.slice(3)  // col 0-1 = XY, col 2 = space, col 3+ = filename
-
-    if (X === '?' && Y === '?') {
-      untracked.push(file)
-      i++; continue
-    }
-
+    const X = entry[0], Y = entry[1], file = entry.slice(3)
+    if (X === '?' && Y === '?') { untracked.push(file); i++; continue }
     if ((X === 'R' || X === 'C') && i + 1 < entries.length) {
-      // Rename/copy: next NUL-token is the original filename
-      const oldFile = entries[i + 1]
-      staged.push({ status: parseStatusChar(X), file, oldFile })
+      staged.push({ status: parseStatusChar(X), file, oldFile: entries[i + 1] })
       i += 2; continue
     }
-
     if (X !== ' ' && X !== '?') staged.push({ status: parseStatusChar(X), file })
     if (Y !== ' ' && Y !== '?') unstaged.push({ status: parseStatusChar(Y), file })
     i++
@@ -146,8 +125,7 @@ export function getStatus(rootPath: string): GitStatus | null {
     upstream = tracking
     const ab = run(`git rev-list --left-right --count HEAD...${tracking}`, rootPath)
     const [a, b] = ab.split('\t').map(Number)
-    ahead  = isNaN(a) ? 0 : a
-    behind = isNaN(b) ? 0 : b
+    ahead = isNaN(a) ? 0 : a; behind = isNaN(b) ? 0 : b
   }
 
   return { branch, upstream, ahead, behind, staged, unstaged, untracked,
@@ -160,80 +138,61 @@ function buildCleanStatus(rootPath: string): GitStatus {
 }
 
 // ── Log ───────────────────────────────────────────────────────────────────────
-// Uses ASCII unit-separator (0x1f) and record-separator (0x1e) instead of NUL bytes.
-// NUL bytes in the format string cause Node's execSync to throw — that's why log
-// was always returning [].
 
 export function getLog(rootPath: string, limit = 50, branch = ''): Commit[] {
   if (!isGitRepo(rootPath)) return []
-
-  // 0x1f = ASCII Unit Separator, 0x1e = ASCII Record Separator
-  // These never appear in commit metadata and are safe to pass through the shell.
-  const FS  = '\x1f'
-  const RS  = '\x1e'
+  const FS = '\x1f', RS = '\x1e'
   const fmt = `%h${FS}%H${FS}%an${FS}%ae${FS}%aI${FS}%D${FS}%s`
-  const ref = branch || ''
-  const raw = run(`git log --format="${fmt}${RS}" -n ${limit} ${ref}`, rootPath)
+  const raw = run(`git log --format="${fmt}${RS}" -n ${limit} ${branch || ''}`, rootPath)
   if (!raw) return []
 
-  return raw
-    .split(RS)
-    .filter(Boolean)
-    .map(entry => {
-      const parts   = entry.trim().split(FS)
-      const hash    = parts[0]?.trim() ?? ''
-      if (!hash) return null
-      return {
-        hash,
-        fullHash: parts[1]?.trim() ?? '',
-        author:   parts[2]?.trim() ?? '',
-        email:    parts[3]?.trim() ?? '',
-        date:     parts[4]?.trim() ?? '',
-        message:  parts[6]?.trim() ?? '',
-        refs:     parts[5] ? parts[5].split(', ').map(r => r.trim()).filter(Boolean) : [],
-      } satisfies Commit
-    })
-    .filter((c): c is Commit => c !== null && c.hash.length > 0)
+  return raw.split(RS).filter(Boolean).map(entry => {
+    const parts = entry.trim().split(FS)
+    const hash  = parts[0]?.trim() ?? ''
+    if (!hash) return null
+    return {
+      hash, fullHash: parts[1]?.trim() ?? '', author: parts[2]?.trim() ?? '',
+      email: parts[3]?.trim() ?? '', date: parts[4]?.trim() ?? '',
+      message: parts[6]?.trim() ?? '',
+      refs: parts[5] ? parts[5].split(', ').map(r => r.trim()).filter(Boolean) : [],
+    } satisfies Commit
+  }).filter((c): c is Commit => c !== null && c.hash.length > 0)
 }
 
-// ── Branches ──────────────────────────────────────────────────────────────────
+// ── Branches ─────────────────────────────────────────────────────────────────
+// Use runFile (execFileSync) for format strings — avoids /bin/sh mangling %(...) 
 
 export function getBranches(rootPath: string): Branch[] {
   if (!isGitRepo(rootPath)) return []
   const branches: Branch[] = []
 
-  const localRaw = run('git branch -vv --format=%(refname:short)|%(objectname:short)|%(upstream:short)|%(HEAD)', rootPath)
+  const localRaw = runFile(
+    ['branch', '-vv', '--format=%(refname:short)|%(objectname:short)|%(upstream:short)|%(HEAD)'],
+    rootPath
+  )
   for (const line of localRaw.split('\n').filter(Boolean)) {
     const [name, lastCommit, upstream, head] = line.split('|')
     if (!name) continue
-    branches.push({ name: name.trim(), isCurrent: head === '*', isRemote: false, upstream: upstream || undefined, lastCommit: lastCommit || undefined })
+    branches.push({
+      name: name.trim(), isCurrent: head?.trim() === '*', isRemote: false,
+      upstream: upstream?.trim() || undefined, lastCommit: lastCommit?.trim() || undefined,
+    })
   }
 
-  const remoteRaw = run('git branch -r --format=%(refname:short)|%(objectname:short)', rootPath)
+  const remoteRaw = runFile(
+    ['branch', '-r', '--format=%(refname:short)|%(objectname:short)'],
+    rootPath
+  )
   for (const line of remoteRaw.split('\n').filter(Boolean)) {
     const [name, lastCommit] = line.split('|')
     if (!name || name.includes('->')) continue
-    branches.push({ name: name.trim(), isCurrent: false, isRemote: true, lastCommit })
+    branches.push({ name: name.trim(), isCurrent: false, isRemote: true, lastCommit: lastCommit?.trim() })
   }
 
   return branches
 }
 
 // ── Diff ──────────────────────────────────────────────────────────────────────
-
-function runFile(args: string[], cwd: string): string {
-  try {
-    return execFileSync('git', args, {
-      cwd,
-      encoding:  'utf8',
-      timeout:   10000,
-      maxBuffer: 1024 * 1024 * 20,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-    }).trim()
-  } catch {
-    return ''
-  }
-}
 
 export function getDiff(rootPath: string, file?: string, staged = false): FileDiff[] {
   if (!isGitRepo(rootPath)) return []
@@ -243,13 +202,11 @@ export function getDiff(rootPath: string, file?: string, staged = false): FileDi
   return parseDiff(runFile(args, rootPath))
 }
 
-// getDiffAll: shows all changes vs HEAD (staged + unstaged combined) — like VSCode default diff view
 export function getDiffAll(rootPath: string, file?: string): FileDiff[] {
   if (!isGitRepo(rootPath)) return []
   const args = ['diff', 'HEAD', '--unified=3']
   if (file) args.push('--', file)
   const result = parseDiff(runFile(args, rootPath))
-  // If HEAD diff is empty (e.g. new repo with no commits), fall back to staged diff
   if (result.length === 0) return getDiff(rootPath, file, false)
   return result
 }
@@ -269,9 +226,7 @@ export function getCommitDiff(rootPath: string, hash: string): FileDiff[] {
 function parseDiff(raw: string): FileDiff[] {
   if (!raw) return []
   const files: FileDiff[] = []
-  let cur: FileDiff | null = null
-  let hunk: DiffHunk | null = null
-  let ol = 0, nl = 0
+  let cur: FileDiff | null = null, hunk: DiffHunk | null = null, ol = 0, nl = 0
 
   for (const line of raw.split('\n')) {
     if (line.startsWith('diff --git ')) {
@@ -281,17 +236,16 @@ function parseDiff(raw: string): FileDiff[] {
       hunk = null; continue
     }
     if (!cur) continue
-    if (line.startsWith('Binary files'))     { cur.isBinary = true; continue }
-    if (line.startsWith('--- a/'))           { cur.oldFile  = line.slice(6); continue }
-    if (line.startsWith('+++ b/'))           { cur.file     = line.slice(6); continue }
-    if (line.startsWith('new file'))         { cur.status   = 'added'; continue }
-    if (line.startsWith('deleted file'))     { cur.status   = 'deleted'; continue }
-    if (line.startsWith('rename from'))      { cur.status   = 'renamed'; continue }
+    if (line.startsWith('Binary files'))  { cur.isBinary = true; continue }
+    if (line.startsWith('--- a/'))        { cur.oldFile  = line.slice(6); continue }
+    if (line.startsWith('+++ b/'))        { cur.file     = line.slice(6); continue }
+    if (line.startsWith('new file'))      { cur.status   = 'added'; continue }
+    if (line.startsWith('deleted file'))  { cur.status   = 'deleted'; continue }
+    if (line.startsWith('rename from'))   { cur.status   = 'renamed'; continue }
     if (line.startsWith('@@')) {
       const m = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/)
       if (m) { ol = parseInt(m[1]); nl = parseInt(m[2]) }
-      hunk = { header: line, lines: [] }
-      cur.hunks.push(hunk); continue
+      hunk = { header: line, lines: [] }; cur.hunks.push(hunk); continue
     }
     if (!hunk) continue
     if      (line.startsWith('+')) hunk.lines.push({ type: 'added',   content: line.slice(1), newLine: nl++ })

@@ -68,6 +68,7 @@ function SessionItem({ session }: { session: any }) {
   return (
     <div style={{ position:'relative', opacity: deleting ? 0.4 : 1, transition: 'opacity 0.2s' }}>
       <div onClick={() => setActiveSession(session.id)}
+        onDoubleClick={() => { setRenaming(true); setShowMenu(false) }}
         style={{ display:'flex', alignItems:'center', gap:6, padding:'6px 8px 6px 20px', borderRadius:6, background:isActive?'var(--accent-dim)':'transparent', color:isActive?'var(--accent)':'var(--text-secondary)', cursor:'pointer', fontSize:13, borderLeft:isActive?'2px solid var(--accent)':'2px solid transparent', transition:'background 0.15s' }}
         onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background='var(--bg-hover)' }}
         onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background='transparent' }}

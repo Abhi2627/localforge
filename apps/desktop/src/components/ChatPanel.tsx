@@ -1,4 +1,4 @@
-import { useRef, useEffect, KeyboardEvent, useState, useCallback, useMemo } from 'react'
+import React, { useRef, useEffect, KeyboardEvent, useState, useCallback, useMemo } from 'react'
 import { Send, Bot, Paperclip, Mic, Loader, Copy, Pencil, RefreshCw, Check, X, Terminal, ChevronDown, ArrowDown, FileText, Image, File, Download } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -71,7 +71,10 @@ function makePatchId(filePath: string, content: string): string {
 
 function extractPatches(content: string, rootPath?: string, userPrompt?: string): { patches: FilePatch[]; cleanContent: string } {
   const patches: FilePatch[] = []
-  const primary = content.replace(/```write:([^\n]+)\n([\s\S]*?)```/g, (_m, fp: string, fc: string) => {
+  // Regex that handles nested backtick blocks inside write: content
+  // Matches ```write:path\n...``` where the closing ``` must be at the start of a line
+  const writeRx = /```write:([^\n]+)\n((?:(?!```).|\n)*?)\n?```(?=\n|$)/g
+  const primary = content.replace(writeRx, (_m, fp: string, fc: string) => {
     const path    = fp.trim()
     const fcClean = fc.trimEnd()
     patches.push({ id: makePatchId(path, fcClean), path, content: fcClean, rootPath })
@@ -169,14 +172,14 @@ function CodeBlock({ content, lang }: { content: string; lang: string }) {
   )
 }
 
-function MarkdownContent({ content }: { content: string }) {
+// Memoized to prevent re-parsing on every stream chunk
+const MarkdownContent = React.memo(function MarkdownContent({ content }: { content: string }) {
   if (!hasMath(content)) return <MarkdownOnly content={content}/>
-  // Use custom parser for math-containing content
   return <MathAwareContent content={content}/>
-}
+})
 
-// ── MathAwareContent: full custom renderer for math-containing responses ──────
-function MathAwareContent({ content }: { content: string }) {
+// MathAwareContent is also memoized — parseContent is expensive for long responses
+const MathAwareContent = React.memo(function MathAwareContent({ content }: { content: string }) {
   const segments: Segment[] = parseContent(content)
   return (
     <div style={{ lineHeight:1.7 }}>
@@ -230,7 +233,7 @@ function MathAwareContent({ content }: { content: string }) {
       })}
     </div>
   )
-}
+})
 
 function MarkdownOnly({ content }: { content: string }) {
   return (
@@ -338,15 +341,19 @@ function AgentBubble({ msg, onReload, rootPath, userPrompt, autoApply }: { msg: 
   }, [autoApply, msg.type, patches.length]) // eslint-disable-line
 
   async function handleApply(patch: FilePatch) {
-    if (appliedIds.has(patch.id)) return   // already applied — guard
+    if (appliedIds.has(patch.id)) return
     const fullPath = patch.path.startsWith('/') ? patch.path
       : rootPath ? `${rootPath}/${patch.path}` : patch.path
+    console.log('[Apply] patch.path:', patch.path, '| rootPath:', rootPath, '| fullPath:', fullPath)
     const res = await fetch('http://localhost:3001/project/file', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: fullPath, content: patch.content }),
     })
-    if (!res.ok) throw new Error(`Write failed: ${res.status}`)
-    // Persist to localStorage so reload shows Applied state
+    console.log('[Apply] server response:', res.status, res.ok)
+    if (!res.ok) {
+      const errText = await res.text().catch(() => 'unknown error')
+      throw new Error(`Server ${res.status}: ${errText}`)
+    }
     const all = loadApplied()
     all.add(patch.id)
     saveApplied(all)

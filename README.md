@@ -64,13 +64,13 @@ cd apps/desktop && npm run dev
 | Feature | Detail |
 |---|---|
 | File attach in chat | Paperclip → inject .ts/.py/.md/.json etc into context |
-| Agent file write + apply | `write:path` syntax, Apply/Reject cards, deterministic patch IDs |
+| Agent file write + apply | `write:path` syntax, Apply/Reject cards, deterministic patch IDs, nested backtick fix |
 | Ollama model management | List, pull, delete models; system RAM bar, CPU info, Ollama status |
 | Right sidebar | Knowledge Graph, Project Graph, Agents, API Contracts modals |
 | Export chat | Save as .txt via Tauri dialog |
 | Settings | Local / Cloud / LLM / Display tabs |
 | Rate limit classifier | Provider-specific actionable messages for 429/quota/auth/OOM errors |
-| VSCode-style diff editor | Full file side-by-side, inline char-level highlighting, combined minimap |
+| VSCode-style diff editor | Full file side-by-side, inline char-level highlighting, syntax highlighted, combined minimap |
 | Git history drill-down | Commits grouped by day → files → diff in editor |
 | File editor minimap | Actual text rendered at 1.7px with syntax colors |
 | Breakpoint gutter | Hover/click, persistent red dot, count badge |
@@ -79,15 +79,28 @@ cd apps/desktop && npm run dev
 
 | Feature | Status | Detail |
 |---|---|---|
-| 5A Auto-save | ✅ Done | 800ms debounce, cloud icon status (Saved/Unsaved/Saving), no Save button |
-| 5B Find in Files | ✅ Done | Cmd+Shift+F, debounced server-side grep, case/whole-word, file filters, match highlights |
-| 5C File breadcrumb | ✅ Done | Full path `apps › desktop › src › components › File.tsx` in editor header |
-| 5D VSCode terminal | ✅ Done | PROBLEMS/OUTPUT/DEBUG/TERMINAL/PORTS tabs, right sidebar instance list, status dots, dropdowns |
-| 5E Per-session provider | ✅ Done | Each chat independently remembers its own Ollama/Gemini/Groq/Claude selection |
-| 5F Agent Auto-Apply | ✅ Done | Toggle in Settings → LLM, writes patches to disk immediately, Applied badge still shown |
-| 5G Universal file reading | ✅ Done | PDF (pdf-parse), DOCX (mammoth), images — attachable in chat via paperclip |
-| 5H Chart rendering | ✅ Done | ` ```chart ` blocks render as Line/Bar/Pie/Area charts (Recharts, dark VSCode theme) |
-| 5I Math rendering | ✅ Done | KaTeX — `\[...\]` block, `\(...\)` inline, `$$...$$`, ` ```math ` all supported |
+| 5A Auto-save | ✅ | 800ms debounce, cloud icon status, no Save button |
+| 5B Find in Files | ✅ | Cmd+Shift+F, server-side grep, case/whole-word, file filters, match highlights |
+| 5C File breadcrumb | ✅ | Full path in editor header |
+| 5D VSCode terminal | ✅ | PROBLEMS/OUTPUT/DEBUG/TERMINAL/PORTS tabs, right sidebar instance list, status dots |
+| 5E Per-session provider | ✅ | Each chat independently remembers its own Ollama/Gemini/Groq/Claude |
+| 5F Agent Auto-Apply | ✅ | Toggle in Settings → LLM, writes patches immediately |
+| 5G Universal file reading | ✅ | PDF (pdf-parse), DOCX (mammoth), images — all attachable in chat |
+| 5H Chart rendering | ✅ | ` ```chart ` blocks → Line/Bar/Pie/Area via Recharts |
+| 5I Math rendering | ✅ | KaTeX — `\[...\]` block, `\(...\)` inline, `$`, ` ```math ` |
+
+### Phase 6 — Multi-agent test
+
+| Finding | Result |
+|---|---|
+| Agent writes files to disk via `write:path` | ✅ Works |
+| `src/` subdirectory auto-created on write | ✅ Fixed |
+| Apply button + error feedback | ✅ Fixed |
+| Reject shows badge + Undo | ✅ Fixed |
+| Nested backtick regex in write: blocks | ✅ Fixed |
+| Orchestrator project ID mismatch | ✅ Fixed |
+| Git branch `%(...)` syntax error in /bin/sh | ✅ Fixed |
+| AgentSession routes to cloud providers | ✅ Added |
 
 ### Setup Gate (First Launch)
 - Blocks entry when no model and no API key configured
@@ -142,9 +155,18 @@ cd apps/desktop && npm run dev
 - **LLM tab**: temperature, max tokens, context length, system prompt, **Auto-Apply toggle**
 - **Display tab**: font size slider
 
----
+### Additional improvements (Phase 5/6 cycle)
+- **VSCode status bar** — branch, errors/warnings, MCP status, active model, live cursor Ln/Col, encoding, language
+- **Double-click to rename** sessions in left sidebar
+- **Streaming performance** — `MarkdownContent` and `MathAwareContent` are `React.memo` — no re-parsing on every chunk
+- **Clickable links** — confirmation dialog before opening in default browser, copy icon beside each link
+- **Code blocks** — language label + Copy button
+- **Interactive graph renderer** — ` ```graph ` Canvas-based plotter, zoom/pan, crosshair tooltip, real-time parameter sliders
+- **SetupGate** — blocks entry until at least one model or API key is configured
+- **Cmd+F in-file search** — find bar with no keystroke leaks, all matches highlighted
+- **Diff auto-refresh** — clears every 3s after git push; syntax-highlighted diff columns
 
-## Multi-Agent System (Built, Pending Full Test)
+---
 
 The multi-agent orchestration pipeline is implemented but not yet fully tested end-to-end. Full testing is planned when the application is feature-complete — target test: ask the app to build an entire application (video meet app, full-stack website) from scratch using multiple agents in parallel, completely offline.
 

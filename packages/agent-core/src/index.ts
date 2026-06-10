@@ -542,7 +542,14 @@ async function bootstrap() {
   server.post<{ Body: { sessionId: string; rootPath: string } }>('/project/open', async (req) => {
     const { sessionId, rootPath } = req.body; if (!rootPath) return { success: false, message: 'rootPath required' }
     await connectMCP(rootPath)
-    mcpConnected.add(rootPath)   // mark as connected so /mcp/status reflects it
+    mcpConnected.add(rootPath)
+    // Create or re-use an orchestrator project with the SAME id as the session
+    // so AgentModal can pass session.id as projectId directly
+    try {
+      orchestrator.getProject(sessionId)
+    } catch {
+      await orchestrator.createProject({ id: sessionId, name: rootPath.split('/').pop() ?? sessionId, rootPath })
+    }
     const scan = scanProjectFiles(rootPath)
     setImmediate(() => { scanProject(sessionId, rootPath); try { runEnforcer(sessionId, rootPath) } catch { } broadcast({ type: 'knowledge_ready', sessionId }) })
     generateProjectSummary(sessionId, rootPath, scan).then(summary => broadcast({ type: 'project_summary', sessionId, summary }))
@@ -556,7 +563,12 @@ async function bootstrap() {
   })
   server.post<{ Body: { path: string; content: string } }>('/project/file', async (req, reply) => {
     const { path: p, content } = req.body; if (!p) { reply.status(400).send({ error: 'path required' }); return }
-    try { fs.writeFileSync(p, content ?? '', 'utf8'); return { success: true } } catch (e: any) { reply.status(500).send({ error: e.message }) }
+    try {
+      // Ensure parent directory exists before writing
+      const dir = path.dirname(p)
+      if (dir && dir !== '.') fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(p, content ?? '', 'utf8'); return { success: true }
+    } catch (e: any) { reply.status(500).send({ error: e.message }) }
   })
 
   // ── Knowledge Graph ────────────────────────────────────────────────────────

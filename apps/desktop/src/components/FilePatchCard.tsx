@@ -47,8 +47,10 @@ export function FilePatchCard({ patch, alreadyApplied = false, onApply, onReject
     try {
       await onApply(patch)
       setApplied(true)
-      // Notify the file tree to show the new/updated file immediately
       window.dispatchEvent(new CustomEvent('localforge:file-applied', { detail: patch.path }))
+    } catch (err: any) {
+      // Show error inline so user knows why Apply failed
+      alert(`Apply failed for ${patch.path}:\n${err?.message ?? err}`)
     } finally {
       setApplying(false)
     }
@@ -56,10 +58,24 @@ export function FilePatchCard({ patch, alreadyApplied = false, onApply, onReject
 
   function handleReject() {
     setRejected(true)
-    setTimeout(() => onReject(patch.id), 300)
+    // Don't remove — show a rejected badge so user can see what was declined
+    // setTimeout(() => onReject(patch.id), 300)  // removed: was hiding the card
+    onReject(patch.id)  // still notify parent but card stays visible with badge
   }
 
-  if (rejected) return null
+  if (rejected) return (
+    <div style={{ border:'1px solid rgba(239,68,68,0.25)', borderRadius:8, background:'rgba(239,68,68,0.05)', padding:'7px 12px', margin:'4px 0', display:'flex', alignItems:'center', gap:8 }}>
+      <FileText size={12} style={{ color:'var(--red)', flexShrink:0 }}/>
+      <span style={{ fontSize:12, color:'var(--text-muted)', flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{patch.path}</span>
+      <button onClick={() => setRejected(false)}
+        style={{ fontSize:11, color:'var(--text-muted)', background:'transparent', border:'1px solid var(--border)', borderRadius:4, padding:'2px 8px', cursor:'pointer' }}
+        onMouseEnter={e => (e.currentTarget as HTMLElement).style.color='var(--accent)'}
+        onMouseLeave={e => (e.currentTarget as HTMLElement).style.color='var(--text-muted)'}>
+        Undo
+      </button>
+      <span style={{ fontSize:11, color:'var(--red)', fontWeight:600 }}>Rejected</span>
+    </div>
+  )
 
   const isNew = existing === ''
   const lineCount = lines.length

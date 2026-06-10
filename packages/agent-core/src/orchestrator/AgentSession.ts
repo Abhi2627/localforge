@@ -2,10 +2,47 @@ import { randomUUID } from 'crypto'
 import { getDb } from '../persistence/Database.js'
 import { createTask, markTaskRunning, markTaskDone, markTaskFailed } from '../persistence/TaskLog.js'
 import { saveFileSnapshot } from '../persistence/Checkpointer.js'
-import { chat, type ChatMessage } from '../ollama/OllamaClient.js'
 import { loadConfig } from '../ollama/ModelManager.js'
-import { writeFile, readFile, createDirectory, getProjectTree } from '../mcp/MCPClient.js'
+import { loadSettings } from '../settings/SettingsStore.js'
+import { chat as ollamaChat, type ChatMessage } from '../ollama/OllamaClient.js'
+import { cloudChat, type CloudProvider } from '../cloud/CloudClient.js'
+import { writeFile, createDirectory, getProjectTree } from '../mcp/MCPClient.js'
 import path from 'path'
+
+// Route to Ollama or cloud depending on settings
+async function agentChat(
+  messages: ChatMessage[],
+  onChunk?: (chunk: string) => void
+): Promise<string> {
+  const settings = loadSettings()
+  const provider = settings.activeProvider
+
+  if (provider === 'ollama') {
+    const { selectedModel } = loadConfig()
+    if (!selectedModel) throw new Error('No Ollama model selected')
+    return ollamaChat(selectedModel, messages, onChunk ? c => onChunk(c.content) : undefined)
+  }
+
+  const model  = settings.cloudModels[provider as CloudProvider] ?? ''
+  const keys   = settings.apiKeys
+  let apiKey   = ''
+  let baseUrl: string | undefined
+  if (provider === 'openai') apiKey = keys.openai  ?? ''
+  if (provider === 'gemini') apiKey = keys.gemini  ?? ''
+  if (provider === 'claude') apiKey = keys.claude  ?? ''
+  if (provider === 'groq')   apiKey = keys.groq    ?? ''
+  if (provider === 'custom') { apiKey = keys.customKey ?? ''; baseUrl = keys.customUrl }
+  if (!apiKey) throw new Error(`No API key for ${provider}`)
+
+  const { cloudChat: cc } = { cloudChat }
+  const result = await cc(
+    { provider: provider as CloudProvider, apiKey, model, baseUrl },
+    messages as any,
+    onChunk ? (c: any) => onChunk(c.content) : undefined,
+    { temperature: settings.llmDefaults.temperature, maxTokens: settings.llmDefaults.maxTokens }
+  )
+  return result
+}
 
 export type AgentRole = 'frontend' | 'backend' | 'fullstack' | 'test' | 'review'
 
@@ -88,7 +125,9 @@ export class AgentSession {
   }
 
   async executeInstruction(instruction: string): Promise<void> {
-    const { selectedModel } = loadConfig()
+    const task = createTask(this.config.projectId, this.id, 'write_code', instruction)
+    markTaskRunning(task.id, this.config.projectId, this.id)
+    this.emit({ type: 'status', message: `Working on: ${instruction.slice(0, 80)}…`, taskId: task.id })
 
     const messages: ChatMessage[] = [
       { role: 'system', content: ROLE_PROMPTS[this.config.role] },
@@ -96,23 +135,15 @@ export class AgentSession {
       { role: 'user', content: instruction }
     ]
 
-    const task = createTask(this.config.projectId, this.id, 'write_code', instruction)
-    markTaskRunning(task.id, this.config.projectId, this.id)
-    this.emit({ type: 'status', message: `Working on: ${instruction.slice(0, 80)}…`, taskId: task.id })
-
     try {
       let fullResponse = ''
-
-      await chat(selectedModel, messages, (chunk) => {
-        fullResponse += chunk.content
-        this.emit({ type: 'stream_chunk', message: chunk.content, taskId: task.id })
+      await agentChat(messages, (chunk) => {
+        fullResponse += chunk
+        this.emit({ type: 'stream_chunk', message: chunk, taskId: task.id })
       })
-
       await this.processResponse(fullResponse, task.id)
-
       this.conversationHistory.push({ role: 'user', content: instruction })
       this.conversationHistory.push({ role: 'assistant', content: fullResponse })
-
       markTaskDone(task.id, this.config.projectId, this.id, fullResponse)
       this.emit({ type: 'task_done', message: 'Task completed', taskId: task.id })
     } catch (err) {
