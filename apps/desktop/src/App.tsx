@@ -23,13 +23,13 @@ function safeTs(val: any): number {
   return isNaN(t) ? Date.now() : t
 }
 
-async function waitForServer(maxAttempts = 20): Promise<boolean> {
+async function waitForServer(maxAttempts = 30): Promise<boolean> {
   for (let i = 0; i < maxAttempts; i++) {
     try {
-      const res = await fetch('http://localhost:3001/health', { signal: AbortSignal.timeout(1500) })
+      const res = await fetch('http://localhost:3001/health', { signal: AbortSignal.timeout(2000) })
       if (res.ok) return true
     } catch { }
-    await new Promise(r => setTimeout(r, 800))
+    await new Promise(r => setTimeout(r, 1000))
   }
   return false
 }
@@ -202,14 +202,22 @@ export default function App() {
   if (!serverReady && !serverError) {
     return (
       <div style={{ height:'100vh', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', background:'var(--bg-primary)', gap:16 }}>
-        <div style={{ fontSize:24, fontWeight:700, color:'var(--text-primary)' }}>LocalForge</div>
-        <div style={{ display:'flex', alignItems:'center', gap:10, color:'var(--text-muted)', fontSize:13 }}>
+        <div style={{ fontSize:32, fontWeight:800, color:'var(--text-primary)', letterSpacing:'-0.5px' }}>LocalForge</div>
+        <div style={{ display:'flex', alignItems:'center', gap:10, color:'var(--text-secondary)', fontSize:13 }}>
           <div style={{ width:16, height:16, border:'2px solid var(--accent)', borderTopColor:'transparent', borderRadius:'50%', animation:'spin 0.8s linear infinite' }}/>
-          Starting agent server…
+          Connecting to agent server…
         </div>
-        <div style={{ fontSize:11, color:'var(--text-muted)', opacity:0.6 }}>
-          Make sure <code style={{ fontFamily:'monospace', color:'var(--accent)' }}>npm run dev</code> is running in packages/agent-core
+        <div style={{ fontSize:12, color:'var(--text-muted)', textAlign:'center', lineHeight:1.8, maxWidth:400, background:'var(--bg-secondary)', border:'1px solid var(--border)', borderRadius:10, padding:'14px 20px' }}>
+          <div style={{ marginBottom:8, color:'var(--text-secondary)', fontWeight:500 }}>Server not detected yet</div>
+          Run this in a terminal:<br/>
+          <code style={{ fontFamily:'monospace', color:'var(--accent)', fontSize:11, background:'var(--bg-primary)', padding:'4px 10px', borderRadius:5, display:'inline-block', marginTop:6 }}>cd packages/agent-core && npm run dev</code>
         </div>
+        <button onClick={() => { loadedRef.current=false; setServerError(false); setServerReady(false) }}
+          style={{ padding:'7px 20px', background:'transparent', border:'1px solid var(--border)', borderRadius:8, color:'var(--text-secondary)', fontSize:12, cursor:'pointer' }}
+          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor='var(--accent)'; (e.currentTarget as HTMLElement).style.color='var(--accent)' }}
+          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor='var(--border)'; (e.currentTarget as HTMLElement).style.color='var(--text-secondary)' }}>
+          Retry connection
+        </button>
         <style>{`@keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }`}</style>
       </div>
     )
