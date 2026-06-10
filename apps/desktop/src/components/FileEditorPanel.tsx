@@ -187,6 +187,25 @@ export default function FileEditorPanel({ filePath, rootPath, onSaveSuccess }: P
   const PAD_TOP = 10
   const ext     = filePath.split('.').pop()?.toLowerCase() ?? ''
 
+  // Language map for status bar
+  const LANG_MAP: Record<string, string> = {
+    ts:'TypeScript', tsx:'TypeScript React', js:'JavaScript', jsx:'JavaScript React',
+    py:'Python', rs:'Rust', go:'Go', java:'Java', kt:'Kotlin', swift:'Swift',
+    c:'C', cpp:'C++', cs:'C#', php:'PHP', html:'HTML', css:'CSS', scss:'SCSS',
+    json:'JSON', yaml:'YAML', yml:'YAML', toml:'TOML', md:'Markdown',
+    sh:'Shell', bash:'Bash', sql:'SQL', graphql:'GraphQL',
+  }
+  const language = LANG_MAP[ext] ?? (ext ? ext.toUpperCase() : 'Plain Text')
+
+  // Dispatch cursor position to StatusBar via custom event
+  function dispatchCursor(ta: HTMLTextAreaElement) {
+    const before = ta.value.slice(0, ta.selectionStart)
+    const lines  = before.split('\n')
+    const line   = lines.length
+    const col    = (lines[lines.length - 1]?.length ?? 0) + 1
+    window.dispatchEvent(new CustomEvent('localforge:cursor', { detail: { line, col, language } }))
+  }
+
   const resolvedPath = (() => {
     if (!filePath) return ''
     if (filePath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(filePath)) return filePath
@@ -429,6 +448,8 @@ export default function FileEditorPanel({ filePath, rootPath, onSaveSuccess }: P
             onChange={e => { if (!findOpen) handleChange(e.target.value) }}
             onScroll={syncScroll}
             onKeyDown={e => { if (findOpen) { e.preventDefault(); return } handleKeyDown(e) }}
+            onKeyUp={e => dispatchCursor(e.currentTarget)}
+            onClick={e => dispatchCursor(e.currentTarget)}
             readOnly={findOpen}
             tabIndex={findOpen ? -1 : 0}
             spellCheck={false} autoCorrect="off" autoCapitalize="off"

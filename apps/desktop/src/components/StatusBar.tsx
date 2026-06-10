@@ -3,12 +3,9 @@ import { useAppStore } from '../store/appStore'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface StatusBarProps {
-  cursorLine?:    number
-  cursorCol?:     number
-  language?:      string
-  encoding?:      string
-  lineEnding?:    string
-  indentSize?:    number
+  encoding?:   string
+  lineEnding?: string
+  indentSize?: number
 }
 
 // ── Git branch hook ───────────────────────────────────────────────────────────
@@ -92,12 +89,9 @@ function Item({ children, title, onClick, accent }: {
 
 // ── Main component ────────────────────────────────────────────────────────────
 export default function StatusBar({
-  cursorLine   = 1,
-  cursorCol    = 1,
-  language,
-  encoding     = 'UTF-8',
-  lineEnding   = 'LF',
-  indentSize   = 2,
+  encoding  = 'UTF-8',
+  lineEnding = 'LF',
+  indentSize = 2,
 }: StatusBarProps) {
   const { sessions, activeSessionId, selectedModel } = useAppStore()
   const session  = sessions.find(s => s.id === activeSessionId)
@@ -107,6 +101,19 @@ export default function StatusBar({
   const { errors, warnings }             = useDiagnostics(rootPath)
 
   const [mcpConnected, setMcpConnected] = useState(false)
+  const [cursorLine,    setCursorLine]   = useState(1)
+  const [cursorCol,     setCursorCol]    = useState(1)
+  const [activeLang,    setActiveLang]   = useState<string | undefined>(undefined)
+
+  useEffect(() => {
+    function onCursor(e: CustomEvent) {
+      setCursorLine(e.detail?.line ?? 1)
+      setCursorCol(e.detail?.col  ?? 1)
+      setActiveLang(e.detail?.language)
+    }
+    window.addEventListener('localforge:cursor', onCursor as EventListener)
+    return () => window.removeEventListener('localforge:cursor', onCursor as EventListener)
+  }, [])
   useEffect(() => {
     function onMcp(e: CustomEvent) { setMcpConnected(e.detail?.connected ?? false) }
     window.addEventListener('localforge:mcp-status', onMcp as EventListener)
@@ -224,11 +231,11 @@ export default function StatusBar({
         </Item>
 
         {/* Language mode */}
-        {language && (
+        {activeLang && (
           <>
             <Sep/>
-            <Item title={`Language mode: ${language}`}>
-              {language}
+            <Item title={`Language mode: ${activeLang}`}>
+              {activeLang}
             </Item>
           </>
         )}
