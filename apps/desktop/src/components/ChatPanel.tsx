@@ -3,7 +3,7 @@ import { Send, Bot, Paperclip, Mic, Loader, Copy, Pencil, RefreshCw, Check, X, T
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { open, save } from '@tauri-apps/plugin-dialog'
-import { useAppStore, type Message, type AgentRole } from '../store/appStore'
+import { useAppStore, type AudienceMode, type Message, type AgentRole } from '../store/appStore'
 import { api } from '../hooks/useApi'
 import { nanoid } from '../hooks/nanoid'
 import FileEditorPanel from './FileEditorPanel'
@@ -581,7 +581,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
     openFiles, activeFile, setActiveFile, closeFile,
     sendingSessionId, streamingSessionId,
     setSendingSession, setStreamingSession,
-    isOnline, setSessionProvider, setSessionEffort,
+    isOnline, setSessionProvider, setSessionEffort, setAudienceMode,
   } = useAppStore()
 
   const [input,          setInput]          = useState('')
@@ -616,6 +616,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
   const activeProvider = session?.sessionProvider ?? globalProvider
   const effort         = session?.sessionEffort  ?? 'medium'
   const thinking       = session?.sessionThinking ?? false
+  const audienceMode   = (session?.audienceMode  ?? 'college') as AudienceMode
 
   const scrollToBottom = useCallback((force = false) => {
     const el = scrollRef.current; if (!el) return
@@ -803,7 +804,8 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
         chunk => {
           if (firstChunk) { setSendingSession(null); setStreamingSession(sessionId); firstChunk=false }
           appendStream(sessionId, streamTaskId, chunk)
-        }
+        },
+        audienceMode
       )
       finalizeStream(sessionId, streamTaskId)
       const live = useAppStore.getState().sessions.find(s => s.id === sessionId)
@@ -980,7 +982,37 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
 
           {/* Input area */}
           <div style={{ flexShrink:0, padding:'8px 24px 14px', background:'var(--bg-primary)' }}>
-            {attachments.length > 0 && (
+            {/* Audience mode chips */}
+          {session && (
+            <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:6 }}>
+              <span style={{ fontSize:10, color:'var(--text-muted)', flexShrink:0 }}>Explain as:</span>
+              {([
+                { mode:'school'    as AudienceMode, label:'🎒 School',    title:'Simple language, real-world analogies, short' },
+                { mode:'college'   as AudienceMode, label:'🎓 College',   title:'Technical terms, theory + application, code examples' },
+                { mode:'professor' as AudienceMode, label:'🧑‍🏫 Professor', title:'Full academic depth — derivations, edge cases, entire lecture' },
+              ]).map(({ mode, label, title }) => {
+                const isActive = audienceMode === mode
+                const colors: Record<AudienceMode, string> = { school:'#3dd68c', college:'var(--accent)', professor:'#f59e0b' }
+                return (
+                  <button key={mode} onClick={() => session && setAudienceMode(session.id, mode)}
+                    title={title}
+                    style={{
+                      padding:'3px 10px', borderRadius:12, border:`1px solid ${isActive ? colors[mode] : 'var(--border)'}`,
+                      background: isActive ? `${colors[mode]}18` : 'transparent',
+                      color: isActive ? colors[mode] : 'var(--text-muted)',
+                      fontSize:11, fontWeight: isActive ? 600 : 400,
+                      cursor:'pointer', transition:'all 0.15s', flexShrink:0,
+                    }}
+                    onMouseEnter={e => { if (!isActive) { (e.currentTarget as HTMLElement).style.borderColor = colors[mode]; (e.currentTarget as HTMLElement).style.color = colors[mode] } }}
+                    onMouseLeave={e => { if (!isActive) { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)' } }}
+                  >
+                    {label}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+          {attachments.length > 0 && (
               <AttachmentStrip files={attachments} onRemove={id => setAttachments(prev => prev.filter(f => f.id !== id))}/>
             )}
             {/* Input row — alignItems:'center' keeps all icons and textarea vertically centred */}

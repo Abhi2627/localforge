@@ -66,7 +66,41 @@ function broadcast(data: object) {
   wsClients.forEach(ws => { try { ws.send(msg) } catch { wsClients.delete(ws) } })
 }
 
-function buildSystemPrompt(modelName: string, summary?: string | null, knowledgeCtx?: string, contractCtx?: string, extra?: string, fileContents?: Record<string, string>): string {
+// ── Audience mode prompts ────────────────────────────────────────────────────
+const AUDIENCE_PROMPTS: Record<string, string> = {
+  school: `
+AUDIENCE LEVEL: School (beginner).
+- Use simple everyday language. Zero jargon. If you must use a technical word, explain it in plain English immediately after.
+- Give ONE real-world analogy per concept (e.g. "electricity is like water flowing through a pipe").
+- Short responses: 3-5 paragraphs maximum.
+- Use simple visuals: basic charts or diagrams only.
+- Tone: friendly, encouraging, patient.
+- Start explanations with "Think of it like..." or "Imagine..."
+`,
+  college: `
+AUDIENCE LEVEL: College (intermediate).
+- Use technical terms but define them on first use.
+- Cover theory AND practical application.
+- Include code examples or math equations where relevant.
+- Use charts, graphs, and LaTeX math rendering.
+- Length: as long as needed to explain the concept properly.
+- Tone: neutral, informative, direct.
+`,
+  professor: `
+AUDIENCE LEVEL: Professor / Expert (advanced).
+- Use full academic/technical language. Assume deep domain knowledge.
+- Give the COMPLETE picture: formal definition, historical context, derivations, proofs, edge cases, current research, open problems.
+- Multiple examples: trivial case, standard case, pathological/edge case.
+- Use LaTeX for ALL equations. Use interactive graphs with parameter sliders where applicable.
+- Show step-by-step derivations. Cite theorems by name.
+- Length: this is a LECTURE. Do not summarise — expand everything fully.
+- Goal: the reader must be able to deliver this as a lecture to other people after reading.
+- End with a "Further reading" section listing 3-5 foundational references (author, title, year).
+- Tone: precise, rigorous, academic.
+`,
+}
+
+function buildSystemPrompt(modelName: string, summary?: string | null, knowledgeCtx?: string, contractCtx?: string, extra?: string, fileContents?: Record<string, string>, audienceMode?: string): string {
   const fileBlock = fileContents && Object.keys(fileContents).length > 0
     ? '\n\nProject files (read these carefully before answering):\n' +
       Object.entries(fileContents)
@@ -114,6 +148,7 @@ function buildSystemPrompt(modelName: string, summary?: string | null, knowledge
     `- Do NOT ask for confirmation between files — write everything upfront\n\n` +
 
     `Keep explanations concise. No filler phrases. No apologies.\n` +
+    (audienceMode && AUDIENCE_PROMPTS[audienceMode] ? `\n${AUDIENCE_PROMPTS[audienceMode]}` : '') +
 
     (extra        ? `\n\n${extra}`                    : '') +
     (summary      ? `\n\nProject summary:\n${summary}` : '') +
@@ -816,9 +851,9 @@ async function bootstrap() {
   })
 
   // ── Chat streaming (no RAG) ────────────────────────────────────────────────
-  server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>(
+  server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }>; audienceMode?: string } }>(
     '/chat/stream', async (req, reply) => {
-      const { message, sessionId, history = [] } = req.body
+      const { message, sessionId, history = [], audienceMode = 'college' } = req.body
       if (!message) { reply.status(400).send('No message'); return }
       const send = setupSSE(reply)
       try {
@@ -827,9 +862,8 @@ async function bootstrap() {
         if (!getSession(sessionId)) upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: loadConfig().selectedModel })
         const session = getSession(sessionId)
         const modelName = s.activeProvider === 'ollama' ? loadConfig().selectedModel : (s.cloudModels[s.activeProvider as CloudProvider] ?? '')
-        // Inject real file contents for project sessions — prevents hallucination
         const fileContents = isProject && session?.rootPath ? readProjectFilesForContext(session.rootPath) : undefined
-        const sysPrompt = buildSystemPrompt(modelName, session?.summary, isProject ? buildAgentContext(sessionId) : undefined, isProject ? buildContractContext(sessionId) : undefined, s.llmDefaults.systemPrompt || undefined, fileContents)
+        const sysPrompt = buildSystemPrompt(modelName, session?.summary, isProject ? buildAgentContext(sessionId) : undefined, isProject ? buildContractContext(sessionId) : undefined, s.llmDefaults.systemPrompt || undefined, fileContents, audienceMode)
         const msgs = [{ role: 'system' as ChatRole, content: sysPrompt }, ...mapHistory(history), { role: 'user' as ChatRole, content: message }]
         send({ type: 'provider', provider: s.activeProvider, model: modelName })
         let full = ''

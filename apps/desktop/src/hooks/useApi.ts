@@ -69,16 +69,17 @@ export const api = {
     req<{ success: boolean; reply: string }>('POST', '/chat', { message, sessionId, history }),
 
   streamChat: async (
-    message:   string,
-    sessionId: string,
-    history:   Array<{ role: string; content: string }>,
-    _taskId:   string,
-    onChunk:   (chunk: string) => void,
+    message:      string,
+    sessionId:    string,
+    history:      Array<{ role: string; content: string }>,
+    _taskId:      string,
+    onChunk:      (chunk: string) => void,
+    audienceMode: string = 'college',
   ): Promise<void> => {
     const res = await fetch(`${BASE}/chat/stream`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ message, sessionId, history }),
+      body:    JSON.stringify({ message, sessionId, history, audienceMode }),
     })
     if (!res.ok) throw new Error(`Stream failed (${res.status}): ${await res.text()}`)
 

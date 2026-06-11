@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 
+export type AudienceMode = 'school' | 'college' | 'professor'
+
 export type AgentRole    = 'frontend' | 'backend' | 'fullstack' | 'test' | 'review' | 'docs' | 'devops' | 'database'
 export type MessageType  = 'user' | 'agent' | 'system' | 'stream'
 export type SessionType  = 'chat' | 'project' | 'terminal'
@@ -30,8 +32,9 @@ export interface Session {
   createdAt?: string; updatedAt?: string
   sessionProvider?: string
   sessionModel?: string
-  sessionEffort?: 'low' | 'medium' | 'high' | 'max'  // maps to thinking budget / temperature
-  sessionThinking?: boolean                            // extended thinking toggle (Claude only)
+  sessionEffort?: 'low' | 'medium' | 'high' | 'max'
+  sessionThinking?: boolean
+  audienceMode?: AudienceMode
 }
 export interface OllamaModel {
   name: string; sizeGb: string; isSelected: boolean; isFallback: boolean
@@ -71,6 +74,7 @@ interface AppState {
   setSessionSummary:  (sessionId: string, summary: string) => void
   setSessionProvider:  (sessionId: string, provider: string, model?: string) => void
   setSessionEffort:    (sessionId: string, effort: 'low'|'medium'|'high'|'max', thinking?: boolean) => void
+  setAudienceMode:     (sessionId: string, mode: AudienceMode) => void
   setModels:          (models: OllamaModel[]) => void
   setSelectedModel:   (model: string) => void
   setLeftExpanded:    (v: boolean) => void
@@ -232,6 +236,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSessionEffort: (sessionId, effort, thinking) => set(s => ({
     sessions: s.sessions.map(sess =>
       sess.id === sessionId ? { ...sess, sessionEffort: effort, sessionThinking: thinking ?? sess.sessionThinking } : sess
+    )
+  })),
+  setAudienceMode: (sessionId, mode) => set(s => ({
+    sessions: s.sessions.map(sess =>
+      sess.id === sessionId ? { ...sess, audienceMode: mode } : sess
     )
   })),
   setModels:        (models)        => set({ models }),
