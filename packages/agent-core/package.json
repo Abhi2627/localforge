@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "bundle": "esbuild src/index.ts --bundle --platform=node --target=node20 --outfile=dist/server.cjs --format=cjs --external:better-sqlite3 --external:node-pty --external:pdf-parse --external:mammoth"
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",
@@ -24,6 +25,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^20.0.0",
+    "esbuild": "^0.28.0",
     "tsx": "^4.19.2",
     "typescript": "^5.4.5"
   }

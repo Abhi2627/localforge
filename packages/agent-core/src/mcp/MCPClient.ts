@@ -3,23 +3,34 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import path from 'path'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
+import { createRequire } from 'module'
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname  = path.dirname(__filename)
+// Works in both ESM (dev) and CJS (bundled production build)
+const __filename = typeof __filename !== 'undefined'
+  ? __filename
+  : (() => { try { return fileURLToPath(import.meta.url) } catch { return process.argv[1] ?? '' } })()
+const __dirname = path.dirname(__filename)
 
 function findMonorepoRoot(startDir: string): string {
+  // In production (bundled app), LOCALFORGE_ROOT is set by the Rust launcher
+  if (process.env.LOCALFORGE_ROOT) return process.env.LOCALFORGE_ROOT
+
   let current = startDir
   for (let i = 0; i < 10; i++) {
     const pkg = path.join(current, 'package.json')
     if (fs.existsSync(pkg)) {
-      const content = JSON.parse(fs.readFileSync(pkg, 'utf8'))
-      if (content.workspaces) return current   // found root (has workspaces field)
+      try {
+        const content = JSON.parse(fs.readFileSync(pkg, 'utf8'))
+        if (content.workspaces) return current
+      } catch { }
     }
     const parent = path.dirname(current)
-    if (parent === current) break              // reached filesystem root
+    if (parent === current) break
     current = parent
   }
-  throw new Error('[MCP] Could not find monorepo root (no package.json with workspaces field found)')
+  // Fallback: use the directory containing the server binary
+  // In production this is .app/Contents/Resources/
+  return startDir
 }
 
 const MONOREPO_ROOT = process.env.LOCALFORGE_ROOT ?? findMonorepoRoot(__dirname)
