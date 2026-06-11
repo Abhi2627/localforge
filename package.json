@@ -6,12 +6,14 @@
     "apps/desktop",
     "packages/agent-core",
     "packages/shared"
-],
+  ],
   "scripts": {
-    "dev:agent": "npm run dev --workspace=packages/agent-core",
+    "dev:agent":   "npm run dev --workspace=packages/agent-core",
     "dev:desktop": "npm run dev --workspace=apps/desktop",
-    "dev": "concurrently \"npm run dev:agent\" \"npm run dev:desktop\"",
-    "build": "npm run build --workspaces"
+    "dev":         "concurrently \"npm run dev:agent\" \"npm run dev:desktop\"",
+    "build":       "npm run build --workspaces",
+    "build:app":   "bash build-server.sh && npm run tauri build --workspace=apps/desktop",
+    "install:app": "bash build-server.sh && npm run tauri build --workspace=apps/desktop && cp -rf apps/desktop/src-tauri/target/release/bundle/macos/LocalForge.app /Applications/ && echo '✅ LocalForge installed to /Applications'"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

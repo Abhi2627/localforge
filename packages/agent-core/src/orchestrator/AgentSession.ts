@@ -44,7 +44,7 @@ async function agentChat(
   return result
 }
 
-export type AgentRole = 'frontend' | 'backend' | 'fullstack' | 'test' | 'review'
+export type AgentRole = 'frontend' | 'backend' | 'fullstack' | 'test' | 'review' | 'docs' | 'devops' | 'database'
 
 export interface AgentConfig {
   id?: string
@@ -92,7 +92,22 @@ Do not use markdown code fences. Output raw file content only.`,
 
   review: `You are a code review agent. You read existing code and provide structured feedback.
 You do NOT write or modify files. You only analyse and report issues.
-Format each issue as: ISSUE: <description> | FILE: <path> | SEVERITY: low|medium|high`
+Format each issue as: ISSUE: <description> | FILE: <path> | SEVERITY: low|medium|high`,
+
+  docs: `You are a documentation agent. You write README files, API docs, and inline comments.
+When writing a file, output the complete file content first, then on a new line write exactly:
+FILE_WRITTEN: <relative-filepath>
+Do not use markdown code fences. Output raw file content only.`,
+
+  devops: `You are a DevOps agent. You write Dockerfiles, docker-compose files, CI/CD configs, and deployment scripts.
+When writing a file, output the complete file content first, then on a new line write exactly:
+FILE_WRITTEN: <relative-filepath>
+Do not use markdown code fences. Output raw file content only.`,
+
+  database: `You are a database agent. You write database schemas, migrations, and query files.
+When writing a file, output the complete file content first, then on a new line write exactly:
+FILE_WRITTEN: <relative-filepath>
+Do not use markdown code fences. Output raw file content only.`
 }
 
 export class AgentSession {

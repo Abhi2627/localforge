@@ -70958,14 +70958,18 @@ var import_path5 = __toESM(require("path"), 1);
 var import_fs6 = __toESM(require("fs"), 1);
 var import_url = require("url");
 var import_meta = {};
-var __filename = typeof __filename !== "undefined" ? __filename : (() => {
+function getDirname() {
   try {
-    return (0, import_url.fileURLToPath)(import_meta.url);
+    return import_path5.default.dirname((0, import_url.fileURLToPath)(import_meta.url));
   } catch {
-    return process.argv[1] ?? "";
+    try {
+      return globalThis.__dirname ?? process.cwd();
+    } catch {
+      return process.cwd();
+    }
   }
-})();
-var __dirname2 = import_path5.default.dirname(__filename);
+}
+var __dirname2 = getDirname();
 function findMonorepoRoot(startDir) {
   if (process.env.LOCALFORGE_ROOT) return process.env.LOCALFORGE_ROOT;
   let current = startDir;
@@ -72331,6 +72335,78 @@ function injectRAGContext(systemPrompt, rag) {
 ===END INSTRUCTIONS===`;
 }
 
+// src/visualization/AutoVisualizer.ts
+function upgradeTable(content) {
+  const tableRx = /(\|.+\|\n\|[-| :]+\|\n(?:\|.+\|\n?)+)/g;
+  return content.replace(tableRx, (match) => {
+    const lines = match.trim().split("\n").filter((l) => l.trim());
+    if (lines.length < 3) return match;
+    const headers = lines[0].split("|").map((h) => h.trim()).filter(Boolean);
+    const rows = lines.slice(2).map((l) => l.split("|").map((c) => c.trim()).filter(Boolean));
+    const numericCols = headers.slice(1).filter(
+      (_, i) => rows.some((r) => r[i + 1] && !isNaN(parseFloat(r[i + 1].replace(/[,%$K]/g, ""))))
+    );
+    if (numericCols.length === 0) return match;
+    const xKey = headers[0];
+    const data = rows.map((row) => {
+      const obj = { [xKey]: row[0] ?? "" };
+      headers.slice(1).forEach((h, i) => {
+        const raw = row[i + 1] ?? "";
+        const num = parseFloat(raw.replace(/[,%$K]/g, ""));
+        obj[h] = isNaN(num) ? raw : num;
+      });
+      return obj;
+    });
+    const spec = { type: "bar", title: `${xKey} overview`, data, keys: numericCols, xKey };
+    return `${match}
+\`\`\`chart
+${JSON.stringify(spec)}
+\`\`\`
+`;
+  });
+}
+var FUNCTION_RX = /(?:^|\s)(?:f|g|h|y)\s*\(x\)\s*=\s*([^\n,;.]+)/gim;
+function extractFunctions(content) {
+  const fns = [];
+  let m;
+  while ((m = FUNCTION_RX.exec(content)) !== null) {
+    const expr = m[1].trim();
+    if (/\bx\b/.test(expr) && /[\^+\-*/]/.test(expr) && expr.length < 80) {
+      fns.push(expr);
+    }
+  }
+  return [...new Set(fns)].slice(0, 4);
+}
+function autoVisualize(content) {
+  let result2 = content;
+  const upgrades = [];
+  const alreadyRich = result2.includes("```chart") || result2.includes("```graph");
+  const afterTable = upgradeTable(result2);
+  if (afterTable !== result2) {
+    result2 = afterTable;
+    upgrades.push("table\u2192chart");
+  }
+  if (!alreadyRich && !result2.includes("```graph")) {
+    const fns = extractFunctions(result2);
+    if (fns.length > 0) {
+      const spec = {
+        title: fns.length === 1 ? `f(x) = ${fns[0]}` : "Functions",
+        functions: fns.map((fn) => ({ fn })),
+        xDomain: [-10, 10],
+        yDomain: [-10, 10],
+        grid: true
+      };
+      result2 += `
+
+\`\`\`graph
+${JSON.stringify(spec)}
+\`\`\``;
+      upgrades.push(`auto-graph: ${fns.join(", ")}`);
+    }
+  }
+  return { content: result2, upgraded: upgrades.length > 0, upgrades };
+}
+
 // src/index.ts
 var import_meta2 = {};
 var server = (0, import_fastify.default)({ logger: false, connectionTimeout: 0, keepAliveTimeout: 0 });
@@ -72385,45 +72461,43 @@ function buildSystemPrompt(modelName, summary, knowledgeCtx, contractCtx, extra,
   const fileBlock = fileContents && Object.keys(fileContents).length > 0 ? "\n\nProject files (read these carefully before answering):\n" + Object.entries(fileContents).map(([name, content]) => `
 --- ${name} ---
 ${content}`).join("\n") : "";
-  return `You are a helpful AI coding assistant inside LocalForge, powered by ${modelName}. You have a BUILT-IN interactive graph renderer. Use it \u2014 do NOT link to Desmos or external tools.
+  return `You are an expert software engineer inside LocalForge, powered by ${modelName}.
 
-RENDERING CAPABILITIES (use these instead of external tools):
-1. INTERACTIVE GRAPHS \u2014 use \`\`\`graph code block with JSON:
-   \`\`\`graph
-   {"title":"y = sin(x)","functions":[{"fn":"sin(x)"}],"xDomain":[-6.28,6.28],"yDomain":[-1.5,1.5]}
-   \`\`\`
-   Features: zoom, pan, crosshair tooltip, real-time parameter sliders. Supported: sin, cos, tan, sqrt, abs, exp, ln, log, pi, e, ^ for exponents.
-   RULE: When ANY user asks to plot/graph/show/visualise a function \u2014 ALWAYS output a \`\`\`graph block. NEVER say you cannot plot. NEVER link to Desmos.
+RENDERING (use these for rich output):
+- Math: \\[ block \\] or \\( inline \\) for LaTeX equations
+- Charts: \`\`\`chart {"type":"bar","data":[...]} \`\`\` for data visualisation
+- Graphs: \`\`\`graph {"functions":[{"fn":"sin(x)"}]} \`\`\` for interactive function plots
+- NEVER link to Desmos, Wolfram, or external tools \u2014 render inline
 
-2. MATH EQUATIONS \u2014 use LaTeX: \\[ block equation \\] or \\( inline \\). These render beautifully.
-3. DATA CHARTS \u2014 use \`\`\`chart JSON \`\`\` for bar/line/pie/area charts.
+WHEN TO USE EACH FORMAT:
+- Explaining code logic \u2192 use code blocks with language tag (\`\`\`typescript)
+- Showing data/numbers \u2192 use \`\`\`chart if 3+ data points
+- Mathematical function \u2192 use \`\`\`graph
+- Formula/equation \u2192 use LaTeX \\[...\\]
+- Writing a file \u2192 use write: format (see below)
+- NEVER mix: explanation code blocks are different from file write blocks
 
-GRAPH WITH INTERACTIVE SLIDERS example:
-\`\`\`graph
-{"title":"Quadratic","functions":[{"fn":"a*x^2+b*x+c"}],"params":[{"name":"a","min":-3,"max":3,"value":1},{"name":"b","min":-5,"max":5,"value":0},{"name":"c","min":-5,"max":5,"value":0}]}
+WRITING FILES:
+When asked to create or edit files, use EXACTLY this format:
+\`\`\`write:path/to/file.ext
+<complete file content>
 \`\`\`
 
-Format: use Markdown for code, headers, and lists. Keep prose concise. Do not add filler phrases.
+CRITICAL RULES for write: blocks:
+1. NEVER use \`\`\`typescript or \`\`\`javascript for file writes \u2014 ONLY \`\`\`write:path
+2. ALWAYS write the COMPLETE file \u2014 never partial snippets or placeholders
+3. For explanation/illustration, use regular \`\`\`typescript blocks (no write:)
+4. Write EVERY file the project needs \u2014 do not stop after 2-3 files
+5. A production project needs ALL of: package.json, source files, config, tests, README
 
-CRITICAL RULE \u2014 WRITING FILES: When the user asks you to write, create, edit, update, or fix ANY file, you MUST use this EXACT format and NO OTHER format:
+WHEN BUILDING A FULL PROJECT:
+- Write ALL files in one response \u2014 package.json, every source file, tests, config, README
+- Every file must be production-ready: proper error handling, types, validation
+- After writing all files, give a brief summary of what was created
+- Do NOT ask for confirmation between files \u2014 write everything upfront
 
-\`\`\`write:path/to/filename.ext
-<complete file content here>
-\`\`\`
-
-IMPORTANT: The backtick fence MUST start with write: followed immediately by the file path. DO NOT use \`\`\`typescript or \`\`\`javascript or any language tag when writing a file. ALWAYS write the COMPLETE file content, never partial snippets. Use the relative path from the project root. After the write block, briefly explain what you wrote and why.
-
-Example of CORRECT format:
-\`\`\`write:src/utils/hello.ts
-export function hello(): string {
-  return 'Hello, world!'
-}
-\`\`\`
-
-Example of WRONG format (never do this):
-\`\`\`typescript
-export function hello() { ... }
-\`\`\`` + (extra ? `
+Keep explanations concise. No filler phrases. No apologies.
+` + (extra ? `
 
 ${extra}` : "") + (summary ? `
 
@@ -73274,10 +73348,15 @@ async function bootstrap() {
           full += chunk;
           send({ chunk });
         }, s2);
+        const viz = autoVisualize(full);
+        if (viz.upgraded) {
+          const extra = viz.content.slice(full.length);
+          if (extra.trim()) send({ chunk: extra });
+        }
         reply.raw.write("data: [DONE]\n\n");
         reply.raw.end();
         try {
-          saveMessage({ id: (0, import_crypto5.randomUUID)(), sessionId, role: "assistant", content: full });
+          saveMessage({ id: (0, import_crypto5.randomUUID)(), sessionId, role: "assistant", content: viz.content });
         } catch {
         }
       } catch (err) {
@@ -73326,10 +73405,15 @@ ${errMsg}` });
           full += chunk;
           send({ chunk });
         }, s2);
+        const viz = autoVisualize(full);
+        if (viz.upgraded) {
+          const extra = viz.content.slice(full.length);
+          if (extra.trim()) send({ chunk: extra });
+        }
         reply.raw.write("data: [DONE]\n\n");
         reply.raw.end();
         try {
-          saveMessage({ id: (0, import_crypto5.randomUUID)(), sessionId, role: "assistant", content: full });
+          saveMessage({ id: (0, import_crypto5.randomUUID)(), sessionId, role: "assistant", content: viz.content });
         } catch {
         }
       } catch (err) {
@@ -73355,6 +73439,64 @@ ${errMsg}` });
     const msgs = [{ role: "system", content: buildSystemPrompt(modelName, session?.summary) }, ...mapHistory(history), { role: "user", content: message }];
     const { content } = await routedChat(msgs, void 0, s2);
     return { success: true, reply: content };
+  });
+  server.post("/projects/:projectId/orchestrate", async (req, reply) => {
+    const { task } = req.body;
+    const { projectId } = req.params;
+    if (!task) {
+      reply.status(400).send({ error: "task required" });
+      return;
+    }
+    let project;
+    try {
+      project = orchestrator.getProject(projectId);
+    } catch {
+      reply.status(404).send({ error: `Project ${projectId} not found` });
+      return;
+    }
+    const planPrompt = [
+      {
+        role: "system",
+        content: 'You are a software project planner. Given a task, output a JSON array of agents needed to complete it.\nEach agent has: name (string), role ("frontend"|"backend"|"database"|"devops"|"test"|"docs"), instruction (string).\nRules:\n- Use 1-5 agents depending on complexity\n- Each agent should own a specific part of the codebase\n- Instructions should be specific and actionable\nOutput ONLY valid JSON array, no markdown, no explanation.\nExample: [{"name":"Backend","role":"backend","instruction":"Build Express REST API with auth"}]'
+      },
+      { role: "user", content: `Task: ${task}
+Project path: ${project.rootPath}` }
+    ];
+    let planJson;
+    try {
+      const { content } = await routedChat(planPrompt);
+      planJson = content.trim().replace(/^```json\n?/, "").replace(/\n?```$/, "").trim();
+    } catch (err) {
+      reply.status(500).send({ error: `Planning failed: ${err.message}` });
+      return;
+    }
+    let agentPlans;
+    try {
+      agentPlans = JSON.parse(planJson);
+      if (!Array.isArray(agentPlans)) throw new Error("Not an array");
+    } catch (err) {
+      reply.status(500).send({ error: `Invalid plan JSON: ${err.message}`, raw: planJson });
+      return;
+    }
+    const deployed = [];
+    for (const plan of agentPlans.slice(0, 5)) {
+      try {
+        const agent = orchestrator.addAgent(projectId, {
+          name: plan.name,
+          role: plan.role,
+          allowedPaths: [],
+          projectPath: project.rootPath
+        });
+        deployed.push({ id: agent.id, name: plan.name, role: plan.role, instruction: plan.instruction });
+        orchestrator.runInstruction(projectId, agent.id, plan.instruction).catch(
+          (e) => console.error(`[Orchestrate] Agent ${plan.name} failed:`, e.message)
+        );
+      } catch (err) {
+        console.error(`[Orchestrate] Failed to create agent ${plan.name}:`, err.message);
+      }
+    }
+    broadcast({ type: "orchestration_started", projectId, agents: deployed, task });
+    return { success: true, agents: deployed, plan: agentPlans };
   });
   server.get("/projects", async () => ({ projects: orchestrator.listProjects() }));
   server.post("/projects", async (req) => {

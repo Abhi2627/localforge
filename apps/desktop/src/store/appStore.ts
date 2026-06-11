@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type AgentRole    = 'frontend' | 'backend' | 'fullstack' | 'test' | 'review'
+export type AgentRole    = 'frontend' | 'backend' | 'fullstack' | 'test' | 'review' | 'docs' | 'devops' | 'database'
 export type MessageType  = 'user' | 'agent' | 'system' | 'stream'
 export type SessionType  = 'chat' | 'project' | 'terminal'
 
