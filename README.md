@@ -34,13 +34,40 @@ LocalForge is a purpose-built desktop IDE for AI-assisted development. It combin
 
 ---
 
-## Getting Started
+## Production Build
+
+LocalForge ships as a standalone macOS `.app` — no terminal needed after installation.
+
+### Build from source
 
 ```bash
-git clone https://github.com/Abhi2627/localforge.git
-cd localforge
-npm install
+# Step 1 — bundle the agent server
+cd /path/to/localforge && bash build-server.sh
 
+# Step 2 — build the .app and .dmg
+cd apps/desktop && npm run tauri build
+```
+
+Output: `apps/desktop/src-tauri/target/release/bundle/macos/LocalForge.app`
+
+### Install
+
+```bash
+cp -r src-tauri/target/release/bundle/macos/LocalForge.app /Applications/
+open /Applications/LocalForge.app
+```
+
+**Requirements:**
+- Node.js 20+ (via nvm or Homebrew)
+- Ollama (optional — for local inference)
+
+The app auto-detects Node.js and starts the agent server on `:3001` automatically. No terminal required.
+
+---
+
+## Development
+
+```bash
 # Terminal 1 — agent server
 cd packages/agent-core && npm run dev
 
@@ -48,12 +75,6 @@ cd packages/agent-core && npm run dev
 cd apps/desktop && npm run dev
 # Open http://localhost:1420
 ```
-
-**Prerequisites:** Node.js 20+. For local inference: Ollama with at least one model pulled.
-
-**First launch:** If no model is installed and no API key is configured, the app shows a **Setup Gate** — pull an Ollama model or add a cloud API key before entering.
-
-**Low RAM?** `ollama pull qwen2.5-coder:1.5b` — 1.1 GB, works on 8 GB RAM.
 
 ---
 
