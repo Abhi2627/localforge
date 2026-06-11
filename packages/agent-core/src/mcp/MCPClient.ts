@@ -3,13 +3,18 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import path from 'path'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
-import { createRequire } from 'module'
 
-// Works in both ESM (dev) and CJS (bundled production build)
-const __filename = typeof __filename !== 'undefined'
-  ? __filename
-  : (() => { try { return fileURLToPath(import.meta.url) } catch { return process.argv[1] ?? '' } })()
-const __dirname = path.dirname(__filename)
+// Safe __dirname that works in both ESM (dev with tsx) and CJS (bundled production)
+function getDirname(): string {
+  try {
+    // ESM: import.meta.url is available
+    return path.dirname(fileURLToPath(import.meta.url))
+  } catch {
+    // CJS bundle: __dirname is a global
+    try { return (globalThis as any).__dirname ?? process.cwd() } catch { return process.cwd() }
+  }
+}
+const __dirname = getDirname()
 
 function findMonorepoRoot(startDir: string): string {
   // In production (bundled app), LOCALFORGE_ROOT is set by the Rust launcher

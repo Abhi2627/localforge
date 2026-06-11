@@ -22,6 +22,7 @@ import { scanProject, updateFile, getSymbols, findSymbol, getSummary, getConflic
 import { runEnforcer, getCachedReport, clearReport, buildContractContext } from './knowledge/ContractEnforcer.js'
 import { getStatus, getLog, getBranches, getDiff, getCombinedDiff, getDiffAll, getCommitDiff } from './git/GitReader.js'
 import { runRAG, injectRAGContext, hasWebTrigger } from './rag/RAGPipeline.js'
+import { autoVisualize } from './visualization/AutoVisualizer.js'
 
 type ChatRole = 'system' | 'user' | 'assistant'
 
@@ -66,7 +67,6 @@ function broadcast(data: object) {
 }
 
 function buildSystemPrompt(modelName: string, summary?: string | null, knowledgeCtx?: string, contractCtx?: string, extra?: string, fileContents?: Record<string, string>): string {
-  // Build a block of actual file contents so the model reads real data, not hallucinations
   const fileBlock = fileContents && Object.keys(fileContents).length > 0
     ? '\n\nProject files (read these carefully before answering):\n' +
       Object.entries(fileContents)
@@ -75,40 +75,46 @@ function buildSystemPrompt(modelName: string, summary?: string | null, knowledge
     : ''
 
   return (
-    `You are a helpful AI coding assistant inside LocalForge, powered by ${modelName}. ` +
-    `You have a BUILT-IN interactive graph renderer. Use it — do NOT link to Desmos or external tools.\n\n` +
-    `RENDERING CAPABILITIES (use these instead of external tools):\n` +
-    `1. INTERACTIVE GRAPHS — use \`\`\`graph code block with JSON:\n` +
-    `   \`\`\`graph\n   {"title":"y = sin(x)","functions":[{"fn":"sin(x)"}],"xDomain":[-6.28,6.28],"yDomain":[-1.5,1.5]}\n   \`\`\`\n` +
-    `   Features: zoom, pan, crosshair tooltip, real-time parameter sliders. Supported: sin, cos, tan, sqrt, abs, exp, ln, log, pi, e, ^ for exponents.\n` +
-    `   RULE: When ANY user asks to plot/graph/show/visualise a function — ALWAYS output a \`\`\`graph block. NEVER say you cannot plot. NEVER link to Desmos.\n\n` +
-    `2. MATH EQUATIONS — use LaTeX: \\[ block equation \\] or \\( inline \\). These render beautifully.\n` +
-    `3. DATA CHARTS — use \`\`\`chart JSON \`\`\` for bar/line/pie/area charts.\n\n` +
-    `GRAPH WITH INTERACTIVE SLIDERS example:\n` +
-    `\`\`\`graph\n` +
-    `{"title":"Quadratic","functions":[{"fn":"a*x^2+b*x+c"}],"params":[{"name":"a","min":-3,"max":3,"value":1},{"name":"b","min":-5,"max":5,"value":0},{"name":"c","min":-5,"max":5,"value":0}]}\n` +
+    `You are an expert software engineer inside LocalForge, powered by ${modelName}.\n\n` +
+
+    // ── RENDERING CAPABILITIES ──────────────────────────────────────────────
+    `RENDERING (use these for rich output):\n` +
+    `- Math: \\[ block \\] or \\( inline \\) for LaTeX equations\n` +
+    `- Charts: \`\`\`chart {"type":"bar","data":[...]} \`\`\` for data visualisation\n` +
+    `- Graphs: \`\`\`graph {"functions":[{"fn":"sin(x)"}]} \`\`\` for interactive function plots\n` +
+    `- NEVER link to Desmos, Wolfram, or external tools — render inline\n\n` +
+
+    // ── VISUALIZATION DECISION RULES ────────────────────────────────────────
+    `WHEN TO USE EACH FORMAT:\n` +
+    `- Explaining code logic → use code blocks with language tag (\`\`\`typescript)\n` +
+    `- Showing data/numbers → use \`\`\`chart if 3+ data points\n` +
+    `- Mathematical function → use \`\`\`graph\n` +
+    `- Formula/equation → use LaTeX \\[...\\]\n` +
+    `- Writing a file → use write: format (see below)\n` +
+    `- NEVER mix: explanation code blocks are different from file write blocks\n\n` +
+
+    // ── FILE WRITING ─────────────────────────────────────────────────────────
+    `WRITING FILES:\n` +
+    `When asked to create or edit files, use EXACTLY this format:\n` +
+    `\`\`\`write:path/to/file.ext\n` +
+    `<complete file content>\n` +
     `\`\`\`\n\n` +
-    `Format: use Markdown for code, headers, and lists. Keep prose concise. Do not add filler phrases.\n\n`+
-    `CRITICAL RULE — WRITING FILES: When the user asks you to write, create, edit, update, or fix ANY file, ` +
-    `you MUST use this EXACT format and NO OTHER format:\n\n` +
-    `\`\`\`write:path/to/filename.ext\n` +
-    `<complete file content here>\n` +
-    `\`\`\`\n\n` +
-    `IMPORTANT: The backtick fence MUST start with write: followed immediately by the file path. ` +
-    `DO NOT use \`\`\`typescript or \`\`\`javascript or any language tag when writing a file. ` +
-    `ALWAYS write the COMPLETE file content, never partial snippets. ` +
-    `Use the relative path from the project root. ` +
-    `After the write block, briefly explain what you wrote and why.\n\n` +
-    `Example of CORRECT format:\n` +
-    `\`\`\`write:src/utils/hello.ts\n` +
-    `export function hello(): string {\n` +
-    `  return 'Hello, world!'\n` +
-    `}\n` +
-    `\`\`\`\n\n` +
-    `Example of WRONG format (never do this):\n` +
-    `\`\`\`typescript\n` +
-    `export function hello() { ... }\n` +
-    `\`\`\`` +
+    `CRITICAL RULES for write: blocks:\n` +
+    `1. NEVER use \`\`\`typescript or \`\`\`javascript for file writes — ONLY \`\`\`write:path\n` +
+    `2. ALWAYS write the COMPLETE file — never partial snippets or placeholders\n` +
+    `3. For explanation/illustration, use regular \`\`\`typescript blocks (no write:)\n` +
+    `4. Write EVERY file the project needs — do not stop after 2-3 files\n` +
+    `5. A production project needs ALL of: package.json, source files, config, tests, README\n\n` +
+
+    // ── PRODUCTION PROJECT RULE ───────────────────────────────────────────────
+    `WHEN BUILDING A FULL PROJECT:\n` +
+    `- Write ALL files in one response — package.json, every source file, tests, config, README\n` +
+    `- Every file must be production-ready: proper error handling, types, validation\n` +
+    `- After writing all files, give a brief summary of what was created\n` +
+    `- Do NOT ask for confirmation between files — write everything upfront\n\n` +
+
+    `Keep explanations concise. No filler phrases. No apologies.\n` +
+
     (extra        ? `\n\n${extra}`                    : '') +
     (summary      ? `\n\nProject summary:\n${summary}` : '') +
     fileBlock +
@@ -828,8 +834,15 @@ async function bootstrap() {
         send({ type: 'provider', provider: s.activeProvider, model: modelName })
         let full = ''
         await routedChat(msgs, (chunk) => { full += chunk; send({ chunk }) }, s)
+        // Auto-visualize: upgrade tables → charts, detected functions → graphs
+        const viz = autoVisualize(full)
+        if (viz.upgraded) {
+          // Send the upgraded portions as additional chunks
+          const extra = viz.content.slice(full.length)
+          if (extra.trim()) send({ chunk: extra })
+        }
         reply.raw.write('data: [DONE]\n\n'); reply.raw.end()
-        try { saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: full }) } catch { }
+        try { saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: viz.content }) } catch { }
       } catch (err: any) {
         const s2 = loadSettings()
         const errMsg = classifyApiError(err, s2.activeProvider, s2.cloudModels[s2.activeProvider as CloudProvider] ?? '')
@@ -864,8 +877,10 @@ async function bootstrap() {
         const msgs = [{ role: 'system' as ChatRole, content: sysPrompt }, ...mapHistory(history), { role: 'user' as ChatRole, content: cleanMsg }]
         let full = rag.extractedFacts ?? ''
         await routedChat(msgs, (chunk) => { full += chunk; send({ chunk }) }, s)
+        const viz = autoVisualize(full)
+        if (viz.upgraded) { const extra = viz.content.slice(full.length); if (extra.trim()) send({ chunk: extra }) }
         reply.raw.write('data: [DONE]\n\n'); reply.raw.end()
-        try { saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: full }) } catch { }
+        try { saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: viz.content }) } catch { }
       } catch (err: any) {
         const s2 = loadSettings()
         const errMsg = classifyApiError(err, s2.activeProvider, s2.cloudModels[s2.activeProvider as CloudProvider] ?? '')
@@ -882,6 +897,71 @@ async function bootstrap() {
     const msgs = [{ role: 'system' as ChatRole, content: buildSystemPrompt(modelName, session?.summary) }, ...mapHistory(history), { role: 'user' as ChatRole, content: message }]
     const { content } = await routedChat(msgs, undefined, s)
     return { success: true, reply: content }
+  })
+
+  // ── Auto-orchestrate: LLM plans and deploys agents automatically ────────────
+  server.post<{ Params: { projectId: string }; Body: { task: string } }>('/projects/:projectId/orchestrate', async (req, reply) => {
+    const { task } = req.body
+    const { projectId } = req.params
+    if (!task) { reply.status(400).send({ error: 'task required' }); return }
+
+    let project: any
+    try { project = orchestrator.getProject(projectId) }
+    catch { reply.status(404).send({ error: `Project ${projectId} not found` }); return }
+
+    // Step 1: Ask LLM to plan the agent structure
+    const planPrompt = [
+      { role: 'system' as ChatRole, content:
+        'You are a software project planner. Given a task, output a JSON array of agents needed to complete it.\n' +
+        'Each agent has: name (string), role ("frontend"|"backend"|"database"|"devops"|"test"|"docs"), instruction (string).\n' +
+        'Rules:\n' +
+        '- Use 1-5 agents depending on complexity\n' +
+        '- Each agent should own a specific part of the codebase\n' +
+        '- Instructions should be specific and actionable\n' +
+        'Output ONLY valid JSON array, no markdown, no explanation.\n' +
+        'Example: [{"name":"Backend","role":"backend","instruction":"Build Express REST API with auth"}]'
+      },
+      { role: 'user' as ChatRole, content: `Task: ${task}\nProject path: ${project.rootPath}` },
+    ]
+
+    let planJson: string
+    try {
+      const { content } = await routedChat(planPrompt)
+      planJson = content.trim().replace(/^```json\n?/, '').replace(/\n?```$/, '').trim()
+    } catch (err: any) {
+      reply.status(500).send({ error: `Planning failed: ${err.message}` }); return
+    }
+
+    let agentPlans: Array<{ name: string; role: string; instruction: string }>
+    try {
+      agentPlans = JSON.parse(planJson)
+      if (!Array.isArray(agentPlans)) throw new Error('Not an array')
+    } catch (err: any) {
+      reply.status(500).send({ error: `Invalid plan JSON: ${err.message}`, raw: planJson }); return
+    }
+
+    // Step 2: Create and deploy each agent
+    const deployed: any[] = []
+    for (const plan of agentPlans.slice(0, 5)) {  // cap at 5 agents
+      try {
+        const agent = orchestrator.addAgent(projectId, {
+          name:        plan.name,
+          role:        plan.role as any,
+          allowedPaths: [],
+          projectPath: project.rootPath,
+        })
+        deployed.push({ id: agent.id, name: plan.name, role: plan.role, instruction: plan.instruction })
+        // Run the instruction asynchronously
+        orchestrator.runInstruction(projectId, agent.id, plan.instruction).catch((e: any) =>
+          console.error(`[Orchestrate] Agent ${plan.name} failed:`, e.message)
+        )
+      } catch (err: any) {
+        console.error(`[Orchestrate] Failed to create agent ${plan.name}:`, err.message)
+      }
+    }
+
+    broadcast({ type: 'orchestration_started', projectId, agents: deployed, task })
+    return { success: true, agents: deployed, plan: agentPlans }
   })
 
   // ── Projects / Agents ──────────────────────────────────────────────────────
