@@ -50,7 +50,6 @@ const COLORS = ['#569cd6', '#3dd68c', '#f59e0b', '#ce9178', '#d670d6', '#4ec9b0'
 // Replaces ^ with ** and common math names, then uses Function()
 function buildEvaluator(expr: string, paramNames: string[]): ((vars: Record<string, number>) => number) | null {
   try {
-    // Replace ^ with ** for exponentiation
     let e = expr
       .replace(/\^/g, '**')
       .replace(/\bsin\b/g, 'Math.sin')
@@ -60,26 +59,39 @@ function buildEvaluator(expr: string, paramNames: string[]): ((vars: Record<stri
       .replace(/\bacos\b/g, 'Math.acos')
       .replace(/\batan\b/g, 'Math.atan')
       .replace(/\batan2\b/g, 'Math.atan2')
+      .replace(/\bsinh\b/g, 'Math.sinh')
+      .replace(/\bcosh\b/g, 'Math.cosh')
+      .replace(/\btanh\b/g, 'Math.tanh')
       .replace(/\bsqrt\b/g, 'Math.sqrt')
       .replace(/\babs\b/g, 'Math.abs')
       .replace(/\bexp\b/g, 'Math.exp')
       .replace(/\bln\b/g, 'Math.log')
-      .replace(/\blog\b/g, 'Math.log10')
+      .replace(/\blog10\b/g, 'Math.log10')
       .replace(/\blog2\b/g, 'Math.log2')
+      .replace(/\blog\b/g, 'Math.log10')
       .replace(/\bfloor\b/g, 'Math.floor')
       .replace(/\bceil\b/g, 'Math.ceil')
       .replace(/\bround\b/g, 'Math.round')
       .replace(/\bsign\b/g, 'Math.sign')
+      .replace(/\bmax\b/g, 'Math.max')
+      .replace(/\bmin\b/g, 'Math.min')
+      .replace(/\bpow\b/g, 'Math.pow')
       .replace(/\bpi\b/g, 'Math.PI')
+      .replace(/\bPI\b/g, 'Math.PI')
       .replace(/\be\b/g, 'Math.E')
+      // Handle implicit multiplication: 2x → 2*x, 2(x) → 2*(x)
+      .replace(/(\d)([a-zA-Z(])/g, '$1*$2')
+      .replace(/([a-zA-Z])(\()/g, '$1$2')  // don't double-add * before Math.xxx
     const args = ['x', ...paramNames].join(', ')
     // eslint-disable-next-line no-new-func
-    const fn = new Function(args, `"use strict"; try { return (${e}); } catch { return NaN; }`)
+    const fn = new Function(args, `"use strict"; try { const result = (${e}); return (typeof result === 'number' && isFinite(result)) ? result : NaN; } catch { return NaN; }`)
     return (vars: Record<string, number>) => {
       const xVal = vars['x'] ?? 0
       const pVals = paramNames.map(n => vars[n] ?? 0)
-      const result = fn(xVal, ...pVals)
-      return typeof result === 'number' && isFinite(result) ? result : NaN
+      try {
+        const result = fn(xVal, ...pVals)
+        return typeof result === 'number' && isFinite(result) ? result : NaN
+      } catch { return NaN }
     }
   } catch { return null }
 }

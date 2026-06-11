@@ -640,7 +640,7 @@ async function bootstrap() {
     if (!fs.existsSync(filePath)) { reply.status(404).send({ error: 'file not found' }); return }
 
     const ext  = path.extname(filePath).toLowerCase()
-    const name = path.basename(filePath)
+    const name = path.basename(filePath) 
     const MAX  = 1024 * 1024 * 10  // 10 MB raw size cap
 
     try {
