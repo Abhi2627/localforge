@@ -121,9 +121,10 @@ function sanitizeLatex(raw: string): string {
   s = s.replace(/\\([a-zA-Z]+)_([a-zA-Z0-9]{2,})(?![{_^\\])/g, '\\$1_{$2}')
   s = s.replace(/\\([a-zA-Z]+)\^([a-zA-Z0-9]{2,})(?![{_^\\])/g, '\\$1^{$2}')
 
-  // ── Fix bare subscripts: y0→y_{0}, yi→y_{i} (conservative)
-  s = s.replace(/\b([a-zA-Z])([0-9])\b(?!_)/g, '$1_{$2}')
-  s = s.replace(/\b([a-wyzA-Z])(i|j|k|n|m|t)\b(?![_{])/g, '$1_{$2}')
+  // ── Fix bare subscripts: y0→y_{0}, w0→w_{0}, yi→y_{i} (conservative)
+  // Use a more aggressive pattern that handles cases inside \frac{} etc.
+  s = s.replace(/([a-zA-Z])([0-9])(?![a-zA-Z0-9_{])/g, '$1_{$2}')   // w0, x1, h0 etc
+  s = s.replace(/([a-wyzA-Z])(i|j|k|n|m|t)(?![a-zA-Z_{])/g, '$1_{$2}')  // wi, yi, xi etc
 
   // ── Fix \\[ / \\] double backslash
   s = s.replace(/^\\\\\[/, '\\[')
@@ -199,47 +200,72 @@ export function hasMath(content: string): boolean {
 // Fixes model mistakes BEFORE the content is split into segments.
 // This handles cases where math leaks into prose (no delimiters added by model).
 export function preprocessContent(content: string): string {
-  let s = content
-
-  // Auto-wrap obvious math expressions that appear in prose without delimiters.
-  // Pattern: text like hθ(xi)=θ0+θ1xi or θ0+θ1*x that contains Greek/math chars
-  // Strategy: find lines that contain raw Unicode math symbols (θ α β etc) mixed with
-  // Latin letters and operators — wrap the math portions in \(...\)
-
-  // Replace bare Unicode Greek letters + subscript/superscript patterns in prose
-  // Only when NOT already inside a math block
-  const mathChars = /[θαβγδεζηικλμνξπρστυφχψωΘΑΒΓΔΕΖΗΙΚΛΜΝΞΠΡΣΤΥΦΧΨΩ∑∏∫∂∇]/
-
-  // Process line by line — skip lines that are inside \[...\] blocks
-  const lines = s.split('\n')
+  const lines = content.split('\n')
   let inMathBlock = false
+  let inCodeBlock  = false
+
   const processed = lines.map(line => {
-    // Track math block boundaries
-    if (line.trim() === '\\[' || line.trim() === '$') { inMathBlock = true; return line }
-    if (line.trim() === '\\]' || (line.trim() === '$' && inMathBlock)) { inMathBlock = false; return line }
+    // Track code fence boundaries — never touch code blocks
+    if (/^```/.test(line)) { inCodeBlock = !inCodeBlock; return line }
+    if (inCodeBlock) return line
+    // Track \[...\] math block boundaries
+    if (/^\s*\\\[\s*$/.test(line) || /^\s*\$\$\s*$/.test(line)) { inMathBlock = true; return line }
+    if (/^\s*\\\]\s*$/.test(line) || (/^\s*\$\$\s*$/.test(line) && inMathBlock)) { inMathBlock = false; return line }
     if (inMathBlock) return line
-    // Skip code blocks and fence lines
-    if (line.startsWith('```') || line.startsWith('    ')) return line
-    // If line contains raw Greek/math Unicode chars, wrap individual tokens
-    if (!mathChars.test(line)) return line
-    // Replace patterns like: hθ(x) θ0 θ1 h_θ followed by operators
-    // Wrap sequences of [a-zA-Z][θαβ...][0-9()=+\-*/^] as inline math
-    return line.replace(
-      /([a-zA-Z]*[θαβγδεζηικλμνξπρστυφχψωΘΑΒΓΔΕΖΗΙΚΛΜΝΞΠΡΣΤΥΦΧΨΩ][a-zA-Z0-9_()=+\-*/^.]*)/g,
+    // Skip lines that already have math delimiters
+    if (line.includes('\\(') || line.includes('\\[') || line.includes('$')) return line
+
+    let out = line
+
+    // ── 1. Convert LaTeX commands in prose to wrapped math ─────────────────────
+    // Patterns like: \cdot, \nabla, \alpha etc appearing raw in prose text
+    // Wrap entire token sequences that contain LaTeX commands
+    out = out.replace(
+      /([a-zA-Z_]*(?:\\(?:cdot|nabla|alpha|beta|gamma|delta|theta|mu|sigma|lambda|omega|epsilon|phi|psi|chi|tau|nu|eta|rho|xi|pi|zeta|iota|kappa|upsilon|Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Upsilon|Phi|Psi|Omega)[a-zA-Z_0-9{}^]*)+[a-zA-Z_0-9()=+\-*/^.]*)/g,
       (match) => {
-        // Don't double-wrap if already inside \(...\)
-        if (match.startsWith('\\(') || match.startsWith('\\[')) return match
-        // Convert Unicode Greek to LaTeX commands
-        const latexified = match
-          .replace(/θ/g, '\\theta').replace(/α/g, '\\alpha').replace(/β/g, '\\beta')
-          .replace(/γ/g, '\\gamma').replace(/δ/g, '\\delta').replace(/σ/g, '\\sigma')
-          .replace(/μ/g, '\\mu').replace(/λ/g, '\\lambda').replace(/π/g, '\\pi')
-          .replace(/ω/g, '\\omega').replace(/Σ/g, '\\Sigma').replace(/Π/g, '\\Pi')
-          .replace(/∑/g, '\\sum').replace(/∫/g, '\\int').replace(/∂/g, '\\partial')
-          .replace(/∇/g, '\\nabla')
-        return `\\(${latexified}\\)`
+        if (match.startsWith('\\(') || match.length < 2) return match
+        return `\\(${match}\\)`
       }
     )
+
+    // ── 2. Convert Unicode math symbols to LaTeX and wrap ─────────────────────
+    const unicodeMathChars = /[\u03b1-\u03c9\u0391-\u03a9\u2211\u220f\u222b\u2202\u2207\u2212\u00d7\u00f7]/
+    if (unicodeMathChars.test(out)) {
+      out = out.replace(
+        /([a-zA-Z]*[\u03b1-\u03c9\u0391-\u03a9\u2211\u220f\u222b\u2202\u2207][a-zA-Z0-9_()=+\u2212\-*/^.]*)/g,
+        (match) => {
+          if (match.startsWith('\\(') || match.startsWith('\\[')) return match
+          const latexified = match
+            .replace(/\u03b8/g, '\\theta').replace(/\u03b1/g, '\\alpha').replace(/\u03b2/g, '\\beta')
+            .replace(/\u03b3/g, '\\gamma').replace(/\u03b4/g, '\\delta').replace(/\u03c3/g, '\\sigma')
+            .replace(/\u03bc/g, '\\mu').replace(/\u03bb/g, '\\lambda').replace(/\u03c0/g, '\\pi')
+            .replace(/\u03c9/g, '\\omega').replace(/\u03a3/g, '\\Sigma').replace(/\u03a0/g, '\\Pi')
+            .replace(/\u2211/g, '\\sum').replace(/\u222b/g, '\\int').replace(/\u2202/g, '\\partial')
+            .replace(/\u2207/g, '\\nabla').replace(/\u2212/g, '-')
+          return `\\(${latexified}\\)`
+        }
+      )
+    }
+
+    // ── 3. Wrap pure-ASCII math expressions in prose ─────────────────────────
+    // Patterns: f(x)=x^2, x2 (letter+digit), wnew, wold (w+word), variable=expression
+    // Only wrap when they look like math (contain = with operators, or letter+digit subscript)
+
+    // Pattern: identifier=expression with math operators (e.g. wnew=wold-0.1*2x, f(x)=x^2)
+    out = out.replace(
+      /\b([a-zA-Z][a-zA-Z0-9_]*)\s*=\s*([a-zA-Z0-9_.+\-*/^()\\]+(?:[+\-*/^][a-zA-Z0-9_.+\-*/^()\\]+)+)\b/g,
+      (match, lhs, rhs) => {
+        // Skip if already wrapped or if it's a word-only assignment (no operators/digits in rhs)
+        if (match.startsWith('\\(')) return match
+        // Must have at least one operator and look like math
+        if (!/[+\-*/^0-9]/.test(rhs)) return match
+        // Skip common English words
+        if (/^(is|are|was|were|has|have|had|the|and|or|if|then|else|true|false)$/.test(lhs)) return match
+        return `\\(${match}\\)`
+      }
+    )
+
+    return out
   })
 
   return processed.join('\n')
