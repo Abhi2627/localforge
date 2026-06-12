@@ -12,7 +12,7 @@ import SettingsModal from './SettingsModal'
 import { FilePatchCard, type FilePatch } from './FilePatchCard'
 import ChartBlock from './ChartBlock'
 import GraphBlock from './GraphBlock'
-import MathBlock, { hasMath, parseContent, renderInline, type Segment, LinkWithConfirm } from './MathBlock'
+import MathBlock, { hasMath, parseContent, renderInline, preprocessContent, type Segment, LinkWithConfirm } from './MathBlock'
 
 interface ChatPanelProps { onOpenTerminal?: (cwd: string) => void }
 interface AttachedFile { id: string; name: string; path: string; size: number; content: string; isImage: boolean }
@@ -80,18 +80,7 @@ function extractPatches(content: string, rootPath?: string, userPrompt?: string)
     patches.push({ id: makePatchId(path, fcClean), path, content: fcClean, rootPath })
     return `[File proposal: ${path}]`
   })
-  if (patches.length > 0) return { patches, cleanContent: primary.trim() }
-  const searchText = content + ' ' + (userPrompt ?? '')
-  const fileNameMatch = searchText.match(/([\w./-]+\.(?:ts|tsx|js|jsx|mjs|py|go|rs|css|scss|html|json|md|yaml|yml|sh|env|toml|txt|proto|sql|graphql|dockerfile))/i)
-  if (fileNameMatch) {
-    const codeMatch = content.match(/```(?:\w+)?\n([\s\S]*?)```/)
-    if (codeMatch) {
-      const rawPath = fileNameMatch[1].replace(/^\/\/\s*/, '').trim()
-      const fc      = codeMatch[1].trimEnd()
-      patches.push({ id: makePatchId(rawPath, fc), path: rawPath, content: fc, rootPath })
-      return { patches, cleanContent: content }
-    }
-  }
+  // Never guess filenames — only explicit write: blocks become patches
   return { patches, cleanContent: primary.trim() }
 }
 
@@ -148,26 +137,121 @@ function FilePreviewPopup({ name, content, onClose }: { name: string; content: s
   )
 }
 
-// ── Code block with copy button ─────────────────────────────────────────────
+// ── Detect if a code block can be visualised ───────────────────────────────────────
+type VisualType = 'chart' | 'graph' | 'matplotlib' | null
+
+function detectVisualType(lang: string, content: string): VisualType {
+  if (lang === 'chart' || lang.startsWith('chart:')) return 'chart'
+  if (lang === 'graph' || lang.startsWith('graph:')) return 'graph'
+  if (lang === 'json' || lang === '') {
+    try {
+      const obj = JSON.parse(content.trim())
+      if (obj.type && Array.isArray(obj.data)) return 'chart'
+      if (obj.functions || obj.fn) return 'graph'
+    } catch { }
+  }
+  // Detect matplotlib Python code
+  if ((lang === 'python' || lang === 'py') &&
+      (content.includes('plt.plot') || content.includes('plt.scatter') ||
+       content.includes('plt.bar') || content.includes('matplotlib'))) {
+    return 'matplotlib'
+  }
+  return null
+}
+
+// Extract a graph spec from matplotlib Python code
+function matplotlibToGraphSpec(code: string): import('./GraphBlock').GraphSpec | null {
+  // Look for x^2, x**2 type function definitions
+  const fnDefMatch = code.match(/def\s+f\s*\(x\):[\s\S]*?return\s+([^\n#]+)/)
+  if (!fnDefMatch) return null
+  let expr = fnDefMatch[1].trim()
+    .replace(/\*\*/g, '^')          // x**2 → x^2
+    .replace(/np\./g, '')           // np.sin → sin
+    .replace(/math\./g, '')         // math.sin → sin
+    .replace(/x \* x/g, 'x^2')     // x * x → x^2
+  // Try to get title from plt.title
+  const titleMatch = code.match(/plt\.title\(['"]([^'"]+)['"]\)/)
+  const title = titleMatch ? titleMatch[1] : `f(x) = ${expr}`
+  // Try to get x range from np.linspace
+  const linspaceMatch = code.match(/linspace\(([^,]+),([^,]+),/)
+  const xMin = linspaceMatch ? parseFloat(linspaceMatch[1]) : -10
+  const xMax = linspaceMatch ? parseFloat(linspaceMatch[2]) : 10
+  return {
+    title,
+    functions: [{ fn: expr, label: `f(x) = ${expr}` }],
+    xDomain: [isNaN(xMin) ? -10 : xMin, isNaN(xMax) ? 10 : xMax],
+    yDomain: [-20, 100],
+    grid: true,
+  }
+}
+
+// ── Code block with copy + optional visualise toggle ──────────────────────
 function CodeBlock({ content, lang }: { content: string; lang: string }) {
-  const [copied, setCopied] = useState(false)
+  const [copied,     setCopied]     = useState(false)
+  const [visualised, setVisualised] = useState(false)
+  const visualType = detectVisualType(lang, content)
+
   return (
-    <div style={{ position:'relative', margin:'6px 0', borderRadius:6, overflow:'hidden', border:'1px solid var(--border)' }}>
-      {/* Header bar: language label + copy button */}
+    <div style={{ position:'relative', margin:'6px 0', borderRadius:6, overflow:'hidden', border:`1px solid ${visualised ? 'var(--accent)' : 'var(--border)'}` }}>
+      {/* Header */}
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'4px 10px', background:'var(--bg-tertiary)', borderBottom:'1px solid var(--border)' }}>
         <span style={{ fontSize:10, color:'var(--text-muted)', fontFamily:'monospace', userSelect:'none' }}>{lang || 'code'}</span>
-        <button
-          onClick={() => navigator.clipboard.writeText(content).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) })}
-          title="Copy code"
-          style={{ display:'flex', alignItems:'center', gap:4, background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', fontSize:10, padding:'2px 4px', borderRadius:3 }}
-          onMouseEnter={e => (e.currentTarget as HTMLElement).style.color='var(--text-primary)'}
-          onMouseLeave={e => (e.currentTarget as HTMLElement).style.color='var(--text-muted)'}>
-          {copied
-            ? <><Check size={11} style={{ color:'#3dd68c' }}/><span style={{ color:'#3dd68c' }}>Copied!</span></>
-            : <><Copy size={11}/><span>Copy</span></>}
-        </button>
+        <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+          {/* Visualise / Code toggle */}
+          {visualType && (
+            <button onClick={() => setVisualised(v => !v)}
+              title={visualised ? 'Show source code' : `Visualise as ${visualType}`}
+              style={{ display:'flex', alignItems:'center', gap:3, background:'none', border:'none', cursor:'pointer',
+                color: visualised ? 'var(--accent)' : 'var(--text-muted)', fontSize:10, padding:'2px 6px', borderRadius:3,
+                fontWeight: visualised ? 600 : 400 }}
+              onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--accent)'}
+              onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = visualised ? 'var(--accent)' : 'var(--text-muted)'}>
+              {visualised ? (
+                <>
+                  {/* code icon */}
+                  <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M10.478 1.647a.5.5 0 1 0-.956-.294l-4 13a.5.5 0 0 0 .956.294l4-13zM4.854 4.146a.5.5 0 0 1 0 .708L1.707 8l3.147 3.146a.5.5 0 0 1-.708.708l-3.5-3.5a.5.5 0 0 1 0-.708l3.5-3.5a.5.5 0 0 1 .708 0zm6.292 0a.5.5 0 0 0 0 .708L14.293 8l-3.147 3.146a.5.5 0 0 0 .708.708l3.5-3.5a.5.5 0 0 0 0-.708l-3.5-3.5a.5.5 0 0 0-.708 0z"/>
+                  </svg>
+                  <span>Code</span>
+                </>
+              ) : (
+                <>
+                  {/* chart icon */}
+                  <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M0 0h1v15h15v1H0V0zm10 3.5a.5.5 0 0 1 .5-.5h4a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0V4.9l-3.613 4.417a.5.5 0 0 1-.74.037L7.06 6.767l-3.656 5.027a.5.5 0 0 1-.808-.588l4-5.5a.5.5 0 0 1 .758-.06l2.609 2.61L13.445 4H10.5a.5.5 0 0 1-.5-.5z"/>
+                  </svg>
+                  <span>Visualise</span>
+                </>
+              )}
+            </button>
+          )}
+          {/* Copy */}
+          <button onClick={() => navigator.clipboard.writeText(content).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) })}
+            title="Copy code"
+            style={{ display:'flex', alignItems:'center', gap:4, background:'none', border:'none', cursor:'pointer', color:'var(--text-muted)', fontSize:10, padding:'2px 4px', borderRadius:3 }}
+            onMouseEnter={e => (e.currentTarget as HTMLElement).style.color='var(--text-primary)'}
+            onMouseLeave={e => (e.currentTarget as HTMLElement).style.color='var(--text-muted)'}>
+            {copied
+              ? <><Check size={11} style={{ color:'#3dd68c' }}/><span style={{ color:'#3dd68c' }}>Copied!</span></>
+              : <><Copy size={11}/><span>Copy</span></>}
+          </button>
+        </div>
       </div>
-      <code style={{ display:'block', background:'var(--bg-primary)', padding:'10px 14px', fontSize:12, fontFamily:'monospace', overflowX:'auto', lineHeight:1.6, color:'var(--text-primary)', whiteSpace:'pre' }}>{content}</code>
+      {/* Body */}
+      {visualised && visualType === 'chart' && <ChartBlock raw={content}/>}
+      {visualised && visualType === 'graph' && <GraphBlock raw={content}/>}
+      {visualised && visualType === 'matplotlib' && (() => {
+        const spec = matplotlibToGraphSpec(content)
+        if (!spec) return (
+          <div style={{ padding:'12px 14px', fontSize:12, color:'var(--text-muted)', background:'var(--bg-primary)' }}>
+            Could not extract graph from this matplotlib code. Try asking the model to output a ` ```graph` block instead.
+          </div>
+        )
+        return <GraphBlock raw="" spec={spec}/>
+      })()}
+      {!visualised && (
+        <code style={{ display:'block', background:'var(--bg-primary)', padding:'10px 14px', fontSize:12, fontFamily:'monospace', overflowX:'auto', lineHeight:1.6, color:'var(--text-primary)', whiteSpace:'pre' }}>{content}</code>
+      )}
     </div>
   )
 }
@@ -180,7 +264,7 @@ const MarkdownContent = React.memo(function MarkdownContent({ content }: { conte
 
 // MathAwareContent is also memoized — parseContent is expensive for long responses
 const MathAwareContent = React.memo(function MathAwareContent({ content }: { content: string }) {
-  const segments: Segment[] = parseContent(content)
+  const segments: Segment[] = parseContent(preprocessContent(content))
   return (
     <div style={{ lineHeight:1.7 }}>
       {segments.map((seg, i) => {
@@ -342,22 +426,38 @@ function AgentBubble({ msg, onReload, rootPath, userPrompt, autoApply }: { msg: 
 
   async function handleApply(patch: FilePatch) {
     if (appliedIds.has(patch.id)) return
-    const fullPath = patch.path.startsWith('/') ? patch.path
-      : rootPath ? `${rootPath}/${patch.path}` : patch.path
-    console.log('[Apply] patch.path:', patch.path, '| rootPath:', rootPath, '| fullPath:', fullPath)
+
+    // Chat session (no rootPath) — open save dialog instead of writing to project
+    if (!rootPath) {
+      try {
+        const filePath = await save({
+          defaultPath: patch.path.split('/').pop() ?? patch.path,
+          filters: [{ name: 'All files', extensions: ['*'] }],
+        })
+        if (!filePath) return  // user cancelled
+        const res = await fetch('http://localhost:3001/project/file', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: filePath, content: patch.content }),
+        })
+        if (!res.ok) throw new Error(`Save failed: ${res.status}`)
+        const all = loadApplied(); all.add(patch.id); saveApplied(all); setAppliedIds(new Set(all))
+      } catch (err: any) {
+        alert(`Save failed: ${err?.message ?? err}`)
+      }
+      return
+    }
+
+    // Project session — write directly to project directory
+    const fullPath = patch.path.startsWith('/') ? patch.path : `${rootPath}/${patch.path}`
     const res = await fetch('http://localhost:3001/project/file', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: fullPath, content: patch.content }),
     })
-    console.log('[Apply] server response:', res.status, res.ok)
     if (!res.ok) {
       const errText = await res.text().catch(() => 'unknown error')
       throw new Error(`Server ${res.status}: ${errText}`)
     }
-    const all = loadApplied()
-    all.add(patch.id)
-    saveApplied(all)
-    setAppliedIds(new Set(all))
+    const all = loadApplied(); all.add(patch.id); saveApplied(all); setAppliedIds(new Set(all))
   }
   return (
     <div style={{display:'flex',flexDirection:'column',gap:3}}
@@ -366,6 +466,7 @@ function AgentBubble({ msg, onReload, rootPath, userPrompt, autoApply }: { msg: 
       {displayContent && <div className="msg-agent"><MarkdownContent content={displayContent}/></div>}
       {patches.filter(p => !rejected.has(p.id)).map(p => (
         <FilePatchCard key={p.id} patch={p} alreadyApplied={appliedIds.has(p.id)}
+          isDownload={!rootPath}
           onApply={handleApply} onReject={id => setRejected(r => new Set([...r, id]))}/>
       ))}
       <div style={{display:'flex',alignItems:'center',gap:6}}>

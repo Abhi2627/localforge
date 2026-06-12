@@ -48,9 +48,34 @@ const COLORS = ['#569cd6', '#3dd68c', '#f59e0b', '#ce9178', '#d670d6', '#4ec9b0'
 
 // ── Safe expression evaluator ─────────────────────────────────────────────────
 // Replaces ^ with ** and common math names, then uses Function()
+// Also handles LaTeX-style expressions that models sometimes output
+function sanitizeFnExpr(expr: string): string {
+  let e = expr
+    // Strip LaTeX formatting that leaks into fn expressions
+    .replace(/\\frac\{([^}]*)\}\{([^}]*)\}/g, '($1)/($2)')   // \frac{a}{b} → (a)/(b)
+    .replace(/\\sqrt\{([^}]*)\}/g, 'sqrt($1)')                // \sqrt{x} → sqrt(x)
+    .replace(/\\left\(/g, '(').replace(/\\right\)/g, ')')     // \left( → (
+    .replace(/\\left\[/g, '[').replace(/\\right\]/g, ']')
+    .replace(/\\cdot/g, '*')                                   // \cdot → *
+    .replace(/\\times/g, '*')                                  // \times → *
+    // Remove \( and \) wrappers (inline math delimiters)
+    .replace(/\\\(/g, '').replace(/\\\)/g, '')
+    .replace(/\\\[/g, '').replace(/\\\]/g, '')
+    // Strip remaining \commands (but NOT ^ which is exponentiation)
+    .replace(/\\frac/g, '').replace(/\\sqrt/g, 'sqrt')
+    .replace(/\\[a-zA-Z]+/g, '')                               // remove remaining \commands
+    // Remove subscripts: x_{0} → x, x_i → x
+    .replace(/_\{[^}]*\}/g, '').replace(/_[a-z0-9]/g, '')
+    // { } → ( ) for grouping
+    .replace(/\{/g, '(').replace(/\}/g, ')')
+    // Clean up empty parens left by stripping
+    .replace(/\(\)/g, '')
+  return e
+}
+
 function buildEvaluator(expr: string, paramNames: string[]): ((vars: Record<string, number>) => number) | null {
   try {
-    let e = expr
+    let e = sanitizeFnExpr(expr)
       .replace(/\^/g, '**')
       .replace(/\bsin\b/g, 'Math.sin')
       .replace(/\bcos\b/g, 'Math.cos')
@@ -187,9 +212,13 @@ function CanvasGraph({ spec, params, width, height }: CanvasGraphProps) {
 
     // Plot each function
     const steps = width * 2
+    let anyPlotted = false
     ;(spec.functions ?? []).forEach((f, fi) => {
       const evaluator = buildEvaluator(f.fn, paramNames)
-      if (!evaluator) return
+      if (!evaluator) {
+        console.warn('[GraphBlock] Failed to build evaluator for:', f.fn)
+        return
+      }
       const allParams = { ...params }
       ctx.strokeStyle = f.color ?? COLORS[fi % COLORS.length]
       ctx.lineWidth   = 2
@@ -204,7 +233,19 @@ function CanvasGraph({ spec, params, width, height }: CanvasGraphProps) {
         if (!started) { ctx.moveTo(cx, cy); started = true } else ctx.lineTo(cx, cy)
       }
       ctx.stroke()
+      anyPlotted = true
     })
+
+    // If nothing was plotted, show a helpful error message on the canvas
+    if (!anyPlotted && spec.functions.length > 0) {
+      ctx.fillStyle = '#555'
+      ctx.font = '12px monospace'
+      ctx.textAlign = 'center'
+      ctx.fillText('Could not evaluate: ' + (spec.functions[0]?.fn ?? '').slice(0, 50), width / 2, height / 2 - 10)
+      ctx.font = '10px monospace'
+      ctx.fillStyle = '#444'
+      ctx.fillText('Check that all variables are defined as parameters', width / 2, height / 2 + 10)
+    }
 
     // Crosshair + tooltip at mouse position
     if (mouse) {

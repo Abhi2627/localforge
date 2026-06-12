@@ -39,7 +39,7 @@ export default function SetupGate({ onComplete }: Props) {
     setState(s => ({ ...s, checking: true }))
     try {
       const [modelsRes, settingsRes] = await Promise.all([
-        fetch('http://localhost:3001/ollama/models').catch(() => null),
+        fetch('http://localhost:3001/models').catch(() => null),
         fetch('http://localhost:3001/settings').catch(() => null),
       ])
       const modelsData   = modelsRes?.ok   ? await modelsRes.json()   : {}
@@ -69,7 +69,7 @@ export default function SetupGate({ onComplete }: Props) {
   async function pullModel(modelName: string) {
     setPulling(modelName); setPullProgress('Starting download…')
     try {
-      const res = await fetch('http://localhost:3001/ollama/pull', {
+      const res = await fetch('http://localhost:3001/models/pull', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: modelName }),
       })

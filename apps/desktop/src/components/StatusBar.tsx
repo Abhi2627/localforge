@@ -20,13 +20,14 @@ function useGitBranch(rootPath?: string) {
     async function fetchBranch() {
       try {
         const enc  = encodeURIComponent
-        const res  = await fetch(`http://localhost:3001/project/git/status?sessionId=__status__&rootPath=${enc(rootPath as string)}`)
+        const res  = await fetch(`http://localhost:3001/git/direct/status?rootPath=${enc(rootPath as string)}`)
         if (!res.ok) return
-        const data = await res.json()
-        setBranch(data.branch ?? data.currentBranch ?? '')
-        setDirty((data.staged?.length ?? 0) + (data.unstaged?.length ?? 0) > 0)
-        setAhead(data.ahead  ?? 0)
-        setBehind(data.behind ?? 0)
+        const data   = await res.json()
+        const status = data.status ?? data
+        setBranch(status.branch ?? '')
+        setDirty((status.staged?.length ?? 0) + (status.unstaged?.length ?? 0) > 0)
+        setAhead(status.ahead  ?? 0)
+        setBehind(status.behind ?? 0)
       } catch { }
     }
     fetchBranch()

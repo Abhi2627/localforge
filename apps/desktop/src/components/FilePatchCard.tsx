@@ -10,12 +10,13 @@ export interface FilePatch {
 
 interface Props {
   patch:         FilePatch
-  alreadyApplied?: boolean   // parent tells us this was already applied (survives re-render)
+  alreadyApplied?: boolean
+  isDownload?:   boolean   // true in chat sessions — shows "Save..." instead of "Apply"
   onApply:       (patch: FilePatch) => Promise<void>
   onReject:      (id: string) => void
 }
 
-export function FilePatchCard({ patch, alreadyApplied = false, onApply, onReject }: Props) {
+export function FilePatchCard({ patch, alreadyApplied = false, isDownload = false, onApply, onReject }: Props) {
   const [expanded,  setExpanded]  = useState(false)
   const [applying,  setApplying]  = useState(false)
   const [applied,   setApplied]   = useState(alreadyApplied)
@@ -108,7 +109,7 @@ export function FilePatchCard({ patch, alreadyApplied = false, onApply, onReject
 
             <button onClick={handleApply} disabled={applying}
               style={{ display:'flex', alignItems:'center', gap:4, padding:'4px 10px', background:'var(--accent)', border:'none', borderRadius:5, color:'white', fontSize:11, fontWeight:600, cursor:applying?'wait':'pointer', flexShrink:0 }}>
-              {applying ? '...' : <><Check size={11}/>Apply</>}
+              {applying ? '...' : <><Check size={11}/>{isDownload ? 'Save…' : 'Apply'}</>}
             </button>
             <button onClick={handleReject}
               style={{ display:'flex', alignItems:'center', gap:4, padding:'4px 8px', background:'transparent', border:'1px solid var(--border)', borderRadius:5, color:'var(--text-secondary)', fontSize:11, cursor:'pointer', flexShrink:0 }}>

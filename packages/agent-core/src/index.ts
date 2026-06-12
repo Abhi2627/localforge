@@ -114,6 +114,8 @@ function buildSystemPrompt(modelName: string, summary?: string | null, knowledge
     // ── RENDERING CAPABILITIES ──────────────────────────────────────────────
     `RENDERING (use these for rich output):\n` +
     `- Math: \\[ block \\] or \\( inline \\) for LaTeX equations\n` +
+    `  CRITICAL: EVERY math symbol in prose MUST be wrapped — \\(h_\\theta(x)\\) not hθ(x), \\(\\theta_0\\) not θ0\n` +
+    `  NEVER write raw Greek letters or equations outside math delimiters\n` +
     `- Charts: \`\`\`chart {"type":"bar","data":[...]} \`\`\` for data visualisation\n` +
     `- Graphs: \`\`\`graph {"functions":[{"fn":"sin(x)"}]} \`\`\` for interactive function plots\n` +
     `- NEVER link to Desmos, Wolfram, or external tools — render inline\n\n` +

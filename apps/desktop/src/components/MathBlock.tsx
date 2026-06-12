@@ -100,6 +100,38 @@ interface Props {
   errorColor?: string
 }
 
+// ── LaTeX sanitizer ──────────────────────────────────────────────────────────
+// Fixes common model mistakes before passing to KaTeX
+function sanitizeLatex(raw: string): string {
+  let s = raw
+
+  // ── Fix \mathbf_{x} → \mathbf{x} (underscore in wrong place)
+  s = s.replace(/\\(mathbf|mathit|mathrm|mathbb|mathcal|mathsf|boldsymbol|vec|hat|bar|tilde|dot|ddot|text)_\{([^}]+)\}/g, '\\$1{$2}')
+  s = s.replace(/\\(mathbf|mathit|mathrm|mathbb|mathcal|mathsf|boldsymbol|vec|hat|bar|tilde|dot|ddot|text)_([a-zA-Z0-9])/g, '\\$1{$2}')
+
+  // ── Fix \sum{...} → \sum_{...}  (MUST be before greek fix)
+  s = s.replace(/\\(sum|prod|int|oint|iint|iiint|lim|limsup|liminf|bigcup|bigcap|bigoplus|bigotimes)\{/g, '\\$1_{')
+
+  // ── Fix \theta{j} → \theta_{j}, \theta0 → \theta_{0}
+  const sym = 'alpha|beta|gamma|delta|epsilon|varepsilon|zeta|eta|theta|vartheta|iota|kappa|lambda|mu|nu|xi|pi|varpi|rho|varrho|sigma|varsigma|tau|upsilon|phi|varphi|chi|psi|omega|Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Upsilon|Phi|Psi|Omega|nabla|partial|infty'
+  s = s.replace(new RegExp(`\\\\(${sym})\{`, 'g'), '\\$1_{')
+  s = s.replace(new RegExp(`\\\\(${sym})([0-9])(?![a-zA-Z{_])`, 'g'), '\\$1_{$2}')
+
+  // ── Fix multi-char subscripts/superscripts without braces
+  s = s.replace(/\\([a-zA-Z]+)_([a-zA-Z0-9]{2,})(?![{_^\\])/g, '\\$1_{$2}')
+  s = s.replace(/\\([a-zA-Z]+)\^([a-zA-Z0-9]{2,})(?![{_^\\])/g, '\\$1^{$2}')
+
+  // ── Fix bare subscripts: y0→y_{0}, yi→y_{i} (conservative)
+  s = s.replace(/\b([a-zA-Z])([0-9])\b(?!_)/g, '$1_{$2}')
+  s = s.replace(/\b([a-wyzA-Z])(i|j|k|n|m|t)\b(?![_{])/g, '$1_{$2}')
+
+  // ── Fix \\[ / \\] double backslash
+  s = s.replace(/^\\\\\[/, '\\[')
+  s = s.replace(/\\\\\]$/, '\\]')
+
+  return s
+}
+
 export default function MathBlock({ math, block, errorColor = '#f14c4c' }: Props) {
   const ref    = useRef<HTMLSpanElement>(null)
   const [copied, setCopied] = useState(false)
@@ -119,7 +151,7 @@ export default function MathBlock({ math, block, errorColor = '#f14c4c' }: Props
       if (!ref.current) return
       try {
         ref.current.innerHTML = ''
-        katex.render(math.trim(), ref.current, {
+        katex.render(sanitizeLatex(math.trim()), ref.current, {
           displayMode:  block,
           throwOnError: false,
           errorColor,
@@ -163,6 +195,56 @@ export function hasMath(content: string): boolean {
   return /```math[\s\S]*?```|\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\$[^$\n]+?\$|\\\((?:[^\\]|\\[\s\S])+?\\\)/.test(content)
 }
 
+// ── Pre-process content before parsing ───────────────────────────────────────────
+// Fixes model mistakes BEFORE the content is split into segments.
+// This handles cases where math leaks into prose (no delimiters added by model).
+export function preprocessContent(content: string): string {
+  let s = content
+
+  // Auto-wrap obvious math expressions that appear in prose without delimiters.
+  // Pattern: text like hθ(xi)=θ0+θ1xi or θ0+θ1*x that contains Greek/math chars
+  // Strategy: find lines that contain raw Unicode math symbols (θ α β etc) mixed with
+  // Latin letters and operators — wrap the math portions in \(...\)
+
+  // Replace bare Unicode Greek letters + subscript/superscript patterns in prose
+  // Only when NOT already inside a math block
+  const mathChars = /[θαβγδεζηικλμνξπρστυφχψωΘΑΒΓΔΕΖΗΙΚΛΜΝΞΠΡΣΤΥΦΧΨΩ∑∏∫∂∇]/
+
+  // Process line by line — skip lines that are inside \[...\] blocks
+  const lines = s.split('\n')
+  let inMathBlock = false
+  const processed = lines.map(line => {
+    // Track math block boundaries
+    if (line.trim() === '\\[' || line.trim() === '$') { inMathBlock = true; return line }
+    if (line.trim() === '\\]' || (line.trim() === '$' && inMathBlock)) { inMathBlock = false; return line }
+    if (inMathBlock) return line
+    // Skip code blocks and fence lines
+    if (line.startsWith('```') || line.startsWith('    ')) return line
+    // If line contains raw Greek/math Unicode chars, wrap individual tokens
+    if (!mathChars.test(line)) return line
+    // Replace patterns like: hθ(x) θ0 θ1 h_θ followed by operators
+    // Wrap sequences of [a-zA-Z][θαβ...][0-9()=+\-*/^] as inline math
+    return line.replace(
+      /([a-zA-Z]*[θαβγδεζηικλμνξπρστυφχψωΘΑΒΓΔΕΖΗΙΚΛΜΝΞΠΡΣΤΥΦΧΨΩ][a-zA-Z0-9_()=+\-*/^.]*)/g,
+      (match) => {
+        // Don't double-wrap if already inside \(...\)
+        if (match.startsWith('\\(') || match.startsWith('\\[')) return match
+        // Convert Unicode Greek to LaTeX commands
+        const latexified = match
+          .replace(/θ/g, '\\theta').replace(/α/g, '\\alpha').replace(/β/g, '\\beta')
+          .replace(/γ/g, '\\gamma').replace(/δ/g, '\\delta').replace(/σ/g, '\\sigma')
+          .replace(/μ/g, '\\mu').replace(/λ/g, '\\lambda').replace(/π/g, '\\pi')
+          .replace(/ω/g, '\\omega').replace(/Σ/g, '\\Sigma').replace(/Π/g, '\\Pi')
+          .replace(/∑/g, '\\sum').replace(/∫/g, '\\int').replace(/∂/g, '\\partial')
+          .replace(/∇/g, '\\nabla')
+        return `\\(${latexified}\\)`
+      }
+    )
+  })
+
+  return processed.join('\n')
+}
+
 // ── Segment types ─────────────────────────────────────────────────────────────
 export type Segment =
   | { type: 'text';         value: string }
@@ -204,10 +286,22 @@ export function parseContent(content: string): Segment[] {
       continue
     }
 
-    // Block math \[...\] or $...$ on a SINGLE line  e.g.  \[ f(x) = x^2 \]
+    // Block math \[...\] or $...$ — handles BOTH standalone lines AND inline (e.g. "Update step: \[ expr \]")
+    // First check: entire line is the math block
     const singleLineBlock = line.match(/^\s*\\\[(.+)\\\]\s*$/) || line.match(/^\s*\$\$(.+)\$\$\s*$/)
     if (singleLineBlock) {
       segments.push({ type: 'math-block', value: singleLineBlock[1].trim() })
+      i++; continue
+    }
+    // Second check: line has text BEFORE the \[ block (e.g. "Update step: \[ expr \]")
+    const inlineBlockMatch = line.match(/^(.+?)\\\[(.+?)\\\](.*)$/)
+    if (inlineBlockMatch) {
+      const before = inlineBlockMatch[1].trim()
+      const math   = inlineBlockMatch[2].trim()
+      const after  = inlineBlockMatch[3].trim()
+      if (before) segments.push({ type: 'paragraph', value: before })
+      segments.push({ type: 'math-block', value: math })
+      if (after)  segments.push({ type: 'paragraph', value: after })
       i++; continue
     }
 

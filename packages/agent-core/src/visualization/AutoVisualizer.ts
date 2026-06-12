@@ -42,19 +42,29 @@ function upgradeTable(content: string): string {
 }
 
 // ── Detect described functions and auto-add a graph block ─────────────────────
-const FUNCTION_RX = /(?:^|\s)(?:f|g|h|y)\s*\(x\)\s*=\s*([^\n,;.]+)/gim
+const FUNCTION_RX = /(?:^|\s)(?:f|g|h|y)\s*\(x\)\s*=\s*([^\n,;.\\\[\]()]+)/gim
 
 function extractFunctions(content: string): string[] {
+  // Skip if content already has graph blocks or is heavily mathematical (\[ blocks)
+  if (content.includes('```graph') || content.includes('```chart')) return []
+  // Only extract if the function appears in plain prose (not inside math blocks)
+  // Count math blocks — if response has many \[...\] blocks it's already math-rich
+  const mathBlockCount = (content.match(/\\\[/g) ?? []).length
+  if (mathBlockCount > 2) return []  // already math-rich, don't add graph
   const fns: string[] = []
   let m: RegExpExecArray | null
   while ((m = FUNCTION_RX.exec(content)) !== null) {
     const expr = m[1].trim()
-    // Must look like a real math expression with x
-    if (/\bx\b/.test(expr) && /[\^+\-*/]/.test(expr) && expr.length < 80) {
+      .replace(/\\\(/g, '').replace(/\\\)/g, '')  // strip inline math wrappers
+      .trim()
+    // Must look like a real math expression with x and operators
+    if (/\bx\b/.test(expr) && /[\^+\-*/]/.test(expr) && expr.length < 60
+        && !expr.includes('write') && !expr.includes('return')
+        && !expr.startsWith('=')) {
       fns.push(expr)
     }
   }
-  return [...new Set(fns)].slice(0, 4)  // max 4 functions
+  return [...new Set(fns)].slice(0, 4)
 }
 
 // ── Main post-processor ───────────────────────────────────────────────────────
