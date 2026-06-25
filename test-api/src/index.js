@@ -40,6 +40,12 @@ const TodoSchema = z.object({
   completed: z.boolean().optional().default(false),
 })
 
+// Updates are partial — omitting a field must leave it unchanged, not reset it.
+const TodoUpdateSchema = z.object({
+  title:     z.string().min(1).optional(),
+  completed: z.boolean().optional(),
+})
+
 // ── Auth middleware ───────────────────────────────────────────────────────────
 function requireAuth(req, res, next) {
   const header = req.headers.authorization
@@ -94,12 +100,18 @@ app.post('/api/todos', requireAuth, (req, res) => {
 })
 
 app.put('/api/todos/:id', requireAuth, (req, res) => {
-  const result = TodoSchema.safeParse(req.body)
+  const result = TodoUpdateSchema.safeParse(req.body)
   if (!result.success) return res.status(400).json({ errors: result.error.issues })
-  const { title, completed } = result.data
-  const info = db.prepare('UPDATE todos SET title = ?, completed = ? WHERE id = ? AND user_id = ?').run(title, completed ? 1 : 0, req.params.id, req.user.userId)
-  if (info.changes === 0) return res.status(404).json({ error: 'Todo not found' })
-  res.json({ message: 'Updated' })
+  const fields = result.data
+  if (fields.title === undefined && fields.completed === undefined) {
+    return res.status(400).json({ error: 'No fields to update' })
+  }
+  const existing = db.prepare('SELECT * FROM todos WHERE id = ? AND user_id = ?').get(req.params.id, req.user.userId)
+  if (!existing) return res.status(404).json({ error: 'Todo not found' })
+  const title     = fields.title     ?? existing.title
+  const completed = fields.completed ?? !!existing.completed
+  db.prepare('UPDATE todos SET title = ?, completed = ? WHERE id = ? AND user_id = ?').run(title, completed ? 1 : 0, req.params.id, req.user.userId)
+  res.json({ message: 'Updated', id: Number(req.params.id), title, completed })
 })
 
 app.delete('/api/todos/:id', requireAuth, (req, res) => {

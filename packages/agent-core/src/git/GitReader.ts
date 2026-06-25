@@ -57,21 +57,42 @@ export interface FileDiff {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// Strip inherited git-location env vars. If the server process inherits GIT_DIR /
+// GIT_WORK_TREE / GIT_INDEX_FILE etc. (e.g. launched from a git hook, GUI, or an
+// editor's integrated terminal), every git command is silently redirected away
+// from the project repo — which returns empty diffs for files that clearly have
+// changes. This is the root cause of the long-standing "diff view empty for
+// staged files" bug. Building a clean env makes git resolve the repo from `cwd`.
+export function cleanGitEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env }
+  delete env.GIT_DIR
+  delete env.GIT_WORK_TREE
+  delete env.GIT_INDEX_FILE
+  delete env.GIT_OBJECT_DIRECTORY
+  delete env.GIT_ALTERNATE_OBJECT_DIRECTORIES
+  delete env.GIT_COMMON_DIR
+  delete env.GIT_PREFIX
+  delete env.GIT_CEILING_DIRECTORIES
+  env.GIT_TERMINAL_PROMPT = '0'
+  return env
+}
+
 function run(cmd: string, cwd: string): string {
   try {
     return execSync(cmd, {
       cwd, encoding: 'utf8', timeout: 8000, maxBuffer: 1024 * 1024 * 10,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      env: cleanGitEnv(),
     }).trim()
   } catch { return '' }
 }
 
-// execFileSync avoids /bin/sh so %(…) git format strings are never mangled
+// execFileSync avoids /bin/sh so %(…) git format strings are never mangled.
+// `-C cwd` also forces git to resolve the repo from the project dir explicitly.
 function runFile(args: string[], cwd: string): string {
   try {
-    return execFileSync('git', args, {
+    return execFileSync('git', ['-C', cwd, ...args], {
       cwd, encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024 * 20,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      env: cleanGitEnv(),
     }).trim()
   } catch { return '' }
 }

@@ -142,8 +142,11 @@ export class Orchestrator {
   }
 
   async closeProject(projectId: string): Promise<void> {
+    const project = this.projects.get(projectId)
     this.projects.delete(projectId)
-    await disconnectMCP()
+    // Disconnect ONLY this project's MCP client — passing no arg would tear down
+    // the filesystem connection for every other open project too.
+    if (project) await disconnectMCP(project.rootPath)
     console.log(`[Orchestrator] Project closed: ${projectId}`)
   }
 }

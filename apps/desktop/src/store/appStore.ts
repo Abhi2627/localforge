@@ -66,6 +66,7 @@ interface AppState {
   closeSession:       (id: string) => void
   addMessage:         (sessionId: string, msg: Message) => void
   appendStream:       (sessionId: string, taskId: string, chunk: string) => void
+  replaceStream:      (sessionId: string, taskId: string, content: string) => void
   finalizeStream:     (sessionId: string, taskId: string) => void
   addAgent:           (sessionId: string, agent: Agent) => void
   updateAgent:        (sessionId: string, agentId: string, update: Partial<Agent>) => void
@@ -151,14 +152,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     )
   })),
 
-  closeSession: (id) => set(s => ({
-    sessions: s.sessions.filter(sess => sess.id !== id),
-    activeSessionId: null,
-    screen: 'welcome',
-    // Clean up sending/streaming state if the closed session was active
-    sendingSessionId:   s.sendingSessionId   === id ? null : s.sendingSessionId,
-    streamingSessionId: s.streamingSessionId === id ? null : s.streamingSessionId,
-  })),
+  closeSession: (id) => set(s => {
+    // Only reset the active session / screen when the CLOSED tab was the active one.
+    // Closing a background tab must not kick the user back to the welcome screen.
+    const wasActive = s.activeSessionId === id
+    return {
+      sessions: s.sessions.filter(sess => sess.id !== id),
+      activeSessionId: wasActive ? null : s.activeSessionId,
+      screen: wasActive ? 'welcome' : s.screen,
+      // Clean up sending/streaming state if the closed session had work in flight
+      sendingSessionId:   s.sendingSessionId   === id ? null : s.sendingSessionId,
+      streamingSessionId: s.streamingSessionId === id ? null : s.streamingSessionId,
+    }
+  }),
 
   addMessage: (sessionId, msg) => set(s => ({
     sessions: s.sessions.map(sess => {
@@ -183,6 +189,15 @@ export const useAppStore = create<AppState>((set, get) => ({
         content: chunk, taskId,
         timestamp: Date.now(),
       }]}
+    })
+  })),
+
+  replaceStream: (sessionId, taskId, content) => set(s => ({
+    sessions: s.sessions.map(sess => {
+      if (sess.id !== sessionId) return sess
+      return { ...sess, messages: sess.messages.map(m =>
+        m.taskId === taskId && m.type === 'stream' ? { ...m, content } : m
+      )}
     })
   })),
 

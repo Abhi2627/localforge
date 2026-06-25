@@ -70,14 +70,21 @@ export async function chat(
   const decoder = new TextDecoder()
   let fullContent = ''
   let tokenCount  = 0
+  let buffer      = ''
 
   try {
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
-      const lines = decoder.decode(value).split('\n').filter(l => l.startsWith('data: '))
+      // { stream: true } prevents corrupting multi-byte chars split across chunks;
+      // buffer retains an incomplete trailing line until the rest arrives.
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
       for (const line of lines) {
-        const json = line.slice(6).trim()
+        const trimmed = line.trim()
+        if (!trimmed.startsWith('data:')) continue
+        const json = trimmed.slice(5).trim()
         if (json === '[DONE]') continue
         try {
           const chunk = JSON.parse(json) as {

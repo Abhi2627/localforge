@@ -75,6 +75,7 @@ export const api = {
     _taskId:      string,
     onChunk:      (chunk: string) => void,
     audienceMode: string = 'college',
+    onReplace?:   (content: string) => void,
   ): Promise<void> => {
     const res = await fetch(`${BASE}/chat/stream`, {
       method:  'POST',
@@ -87,15 +88,23 @@ export const api = {
     const decoder = new TextDecoder()
     if (!reader) throw new Error('No response body')
 
+    // Buffer across reads — an SSE line can be split across chunk boundaries,
+    // which would otherwise drop tokens (the partial line fails to parse / loses its `data:` prefix).
+    let buffer = ''
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
-      const lines = decoder.decode(value, { stream: true }).split('\n').filter(l => l.startsWith('data: '))
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
       for (const line of lines) {
-        const data = line.slice(6).trim()
+        const trimmed = line.trim()
+        if (!trimmed.startsWith('data:')) continue
+        const data = trimmed.slice(5).trim()
         if (data === '[DONE]') return
         try {
           const p = JSON.parse(data)
+          if (p.type === 'replace' && typeof p.content === 'string') { onReplace?.(p.content); continue }
           if (p.chunk !== undefined) onChunk(p.chunk)
         } catch { }
       }

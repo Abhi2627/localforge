@@ -36,10 +36,14 @@ export class TaskQueue {
     this.isProcessing = true
 
     try {
-      while (this.queue.length > 0) {
+      // Loop until BOTH the queue and the in-flight set are empty. Re-checking
+      // the queue after each await means a task enqueued during the final drain
+      // is picked up here instead of being stranded until the next enqueue().
+      while (this.queue.length > 0 || this.running.size > 0) {
         if (this.mode === 'sequential') {
-          const task = this.queue.shift()!
-          await this.runTask(task)
+          const task = this.queue.shift()
+          if (task) await this.runTask(task)
+          else break
         } else {
           // Parallel mode — fill up to maxParallel slots
           while (this.queue.length > 0 && this.running.size < this.maxParallel) {
@@ -51,16 +55,10 @@ export class TaskQueue {
           }
 
           if (this.running.size > 0) {
-            // Wait for at least one slot to free up
+            // Wait for at least one slot to free up, then re-evaluate
             await Promise.race(this.running.values())
           }
         }
-      }
-
-      // In parallel mode, wait for all remaining running tasks
-      if (this.running.size > 0) {
-        await Promise.all(this.running.values())
-        this.running.clear()
       }
     } finally {
       this.isProcessing = false

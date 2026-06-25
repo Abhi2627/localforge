@@ -85,6 +85,39 @@ function charDiff(oldStr: string, newStr: string): { oldRanges: Array<{start:num
   return { oldRanges: toRanges(oldChanged), newRanges: toRanges(newChanged) }
 }
 
+// ── Fallback synthetic diff ───────────────────────────────────────────────────
+// If the git diff endpoint returns nothing but we DO have a HEAD version and a
+// current version that differ, build the diff ourselves (line-level LCS) so the
+// user sees the change instead of a misleading "No changes". This also covers
+// untracked files (no HEAD version → everything shows as added).
+function synthesizeDiff(oldText: string, newText: string, file: string): FileDiff | null {
+  if (oldText === newText) return null
+  const a = oldText === '' ? [] : oldText.split('\n')
+  const b = newText === '' ? [] : newText.split('\n')
+  const m = a.length, n = b.length
+  const lines: DiffLine[] = []
+
+  if (m + n > 2500) {
+    // Too large for an O(m·n) LCS on a 3s poll — fall back to whole-file replace.
+    for (const c of a) lines.push({ type: 'removed', content: c })
+    for (const c of b) lines.push({ type: 'added',   content: c })
+  } else {
+    const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0))
+    for (let i = m - 1; i >= 0; i--) for (let j = n - 1; j >= 0; j--)
+      dp[i][j] = a[i] === b[j] ? 1 + dp[i + 1][j + 1] : Math.max(dp[i + 1][j], dp[i][j + 1])
+    let i = 0, j = 0
+    while (i < m && j < n) {
+      if (a[i] === b[j])               { lines.push({ type: 'context', content: a[i] }); i++; j++ }
+      else if (dp[i + 1][j] >= dp[i][j + 1]) { lines.push({ type: 'removed', content: a[i] }); i++ }
+      else                             { lines.push({ type: 'added',   content: b[j] }); j++ }
+    }
+    while (i < m) lines.push({ type: 'removed', content: a[i++] })
+    while (j < n) lines.push({ type: 'added',   content: b[j++] })
+  }
+
+  return { file, status: 'modified', hunks: [{ header: `@@ -1,${m} +1,${n} @@`, lines }], isBinary: false }
+}
+
 // ── Changeset builder ─────────────────────────────────────────────────────────
 function buildChangesets(hunks: DiffHunk[]) {
   const removedLines = new Map<number, string>()  // lineNo → content
@@ -388,9 +421,17 @@ export default function DiffEditorPanel({ sessionId, filePath, commitHash }: Pro
         fetch(oldUrl).then(r => r.json()).catch(() => ({ content: '' })),
         fetch(newUrl).then(r => r.json()).catch(() => ({ content: '' })),
       ]).then(([diffData, oldData, newData]) => {
-        setDiffs(diffData.diffs ?? [])
-        setOldContent(oldData.content ?? '')
-        setNewContent(newData.content ?? '')
+        const oldText = oldData.content ?? ''
+        const newText = newData.content ?? ''
+        let resolved: FileDiff[] = diffData.diffs ?? []
+        // Fallback: git reported no diff but the content actually differs — synthesize it.
+        if (resolved.length === 0 && oldText !== newText) {
+          const synth = synthesizeDiff(oldText, newText, filePath)
+          if (synth) resolved = [synth]
+        }
+        setDiffs(resolved)
+        setOldContent(oldText)
+        setNewContent(newText)
         setLoading(false)
       }).catch(e => { setError(e.message); setLoading(false) })
     }

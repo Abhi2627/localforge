@@ -20,7 +20,7 @@ import { scanProjectFiles, generateProjectSummary } from './mcp/ProjectScanner.j
 import { connectMCP } from './mcp/MCPClient.js'
 import { scanProject, updateFile, getSymbols, findSymbol, getSummary, getConflicts, buildAgentContext, clearGraph } from './knowledge/KnowledgeGraph.js'
 import { runEnforcer, getCachedReport, clearReport, buildContractContext } from './knowledge/ContractEnforcer.js'
-import { getStatus, getLog, getBranches, getDiff, getCombinedDiff, getDiffAll, getCommitDiff } from './git/GitReader.js'
+import { getStatus, getLog, getBranches, getDiff, getCombinedDiff, getDiffAll, getCommitDiff, cleanGitEnv } from './git/GitReader.js'
 import { runRAG, injectRAGContext, hasWebTrigger } from './rag/RAGPipeline.js'
 import { autoVisualize } from './visualization/AutoVisualizer.js'
 
@@ -252,7 +252,7 @@ function classifyApiError(err: Error, provider: string, model: string): string {
       '',
       `The API key for **${provider}** is invalid or has been revoked.`,
       '',
-      '**Fix:** Go to **Settings → Cloud** → ${provider} → enter a new API key.',
+      `**Fix:** Go to **Settings → Cloud** → ${provider} → enter a new API key.`,
     ].join('\n')
   }
 
@@ -263,7 +263,7 @@ function classifyApiError(err: Error, provider: string, model: string): string {
       '',
       `The model **${model}** is not available on **${provider}**.`,
       '',
-      '**Fix:** Go to **Settings → Cloud** → ${provider} → select a different model.',
+      `**Fix:** Go to **Settings → Cloud** → ${provider} → select a different model.`,
     ].join('\n')
   }
 
@@ -464,10 +464,10 @@ async function bootstrap() {
     try {
       const { execFileSync } = await import('child_process')
       const ref     = parent === 'true' ? `${hash}^:${file}` : `${hash}:${file}`
-      const content = execFileSync('git', ['show', ref], {
+      const content = execFileSync('git', ['-C', p, 'show', ref], {
         cwd: p, encoding: 'utf8', timeout: 10000,
         maxBuffer: 1024 * 1024 * 20,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+        env: cleanGitEnv(),
       })
       return { content }
     } catch {
@@ -485,10 +485,10 @@ async function bootstrap() {
       // staged=false → HEAD:filepath (last commit)
       const { execFileSync } = await import('child_process')
       const ref     = staged === 'true' ? `:0:${file}` : `HEAD:${file}`
-      const content = execFileSync('git', ['show', ref], {
+      const content = execFileSync('git', ['-C', p, 'show', ref], {
         cwd: p, encoding: 'utf8', timeout: 10000,
         maxBuffer: 1024 * 1024 * 20,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+        env: cleanGitEnv(),
       })
       return { content }
     } catch {
@@ -870,13 +870,11 @@ async function bootstrap() {
         send({ type: 'provider', provider: s.activeProvider, model: modelName })
         let full = ''
         await routedChat(msgs, (chunk) => { full += chunk; send({ chunk }) }, s)
-        // Auto-visualize: upgrade tables → charts, detected functions → graphs
+        // Auto-visualize: upgrade tables → charts, detected functions → graphs.
+        // Upgrades can be inserted mid-text, so replace the whole rendered message
+        // rather than diffing by length (which streamed garbage + dropped the chart).
         const viz = autoVisualize(full)
-        if (viz.upgraded) {
-          // Send the upgraded portions as additional chunks
-          const extra = viz.content.slice(full.length)
-          if (extra.trim()) send({ chunk: extra })
-        }
+        if (viz.upgraded) send({ type: 'replace', content: viz.content })
         reply.raw.write('data: [DONE]\n\n'); reply.raw.end()
         try { saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: viz.content }) } catch { }
       } catch (err: any) {
@@ -914,7 +912,7 @@ async function bootstrap() {
         let full = rag.extractedFacts ?? ''
         await routedChat(msgs, (chunk) => { full += chunk; send({ chunk }) }, s)
         const viz = autoVisualize(full)
-        if (viz.upgraded) { const extra = viz.content.slice(full.length); if (extra.trim()) send({ chunk: extra }) }
+        if (viz.upgraded) send({ type: 'replace', content: viz.content })
         reply.raw.write('data: [DONE]\n\n'); reply.raw.end()
         try { saveMessage({ id: randomUUID(), sessionId, role: 'assistant', content: viz.content }) } catch { }
       } catch (err: any) {
@@ -1016,9 +1014,15 @@ async function bootstrap() {
   })
 
   const PORT = Number(process.env.PORT ?? 3001)
-  await server.listen({ port: PORT, host: '0.0.0.0' })
+  // SECURITY: the agent server exposes unauthenticated filesystem + terminal
+  // endpoints, so it is bound to loopback ONLY. It is never reachable from another
+  // device. This does NOT affect the mobile/tablet preview feature: that scans a QR
+  // pointing at the user's OWN dev server (Vite/Next/etc. on its own port), which is
+  // a separate process — the LocalForge UI itself only ever runs on this machine.
+  const HOST = '127.0.0.1'
+  await server.listen({ port: PORT, host: HOST })
   const s = loadSettings()
-  console.log(`\n🔨 LocalForge  :${PORT}  |  Provider: ${s.activeProvider}  |  LAN: ${LAN_IP}\n`)
+  console.log(`\n🔨 LocalForge  :${PORT}  |  Host: ${HOST} (loopback only)  |  Provider: ${s.activeProvider}  |  Preview LAN IP: ${LAN_IP}\n`)
 }
 
 process.on('SIGINT', async () => { await server.close(); closeDb(); process.exit(0) })

@@ -34,14 +34,12 @@ async function agentChat(
   if (provider === 'custom') { apiKey = keys.customKey ?? ''; baseUrl = keys.customUrl }
   if (!apiKey) throw new Error(`No API key for ${provider}`)
 
-  const { cloudChat: cc } = { cloudChat }
-  const result = await cc(
+  return cloudChat(
     { provider: provider as CloudProvider, apiKey, model, baseUrl },
     messages as any,
     onChunk ? (c: any) => onChunk(c.content) : undefined,
     { temperature: settings.llmDefaults.temperature, maxTokens: settings.llmDefaults.maxTokens }
   )
-  return result
 }
 
 export type AgentRole = 'frontend' | 'backend' | 'fullstack' | 'test' | 'review' | 'docs' | 'devops' | 'database'
@@ -206,8 +204,14 @@ export class AgentSession {
   }
 
   private isPathAllowed(filePath: string): boolean {
+    const resolved = path.resolve(filePath)
+    const root     = path.resolve(this.config.projectPath)
+    // Hard boundary: never write outside the project root, even if the model
+    // emits an absolute path. This also makes an empty allowedPaths mean
+    // "anywhere inside the project" rather than "anywhere on disk".
+    if (resolved !== root && !resolved.startsWith(root + path.sep)) return false
     if (this.config.allowedPaths.length === 0) return true
-    return this.config.allowedPaths.some(allowed => filePath.startsWith(path.resolve(allowed)))
+    return this.config.allowedPaths.some(allowed => resolved.startsWith(path.resolve(allowed)))
   }
 
   async getProjectContext(): Promise<string> {

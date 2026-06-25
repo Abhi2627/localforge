@@ -98,20 +98,26 @@ export async function cloudChat(
 
   const decoder = new TextDecoder()
   let fullContent = ''
+  let buffer = ''
 
   while (true) {
     const { done, value } = await reader.read()
     if (done) break
-    const lines = decoder.decode(value, { stream: true }).split('\n').filter(l => l.startsWith('data: '))
+    // Buffer across reads — an SSE line can be split across chunk boundaries.
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''   // keep the trailing (possibly incomplete) line
     for (const line of lines) {
-      const json = line.slice(6).trim()
+      const trimmed = line.trim()
+      if (!trimmed.startsWith('data:')) continue
+      const json = trimmed.slice(5).trim()
       if (json === '[DONE]') continue
       try {
         const chunk = JSON.parse(json) as {
           choices: Array<{ delta: { content?: string }; finish_reason?: string }>
         }
         const content = chunk.choices[0]?.delta?.content ?? ''
-        const isDone  = chunk.choices[0]?.finish_reason === 'stop'
+        const isDone  = chunk.choices[0]?.finish_reason != null  // 'stop' | 'length' | 'content_filter' | …
         fullContent  += content
         if (content) onChunk({ content, done: isDone })
       } catch { }

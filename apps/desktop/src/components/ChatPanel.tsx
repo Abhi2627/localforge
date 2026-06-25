@@ -69,7 +69,7 @@ function makePatchId(filePath: string, content: string): string {
   return `patch_${Math.abs(hash).toString(36)}`
 }
 
-function extractPatches(content: string, rootPath?: string, userPrompt?: string): { patches: FilePatch[]; cleanContent: string } {
+function extractPatches(content: string, rootPath?: string, _userPrompt?: string): { patches: FilePatch[]; cleanContent: string } {
   const patches: FilePatch[] = []
   // Regex that handles nested backtick blocks inside write: content
   // Matches ```write:path\n...``` where the closing ``` must be at the start of a line
@@ -418,6 +418,7 @@ function AgentBubble({ msg, onReload, rootPath, userPrompt, autoApply }: { msg: 
   // Auto-apply: when autoApply=true, apply all patches immediately on mount (no confirm needed)
   useEffect(() => {
     if (!autoApply || msg.type === 'stream') return  // don't auto-apply while still streaming
+    if (!rootPath) return  // chat sessions have no project root — auto-apply would spam Save dialogs
     for (const patch of patches) {
       if (appliedIds.has(patch.id)) continue  // already applied
       handleApply(patch).catch(() => {})
@@ -674,10 +675,71 @@ function ModelSelector({ selectedModel, models, activeProvider, isOnline, apiKey
   )
 }
 
+// ── Chat navigation rail (DeepSeek-style) ─────────────────────────────────────
+// A stack of small horizontal ticks on the right edge — one per user message.
+// The tick for the message currently in view is highlighted as you scroll, and
+// clicking a tick jumps to that message. Hovering shows a snippet preview.
+function ChatNavRail({ scrollRef, userMsgs, onJump }: {
+  scrollRef: React.RefObject<HTMLDivElement | null>
+  userMsgs:  { id: string; label: string }[]
+  onJump:    (id: string) => void
+}) {
+  const [active,  setActive]  = useState(0)
+  const [hovered, setHovered] = useState<number | null>(null)
+  const ids = userMsgs.map(u => u.id).join('|')
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    let raf = 0
+    const compute = () => {
+      raf = 0
+      const contRect = el.getBoundingClientRect()
+      const lineY = contRect.top + el.clientHeight * 0.28  // the "you are here" line
+      let idx = 0
+      for (let i = 0; i < userMsgs.length; i++) {
+        const node = document.getElementById(`cmsg-${userMsgs[i].id}`)
+        if (!node) continue
+        if (node.getBoundingClientRect().top <= lineY) idx = i
+        else break
+      }
+      setActive(idx)
+    }
+    const onScroll = () => { if (!raf) raf = requestAnimationFrame(compute) }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    compute()
+    return () => { el.removeEventListener('scroll', onScroll); if (raf) cancelAnimationFrame(raf) }
+  }, [scrollRef, ids]) // eslint-disable-line
+
+  if (userMsgs.length < 2) return null
+
+  return (
+    <div style={{ position:'absolute', top:'50%', right:10, transform:'translateY(-50%)', display:'flex', flexDirection:'column', alignItems:'flex-end', gap:5, maxHeight:'72%', overflow:'hidden', zIndex:6, padding:'4px 0' }}>
+      {userMsgs.map((u, i) => {
+        const isActive = i === active
+        const isHover  = hovered === i
+        return (
+          <div key={u.id} style={{ display:'flex', alignItems:'center', justifyContent:'flex-end', gap:8 }}
+            onMouseEnter={() => setHovered(i)} onMouseLeave={() => setHovered(null)}>
+            {isHover && (
+              <div style={{ maxWidth:240, fontSize:11, lineHeight:1.4, color:'var(--text-secondary)', background:'var(--bg-secondary)', border:'1px solid var(--border)', borderRadius:6, padding:'4px 9px', boxShadow:'0 4px 14px rgba(0,0,0,0.45)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                {u.label || 'Message'}
+              </div>
+            )}
+            <button onClick={() => onJump(u.id)} title={u.label} aria-label={`Jump to message ${i + 1}`}
+              style={{ height: isActive ? 3 : 2, width: isActive ? 22 : (isHover ? 18 : 12), borderRadius:2, border:'none', cursor:'pointer', padding:0, flexShrink:0,
+                background: isActive ? 'var(--accent)' : 'var(--text-muted)', opacity: isActive ? 1 : (isHover ? 0.85 : 0.3), transition:'all 0.15s' }}/>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
   const {
     sessions, activeSessionId,
-    addMessage, appendStream, finalizeStream,
+    addMessage, appendStream, replaceStream, finalizeStream,
     selectedModel, models, updateSessionTitle,
     openFiles, activeFile, setActiveFile, closeFile,
     sendingSessionId, streamingSessionId,
@@ -727,6 +789,23 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
     const el = scrollRef.current; if (!el) return
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
     setIsAtBottom(atBottom); userScrolledRef.current = !atBottom
+  }, [])
+
+  // Nav rail — one tick per user message; click to jump to it
+  const userMsgs = useMemo(
+    () => messages.filter(m => m.type === 'user').map(m => ({
+      id: m.id,
+      label: (m.displayContent ?? extractDisplayContent(m.content)).replace(/\s+/g, ' ').trim().slice(0, 80),
+    })),
+    [messages]
+  )
+  const jumpToMsg = useCallback((id: string) => {
+    const node = document.getElementById(`cmsg-${id}`)
+    const cont = scrollRef.current
+    if (!node || !cont) return
+    userScrolledRef.current = true
+    const top = cont.scrollTop + (node.getBoundingClientRect().top - cont.getBoundingClientRect().top) - 16
+    cont.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
   }, [])
   useEffect(() => { if (!userScrolledRef.current) scrollToBottom() }, [messages.length])
   const lastContent = messages[messages.length - 1]?.content
@@ -906,11 +985,13 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
           if (firstChunk) { setSendingSession(null); setStreamingSession(sessionId); firstChunk=false }
           appendStream(sessionId, streamTaskId, chunk)
         },
-        audienceMode
+        audienceMode,
+        content => { replaceStream(sessionId, streamTaskId, content) }
       )
       finalizeStream(sessionId, streamTaskId)
       const live = useAppStore.getState().sessions.find(s => s.id === sessionId)
-      if (isChat && isFirstMsg && live?.title === 'New chat') generateTitle(sessionId, sessionType, rootPath, text)
+      const curTitle = (live?.title ?? '').trim().toLowerCase()
+      if (isChat && isFirstMsg && (curTitle === '' || curTitle === 'new chat')) generateTitle(sessionId, sessionType, rootPath, text)
     } catch (err: any) {
       const errType = classifyError(err.message)
       const msg = errType === 'ram'
@@ -942,6 +1023,13 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
         @keyframes spin    { from { transform:rotate(0deg) } to { transform:rotate(360deg) } }
         @keyframes blink   { 0%,100% { opacity:1 } 50% { opacity:0 } }
         @keyframes toastIn { from { opacity:0; transform:translateX(-50%) translateY(10px) } to { opacity:1; transform:translateX(-50%) translateY(0) } }
+        /* DeepSeek-style: hide the scrollbar entirely — the nav rail IS the scroll
+           indicator + navigation. Scrolling via wheel/trackpad/touch still works.
+           Hiding it also removes the only platform-dependent piece (Windows/Linux
+           render wide classic scrollbars), so the chat looks identical everywhere.
+           scrollbar-width covers WebView2; ::-webkit-scrollbar covers the WebKit webviews. */
+        .chat-scroll { scrollbar-width: none; -ms-overflow-style: none; }
+        .chat-scroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
       `}</style>
 
       {/* Title bar */}
@@ -1039,8 +1127,9 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
         </div>
       ) : (
         <>
-          {/* Messages */}
-          <div ref={scrollRef} onScroll={handleScroll}
+          {/* Messages (relative wrapper hosts the scroll rail overlay) */}
+          <div style={{ position:'relative', flex:1, minHeight:0, display:'flex', flexDirection:'column' }}>
+          <div ref={scrollRef} onScroll={handleScroll} className="chat-scroll"
             style={{ flex:1, overflowY:'auto', padding:'20px 24px', display:'flex', flexDirection:'column', gap:14, minHeight:0 }}>
             {messages.length===0 && !isBusy && (
               <div style={{ margin:'auto', textAlign:'center', color:'var(--text-muted)' }}>
@@ -1057,16 +1146,20 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
             {messages.map((msg, i) => {
               const prevUserMsg = messages.slice(0, i).filter(m => m.type === 'user').pop()
               return (
-                <MessageBubble key={msg.id} msg={msg} onEdit={handleEdit}
-                  rootPath={session?.rootPath}
-                  userPrompt={prevUserMsg?.displayContent ?? prevUserMsg?.content}
-                  autoApply={autoApply}
-                  onReload={i===messages.length-1 && msg.type==='agent' ? handleReload : undefined}
-                />
+                <div key={msg.id} id={`cmsg-${msg.id}`}>
+                  <MessageBubble msg={msg} onEdit={handleEdit}
+                    rootPath={session?.rootPath}
+                    userPrompt={prevUserMsg?.displayContent ?? prevUserMsg?.content}
+                    autoApply={autoApply}
+                    onReload={i===messages.length-1 && msg.type==='agent' ? handleReload : undefined}
+                  />
+                </div>
               )
             })}
             {isSending && !isStreaming && <ThinkingBubble/>}
             <div ref={bottomRef} style={{ height:1 }}/>
+          </div>
+          <ChatNavRail scrollRef={scrollRef} userMsgs={userMsgs} onJump={jumpToMsg}/>
           </div>
 
           {/* Scroll-to-bottom button — sits in flex flow BETWEEN scroll area and input bar */}
