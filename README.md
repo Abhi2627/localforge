@@ -210,7 +210,7 @@ This cycle focused on stability, security, and correctness:
 | **Streaming** | SSE readers buffer partial lines (no more dropped characters); Ollama decodes with `{ stream: true }` (no mangled multi-byte/emoji); auto-visualize replaces message content instead of a broken length-diff |
 | **Graphs** | The renderer auto-scales the Y axis to the function's real range (e.g. `x^2` no longer clipped to ±10); model output is intercepted to convert described functions and "plot it on Desmos" suggestions into real rendered graphs (pure-`x` validation prevents wrong plots) |
 | **Web search** | Wired up the previously-dormant RAG: 🌐 chat toggle + `@web`, live status, clickable source chips. Pluggable provider (Tavily / Brave / DuckDuckGo) selected by configured key — set keys in **Settings → Cloud → Web Search** |
-| **Terminal** | Robust fit (no more 1×1 "tiny terminal") + optional WebGL renderer for crisp text |
+| **Terminal** | Robust fit — retries until the panel is laid out, so it no longer collapses to a 1×1 "tiny terminal" |
 | **Vision / `write:`** | Attaching an image to a non-vision model now warns instead of silently ignoring it; plain code blocks that start with a `// filename` comment are recovered as **inferred** patches (flagged, never auto-applied) |
 | **Misc** | Closing a background tab no longer resets the screen; auto-apply no longer spams save dialogs in plain chats; agent writes are confined to the project root; TaskQueue drain race fixed |
 
@@ -222,7 +222,7 @@ Build artifacts (`resources/server.cjs`, the bundled MCP server, `resources/node
 
 | Bug | Status |
 |---|---|
-| Terminal panel — instance sizing & blurry font | ✅ FIXED — robust fit (retries until the panel is laid out, no more 1×1 terminal) + optional WebGL renderer for crisp text |
+| Terminal panel — instance sizing | ✅ FIXED — robust fit retries until the panel is actually laid out, so it no longer collapses to a 1×1 terminal; scrollbar-aware padding |
 | Graph blocks: small models ignore the `graph` format and suggest Desmos/Wolfram | ✅ MITIGATED — output is now intercepted: described functions (`f(x)=`, `y=`, "plot …", "graph of …") and external-tool suggestions are auto-converted to a real rendered graph (pure-`x` validation prevents wrong plots) |
 
 ---

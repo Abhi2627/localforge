@@ -110,18 +110,6 @@ function XTermInstance({ cwd, active }: { cwd?: string; active: boolean }) {
       term.loadAddon(fitAddon)
       termRef.current = term; fitAddonRef.current = fitAddon
       term.open(containerRef.current)
-
-      // GPU-accelerated rendering for crisp, non-blurry text. Loaded defensively:
-      // if @xterm/addon-webgl isn't installed (or the context is lost) we silently
-      // fall back to the default renderer.
-      try {
-        // @ts-ignore — optional dep declared in package.json; bundled on install
-        const { WebglAddon } = await import('@xterm/addon-webgl')
-        const webgl = new WebglAddon()
-        webgl.onContextLoss(() => { try { webgl.dispose() } catch { } })
-        term.loadAddon(webgl)
-      } catch { /* default renderer */ }
-
       fitWhenReady()
 
       const ws = new WebSocket(`ws://localhost:3001/terminal${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`)
