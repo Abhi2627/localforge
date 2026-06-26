@@ -186,6 +186,9 @@ export default function App() {
               isActive:       false,
             })
           }
+          // NOTE: we deliberately do NOT auto-activate a session here — the app
+          // always opens on the welcome screen. Sessions (with their history) are
+          // loaded into the sidebar; clicking one restores it where you left off.
         })
         .catch(err => console.error('[App] getSessions:', err))
     })

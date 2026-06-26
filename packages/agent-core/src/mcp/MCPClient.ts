@@ -39,7 +39,17 @@ function findMonorepoRoot(startDir: string): string {
 }
 
 const MONOREPO_ROOT = process.env.LOCALFORGE_ROOT ?? findMonorepoRoot(__dirname)
-const MCP_FS_BIN    = path.join(MONOREPO_ROOT, 'node_modules/@modelcontextprotocol/server-filesystem/dist/index.js')
+
+// Resolve the filesystem MCP server entrypoint.
+// Production: build-server.sh bundles it to a single standalone CJS next to the
+// server (no transitive deps needed). Dev: fall back to the node_modules copy.
+function resolveMcpFsBin(): string {
+  const bundled     = path.join(MONOREPO_ROOT, 'mcp-server-filesystem.mjs')
+  const nodeModules = path.join(MONOREPO_ROOT, 'node_modules/@modelcontextprotocol/server-filesystem/dist/index.js')
+  if (fs.existsSync(bundled))     return bundled
+  return nodeModules
+}
+const MCP_FS_BIN = resolveMcpFsBin()
 
 export interface FileEntry {
   name: string
@@ -66,8 +76,12 @@ export async function connectMCP(projectPath: string): Promise<void> {
     throw new Error(`[MCP] server-filesystem binary not found at: ${MCP_FS_BIN}`)
   }
 
+  // Use process.execPath (the absolute path to THIS node binary) instead of the
+  // bare string 'node'. In the packaged app the server runs with a restricted
+  // PATH (the user's node is often under nvm), so 'node' won't resolve and the
+  // MCP child fails to spawn — leaving the project permanently "MCP disconnected".
   const transport = new StdioClientTransport({
-    command: 'node',
+    command: process.execPath,
     args: [MCP_FS_BIN, projectPath]
   })
 
@@ -76,7 +90,17 @@ export async function connectMCP(projectPath: string): Promise<void> {
     { capabilities: {} }
   )
 
-  await client.connect(transport)
+  try {
+    // Guard against a hung handshake — never let connect block forever.
+    await Promise.race([
+      client.connect(transport),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('MCP connect timed out after 10s')), 10000)),
+    ])
+  } catch (err: any) {
+    console.error(`[MCP] Failed to connect filesystem server for ${projectPath} (node=${process.execPath}, bin=${MCP_FS_BIN}):`, err?.message ?? err)
+    try { await client.close() } catch { }
+    throw err
+  }
   clients.set(projectPath, client)
   console.log(`[MCP] Connected to filesystem at: ${projectPath}`)
 }

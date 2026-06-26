@@ -481,12 +481,31 @@ export default function DiffEditorPanel({ sessionId, filePath, commitHash }: Pro
       Failed to load diff: {error}
     </div>
   )
-  if (diffs.length === 0) return (
-    <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', background:'#1e1e1e', gap:8 }}>
-      <GitBranch size={28} style={{ opacity:0.3, color:'#858585' }}/>
-      <div style={{ fontSize:13, color:'#858585' }}>No changes in {filename}</div>
-    </div>
-  )
+  if (diffs.length === 0) {
+    // Distinguish a genuine "no diff" from a failed load. If BOTH the HEAD version
+    // and the working version came back empty, the request failed (bad path, or the
+    // agent server is running an old build) — say so instead of the misleading
+    // "No changes", which previously made every top-of-list file look broken.
+    const loadFailed = !oldContent && !newContent
+    return (
+      <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', background:'#1e1e1e', gap:8, padding:24, textAlign:'center' }}>
+        <GitBranch size={28} style={{ opacity:0.3, color:'#858585' }}/>
+        <div style={{ fontSize:13, color:'#858585' }}>
+          {loadFailed ? `Couldn't load the diff for ${filename}` : `No changes in ${filename}`}
+        </div>
+        {loadFailed && (
+          <div style={{ fontSize:11, color:'#666', maxWidth:520, lineHeight:1.7, textAlign:'left', background:'#252526', border:'1px solid #333', borderRadius:6, padding:'10px 12px', fontFamily:'monospace', wordBreak:'break-all' }}>
+            <div style={{ color:'#888', marginBottom:6, fontFamily:'sans-serif' }}>Diff request parameters (for debugging):</div>
+            <div><span style={{ color:'#569cd6' }}>sessionId:</span> {sessionId || '(none)'}</div>
+            <div><span style={{ color:'#569cd6' }}>session found:</span> {session ? 'yes' : 'NO — not in store'}</div>
+            <div><span style={{ color:'#569cd6' }}>rootPath:</span> {rootPath || '(empty)'}</div>
+            <div><span style={{ color:'#569cd6' }}>filePath:</span> {filePath || '(empty)'}</div>
+            <div><span style={{ color:'#569cd6' }}>resolvedAbs:</span> {resolvedFilePath || '(empty)'}</div>
+          </div>
+        )}
+      </div>
+    )
+  }
 
   const currentDiff = diffs[Math.min(fileIdx, diffs.length-1)]
   if (currentDiff.isBinary) return (

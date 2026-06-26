@@ -90,7 +90,8 @@ export function autoVisualize(content: string): VisualizationResult {
         title:     fns.length === 1 ? `f(x) = ${fns[0]}` : 'Functions',
         functions: fns.map(fn => ({ fn })),
         xDomain:   [-10, 10],
-        yDomain:   [-10, 10],
+        // No fixed yDomain — let the renderer auto-scale Y to the function's actual
+        // range, otherwise curves like x^2 get clipped to [-10,10] and look wrong.
         grid:      true,
       }
       result += `\n\n\`\`\`graph\n${JSON.stringify(spec)}\n\`\`\``

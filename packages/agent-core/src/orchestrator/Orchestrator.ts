@@ -51,8 +51,11 @@ export class Orchestrator {
     const project: Project = { id, name: config.name, rootPath: config.rootPath, agents: [], queue }
     this.projects.set(id, project)
 
-    // Connect MCP to project root
-    await connectMCP(config.rootPath)
+    // Connect MCP to project root — background + best effort. Must NOT be awaited:
+    // a slow/failed MCP connect previously blocked project creation (and file load).
+    connectMCP(config.rootPath).catch(err =>
+      console.error(`[Orchestrator] MCP connect (background) failed for ${config.rootPath}:`, err?.message ?? err)
+    )
     console.log(`[Orchestrator] Project created: ${config.name} (${id})`)
 
     // Run crash recovery for this project
@@ -63,6 +66,28 @@ export class Orchestrator {
     }
 
     return project
+  }
+
+  // Recreate AgentSession objects from the DB for a project. The orchestrator is
+  // in-memory, so after an app restart a reopened project has no agents until we
+  // rehydrate them from the persisted `agents` table.
+  rehydrateAgents(projectId: string): number {
+    const project = this.projects.get(projectId)
+    if (!project || project.agents.length > 0) return project?.agents.length ?? 0
+    let rows: Array<{ id: string; name: string; role: string }> = []
+    try {
+      rows = getDb().prepare('SELECT id, name, role FROM agents WHERE project_id = ?').all(projectId) as any[]
+    } catch { return 0 }
+    for (const r of rows) {
+      const session = new AgentSession({
+        id: r.id, name: r.name, role: r.role as AgentRole,
+        projectId, projectPath: project.rootPath, allowedPaths: [],
+      })
+      session.onEvent(event => this.globalListeners.forEach(l => l(projectId, event)))
+      project.agents.push(session)
+    }
+    if (rows.length > 0) console.log(`[Orchestrator] Rehydrated ${rows.length} agent(s) for project ${projectId}`)
+    return project.agents.length
   }
 
   addAgent(projectId: string, agentConfig: Omit<AgentConfig, 'projectId'>): AgentSession {

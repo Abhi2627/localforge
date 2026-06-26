@@ -20,7 +20,7 @@ import { scanProjectFiles, generateProjectSummary } from './mcp/ProjectScanner.j
 import { connectMCP } from './mcp/MCPClient.js'
 import { scanProject, updateFile, getSymbols, findSymbol, getSummary, getConflicts, buildAgentContext, clearGraph } from './knowledge/KnowledgeGraph.js'
 import { runEnforcer, getCachedReport, clearReport, buildContractContext } from './knowledge/ContractEnforcer.js'
-import { getStatus, getLog, getBranches, getDiff, getCombinedDiff, getDiffAll, getCommitDiff, cleanGitEnv } from './git/GitReader.js'
+import { getStatus, getLog, getBranches, getDiff, getCombinedDiff, getDiffAll, getCommitDiff, cleanGitEnv, isGitRepo } from './git/GitReader.js'
 import { runRAG, injectRAGContext, hasWebTrigger } from './rag/RAGPipeline.js'
 import { autoVisualize } from './visualization/AutoVisualizer.js'
 
@@ -116,9 +116,17 @@ function buildSystemPrompt(modelName: string, summary?: string | null, knowledge
     `- Math: \\[ block \\] or \\( inline \\) for LaTeX equations\n` +
     `  CRITICAL: EVERY math symbol in prose MUST be wrapped — \\(h_\\theta(x)\\) not hθ(x), \\(\\theta_0\\) not θ0\n` +
     `  NEVER write raw Greek letters or equations outside math delimiters\n` +
-    `- Charts: \`\`\`chart {"type":"bar","data":[...]} \`\`\` for data visualisation\n` +
-    `- Graphs: \`\`\`graph {"functions":[{"fn":"sin(x)"}]} \`\`\` for interactive function plots\n` +
-    `- NEVER link to Desmos, Wolfram, or external tools — render inline\n\n` +
+    `- Charts: \`\`\`chart {"type":"bar","data":[{"label":"A","value":10}]} \`\`\` for data visualisation\n` +
+    `- Tables: use normal GitHub-flavoured markdown tables for tabular data\n` +
+    `- Graphs: \`\`\`graph {"functions":[{"fn":"x^2 - 3*x"}]} \`\`\` for plotting math functions\n` +
+    `  GRAPH RULES (follow exactly, or the plot will be wrong):\n` +
+    `   • The "fn" string is PLAIN math, NOT LaTeX: use x^2, sqrt(x), sin(x), exp(x), abs(x), log(x), pi, e\n` +
+    `   • Use * for multiplication (2*x, not 2x) and ^ for powers (x^2)\n` +
+    `   • Do NOT put \\(, \\frac, or LaTeX inside "fn". Do NOT set yDomain — it auto-scales\n` +
+    `   • You may add an interactive parameter: {"functions":[{"fn":"a*x^2"}],"params":[{"name":"a","min":-5,"max":5,"value":1}]}\n` +
+    `- WHENEVER you discuss, derive, or are asked to plot/visualise a function, you MUST include a \`\`\`graph\`\`\` block so the user sees the actual curve\n` +
+    `- If you also show Python/matplotlib (or MATLAB) code, ADD a \`\`\`graph\`\`\` block beside it — the code is illustrative, the graph block is the real rendered plot\n` +
+    `- NEVER link to or suggest Desmos, Wolfram, GeoGebra, or external tools — always render inline with \`\`\`graph\`\`\`\n\n` +
 
     // ── VISUALIZATION DECISION RULES ────────────────────────────────────────
     `WHEN TO USE EACH FORMAT:\n` +
@@ -450,6 +458,33 @@ async function bootstrap() {
     return { diffs: getDiff(p, req.query.file, req.query.staged === 'true') }
   })
 
+  // ── Git diff DEBUG — reports exactly what the server sees for a file ─────────
+  // Open in a browser:  http://localhost:3001/git/direct/debug?rootPath=<ROOT>&file=<relpath>
+  server.get<{ Querystring: { rootPath: string; file: string } }>('/git/direct/debug', async (req) => {
+    const { rootPath: p, file } = req.query
+    const { execFileSync } = await import('child_process')
+    const path_ = await import('path')
+    const fs_   = await import('fs')
+    const result: any = { rootPath: p, file, serverBuild: 'cleanGitEnv+-C present' }
+    try { result.isGitRepo = isGitRepo(p) } catch (e: any) { result.isGitRepo = `err: ${e?.message}` }
+    const abs = file && path_.isAbsolute(file) ? file : path_.join(p ?? '', file ?? '')
+    result.resolvedAbsPath  = abs
+    result.fileExistsOnDisk = (() => { try { return fs_.existsSync(abs) } catch { return false } })()
+    try { result.projectFileBytes = fs_.readFileSync(abs, 'utf8').length } catch (e: any) { result.projectFileBytes = `err: ${e?.message}` }
+    const rawGit = (args: string[]) => {
+      try {
+        const stdout = execFileSync('git', ['-C', p, ...args], { encoding: 'utf8', env: cleanGitEnv(), maxBuffer: 1024 * 1024 * 20 })
+        return { ok: true, stdoutBytes: stdout.length, head: stdout.slice(0, 200) }
+      } catch (e: any) {
+        return { ok: false, exitCode: e?.status, stderr: (e?.stderr?.toString?.() ?? '').slice(0, 400), message: (e?.message ?? '').slice(0, 200) }
+      }
+    }
+    result.gitDiffHEAD    = rawGit(['diff', 'HEAD', '--', file])
+    result.gitShowHEAD    = rawGit(['show', `HEAD:${file}`])
+    result.getDiffAllCount = (() => { try { return getDiffAll(p, file).length } catch (e: any) { return `err: ${e?.message}` } })()
+    return result
+  })
+
   // Commit diff — all files changed in a commit
   server.get<{ Params: { hash: string }; Querystring: { rootPath: string } }>('/git/direct/commit/:hash', async (req) => {
     const { rootPath: p } = req.query; const { hash } = req.params
@@ -584,16 +619,26 @@ async function bootstrap() {
   // ── Project ────────────────────────────────────────────────────────────────
   server.post<{ Body: { sessionId: string; rootPath: string } }>('/project/open', async (req) => {
     const { sessionId, rootPath } = req.body; if (!rootPath) return { success: false, message: 'rootPath required' }
-    await connectMCP(rootPath)
-    mcpConnected.add(rootPath)
-    // Create or re-use an orchestrator project with the SAME id as the session
-    // so AgentModal can pass session.id as projectId directly
-    try {
-      orchestrator.getProject(sessionId)
-    } catch {
-      await orchestrator.createProject({ id: sessionId, name: rootPath.split('/').pop() ?? sessionId, rootPath })
-    }
+
+    // Scan files FIRST and return them. This must NOT depend on MCP or the
+    // orchestrator — both can fail or hang, and previously a failed MCP connect
+    // aborted the whole request, leaving the project stuck on "No files yet".
     const scan = scanProjectFiles(rootPath)
+
+    // Orchestrator project + agent rehydration — best effort, never blocks files
+    try {
+      // Create or re-use an orchestrator project with the SAME id as the session
+      // so AgentModal can pass session.id as projectId directly
+      try { orchestrator.getProject(sessionId) }
+      catch { await orchestrator.createProject({ id: sessionId, name: rootPath.split('/').pop() ?? sessionId, rootPath }) }
+      try { orchestrator.rehydrateAgents(sessionId) } catch { }
+    } catch (e: any) { console.error('[project/open] orchestrator init failed:', e?.message ?? e) }
+
+    // MCP connect — background + best effort, can't block or hang the request
+    connectMCP(rootPath)
+      .then(() => { mcpConnected.add(rootPath); broadcast({ type: 'mcp_status', path: rootPath, connected: true }) })
+      .catch(e => console.error('[project/open] MCP connect failed:', e?.message ?? e))
+
     setImmediate(() => { scanProject(sessionId, rootPath); try { runEnforcer(sessionId, rootPath) } catch { } broadcast({ type: 'knowledge_ready', sessionId }) })
     generateProjectSummary(sessionId, rootPath, scan).then(summary => broadcast({ type: 'project_summary', sessionId, summary }))
     return { success: true, isEmpty: scan.isEmpty, fileList: scan.fileList, fileTree: scan.fileTree, fileCount: scan.fileList.length }

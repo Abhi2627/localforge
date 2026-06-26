@@ -180,7 +180,7 @@ function matplotlibToGraphSpec(code: string): import('./GraphBlock').GraphSpec |
     title,
     functions: [{ fn: expr, label: `f(x) = ${expr}` }],
     xDomain: [isNaN(xMin) ? -10 : xMin, isNaN(xMax) ? 10 : xMax],
-    yDomain: [-20, 100],
+    // yDomain omitted — GraphBlock auto-scales Y to the function's real range.
     grid: true,
   }
 }

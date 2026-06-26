@@ -28,6 +28,7 @@
     "targets": "all",
     "resources": {
       "resources/server.cjs": "server.cjs",
+      "resources/mcp-server-filesystem.mjs": "mcp-server-filesystem.mjs",
       "resources/node_modules": "node_modules"
     },
     "icon": [

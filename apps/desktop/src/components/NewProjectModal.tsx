@@ -18,7 +18,7 @@ async function pickFolder(): Promise<string | null> {
 }
 
 export default function NewProjectModal({ onClose }: Props) {
-  const { models, selectedModel, addSession, setActiveSession, setAllFiles } = useAppStore()
+  const { models, selectedModel, addSession, setActiveSession, setAllFiles, sessions } = useAppStore()
   const [rootPath, setRootPath] = useState('')
   const [model, setModel]       = useState(selectedModel || models[0]?.name || '')
   const [loading, setLoading]   = useState(false)
@@ -39,6 +39,21 @@ export default function NewProjectModal({ onClose }: Props) {
     setError('')
 
     try {
+      // Reuse an existing project session for the SAME folder instead of creating
+      // a new empty one — otherwise reopening a project loses its chat history.
+      const norm = (p?: string) => (p ?? '').replace(/\\/g, '/').replace(/\/+$/, '')
+      const target = norm(rootPath.trim())
+      const existing = sessions.find(s => s.type === 'project' && norm(s.rootPath) === target)
+      if (existing) {
+        setActiveSession(existing.id)
+        // Re-scan files + reconnect MCP/orchestrator for the restored session
+        api.openProject(existing.id, rootPath.trim())
+          .then(result => { if (result.fileList?.length) setAllFiles(existing.id, result.fileList) })
+          .catch(console.error)
+        onClose()
+        return
+      }
+
       const id = nanoid()
 
       // Register with backend orchestrator first (needed for agent creation)

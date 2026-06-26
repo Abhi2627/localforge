@@ -138,6 +138,7 @@ cd apps/desktop && npm run dev
 - **Interactive graph renderer** — ` ```graph ` blocks: Canvas-based plotter with zoom/pan, crosshair tooltip, real-time parameter sliders (Desmos-like) — *note: local models may not use this automatically; cloud models do*
 - **Clickable links** — every URL/link shows confirmation dialog before opening in default browser; copy icon beside each link
 - **Code blocks** — language label + Copy button (like Claude.ai)
+- **Chat navigation rail** — DeepSeek-style stacked ticks on the right edge (one per message); the current message highlights as you scroll, hover previews it, click to jump. Scrollbar hidden for an identical look on macOS/Windows/Linux
 - File chips, agent file write + apply, Auto-Apply mode
 - Per-session provider + effort levels (Low/Med/High/Max) + Thinking toggle (Claude)
 - MCP indicator, project context injection, per-message copy/edit/regenerate
@@ -195,13 +196,30 @@ The multi-agent orchestration pipeline is implemented but not yet fully tested e
 
 ---
 
+## Recent fixes
+
+This cycle focused on stability, security, and correctness:
+
+| Area | Fix |
+|---|---|
+| **Git diff** | Root cause of the "diff empty / no changes" bug found and fixed — `git status -z` output was being `.trim()`-ed, which stripped the leading status space off the **first** entry and shifted its path by one char (`apps→pps`), so the top file in the list never resolved. Also: git now runs with a cleaned environment (`GIT_DIR`/`GIT_WORK_TREE`/etc. stripped) and `git -C <root>`, plus a content-based fallback diff |
+| **Project reopen** | Files, chat history and agents now restore correctly; "Open project" reuses the existing session for a folder instead of creating an empty duplicate; agents are rehydrated from the DB |
+| **MCP** | Decoupled from project open (file scan no longer blocked by MCP), spawned via `process.execPath` with a connect timeout, and bundled as a standalone ESM file for the packaged app. One independent, folder-sandboxed MCP server **per project** |
+| **Security** | Agent server now binds to `127.0.0.1` only (loopback). The mobile/tablet preview is unaffected — it targets your project's own dev-server port, not `:3001` |
+| **Streaming** | SSE readers buffer partial lines (no more dropped characters); Ollama decodes with `{ stream: true }` (no mangled multi-byte/emoji); auto-visualize replaces message content instead of a broken length-diff |
+| **Graphs** | The renderer auto-scales the Y axis to the function's real range (e.g. `x^2` no longer clipped to ±10); the model is prompted to emit a `graph` block alongside any Python/MATLAB code |
+| **Misc** | Closing a background tab no longer resets the screen; auto-apply no longer spams save dialogs in plain chats; agent writes are confined to the project root; TaskQueue drain race fixed |
+
+Build artifacts (`resources/server.cjs`, the bundled MCP server, `resources/node_modules`) are now git-ignored.
+
+> **Note for testing:** run only one agent server on port `3001` at a time — either the built app **or** `npm run dev`, never both. A stale server on `:3001` will silently serve old code.
+
 ## Known Bugs (Parked)
 
 | Bug | Status |
 |---|---|
-| Diff view empty for some staged files | PARKED |
 | Terminal panel UI polish (instance sizing, font rendering) | PARKED |
-| Graph blocks: local models (qwen2.5-coder) ignore `graph` format and suggest Desmos instead — cloud models work correctly | PARKED — needs post-processing interceptor |
+| Graph blocks: small local models (qwen2.5-coder 1.5b/7b) may ignore the `graph` format — rendering is correct, but emitting the block depends on the model (use ≥14b or cloud) | PARTIAL — renderer fixed + prompt strengthened |
 
 ---
 

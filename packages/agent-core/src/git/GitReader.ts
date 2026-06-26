@@ -86,6 +86,20 @@ function run(cmd: string, cwd: string): string {
   } catch { return '' }
 }
 
+// Like run() but does NOT trim. Required for `git status --porcelain -z`: its
+// first entry begins with a status code that includes a leading space (e.g. " M ").
+// Trimming strips that leading space off the FIRST entry only, shifting the parse
+// by one char so the first file's path loses its first letter (apps → pps). This
+// is why the top file in the changes list always failed to diff.
+function runRaw(cmd: string, cwd: string): string {
+  try {
+    return execSync(cmd, {
+      cwd, encoding: 'utf8', timeout: 8000, maxBuffer: 1024 * 1024 * 10,
+      env: cleanGitEnv(),
+    })
+  } catch { return '' }
+}
+
 // execFileSync avoids /bin/sh so %(…) git format strings are never mangled.
 // `-C cwd` also forces git to resolve the repo from the project dir explicitly.
 function runFile(args: string[], cwd: string): string {
@@ -119,7 +133,8 @@ export function getStatus(rootPath: string): GitStatus | null {
   if (!isGitRepo(rootPath)) return null
 
   const staged: FileChange[] = [], unstaged: FileChange[] = [], untracked: string[] = []
-  const raw = run('git status --porcelain=v1 -u -z', rootPath)
+  // runRaw (no trim) — trimming corrupts the first -z entry's leading status space.
+  const raw = runRaw('git status --porcelain=v1 -u -z', rootPath)
   if (!raw) return buildCleanStatus(rootPath)
 
   const entries = raw.split('\0').filter(Boolean)

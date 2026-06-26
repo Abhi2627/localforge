@@ -121,6 +121,30 @@ function buildEvaluator(expr: string, paramNames: string[]): ((vars: Record<stri
   } catch { return null }
 }
 
+// Compute the initial view. If yDomain isn't given, auto-scale Y by sampling the
+// functions across the x-domain — otherwise everything is clamped to [-10,10] and
+// curves like x^2 (0→100) render clipped and "wrong".
+function computeInitialView(spec: GraphSpec, params: Record<string, number>) {
+  const xMin = spec.xDomain?.[0] ?? -10
+  const xMax = spec.xDomain?.[1] ?? 10
+  if (spec.yDomain) return { xMin, xMax, yMin: spec.yDomain[0], yMax: spec.yDomain[1] }
+
+  const paramNames = (spec.params ?? []).map(p => p.name)
+  let lo = Infinity, hi = -Infinity
+  for (const f of spec.functions ?? []) {
+    const ev = buildEvaluator(f.fn, paramNames); if (!ev) continue
+    for (let i = 0; i <= 240; i++) {
+      const x = xMin + (i / 240) * (xMax - xMin)
+      const y = ev({ ...params, x })
+      if (Number.isFinite(y)) { if (y < lo) lo = y; if (y > hi) hi = y }
+    }
+  }
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return { xMin, xMax, yMin: -10, yMax: 10 }
+  if (lo === hi) { lo -= 1; hi += 1 }
+  const pad = (hi - lo) * 0.12 || 1
+  return { xMin, xMax, yMin: lo - pad, yMax: hi + pad }
+}
+
 // ── Canvas graph renderer ─────────────────────────────────────────────────────
 interface CanvasGraphProps {
   spec:    GraphSpec
@@ -132,12 +156,7 @@ interface CanvasGraphProps {
 function CanvasGraph({ spec, params, width, height }: CanvasGraphProps) {
   const canvasRef  = useRef<HTMLCanvasElement>(null)
   const [mouse, setMouse] = useState<{ x: number; y: number } | null>(null)
-  const [view, setView]   = useState({
-    xMin: (spec.xDomain?.[0] ?? -10),
-    xMax: (spec.xDomain?.[1] ?? 10),
-    yMin: (spec.yDomain?.[0] ?? -10),
-    yMax: (spec.yDomain?.[1] ?? 10),
-  })
+  const [view, setView]   = useState(() => computeInitialView(spec, params))
   const dragRef   = useRef<{ startX: number; startY: number; view: typeof view } | null>(null)
 
   const PAD = 40  // padding for axes labels
@@ -328,12 +347,9 @@ function CanvasGraph({ spec, params, width, height }: CanvasGraphProps) {
     }))
   }
 
-  // Reset view
+  // Reset view (re-runs the same auto Y-scaling used on mount)
   function resetView() {
-    setView({
-      xMin: spec.xDomain?.[0] ?? -10, xMax: spec.xDomain?.[1] ?? 10,
-      yMin: spec.yDomain?.[0] ?? -10, yMax: spec.yDomain?.[1] ?? 10,
-    })
+    setView(computeInitialView(spec, params))
   }
 
   return (
