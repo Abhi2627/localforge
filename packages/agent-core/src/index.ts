@@ -960,6 +960,13 @@ async function bootstrap() {
         const cleanMsg = message.replace(/^@web\s*/i, '').trim()
         const msgs = [{ role: 'system' as ChatRole, content: sysPrompt }, ...mapHistory(history), { role: 'user' as ChatRole, content: cleanMsg }]
         let full = rag.extractedFacts ?? ''
+        // Search ran but found nothing — surface a clear warning so the model's
+        // (possibly hallucinated) answer isn't mistaken for web-verified fact.
+        if (rag.didSearch && rag.ragFailed) {
+          const warn = '> ⚠️ Live web search returned no results, so the answer below is **not** web-verified and may be outdated. Add a free Tavily or Brave key in **Settings → Cloud → Web Search** for reliable results.\n\n'
+          full += warn
+          send({ chunk: warn })
+        }
         await routedChat(msgs, (chunk) => { full += chunk; send({ chunk }) }, s)
         const viz = autoVisualize(full)
         if (viz.upgraded) send({ type: 'replace', content: viz.content })

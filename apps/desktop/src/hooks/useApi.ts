@@ -92,29 +92,39 @@ export const api = {
     const decoder = new TextDecoder()
     if (!reader) throw new Error('No response body')
 
+    // Stall guard: if no data arrives for STALL_MS (e.g. the web/RAG path hangs),
+    // cancel the reader so the loop ends — otherwise the await never resolves and
+    // the chat input stays disabled forever.
+    const STALL_MS = 90_000
+    let stall: ReturnType<typeof setTimeout> | undefined
+    const armStall = () => { clearTimeout(stall); stall = setTimeout(() => { try { reader.cancel() } catch { } }, STALL_MS) }
+
     // Buffer across reads — an SSE line can be split across chunk boundaries,
     // which would otherwise drop tokens (the partial line fails to parse / loses its `data:` prefix).
     let buffer = ''
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? ''
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed.startsWith('data:')) continue
-        const data = trimmed.slice(5).trim()
-        if (data === '[DONE]') return
-        try {
-          const p = JSON.parse(data)
-          if (p.type === 'replace' && typeof p.content === 'string') { onReplace?.(p.content); continue }
-          if (p.type === 'rag_status'  && typeof p.status === 'string') { opts?.onStatus?.(p.status); continue }
-          if (p.type === 'rag_sources' && Array.isArray(p.sources))      { opts?.onSources?.(p.sources); continue }
-          if (p.chunk !== undefined) onChunk(p.chunk)
-        } catch { }
+    try {
+      while (true) {
+        armStall()
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (!trimmed.startsWith('data:')) continue
+          const data = trimmed.slice(5).trim()
+          if (data === '[DONE]') return
+          try {
+            const p = JSON.parse(data)
+            if (p.type === 'replace' && typeof p.content === 'string') { onReplace?.(p.content); continue }
+            if (p.type === 'rag_status'  && typeof p.status === 'string') { opts?.onStatus?.(p.status); continue }
+            if (p.type === 'rag_sources' && Array.isArray(p.sources))      { opts?.onSources?.(p.sources); continue }
+            if (p.chunk !== undefined) onChunk(p.chunk)
+          } catch { }
+        }
       }
-    }
+    } finally { clearTimeout(stall) }
   },
 
   // ── Agents ────────────────────────────────────────────────────────────────

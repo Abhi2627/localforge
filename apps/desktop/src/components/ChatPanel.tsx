@@ -1215,7 +1215,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
           {/* Messages (relative wrapper hosts the scroll rail overlay) */}
           <div style={{ position:'relative', flex:1, minHeight:0, display:'flex', flexDirection:'column' }}>
           <div ref={scrollRef} onScroll={handleScroll} className="chat-scroll"
-            style={{ flex:1, overflowY:'auto', padding:'20px 24px', display:'flex', flexDirection:'column', gap:14, minHeight:0 }}>
+            style={{ flex:1, overflowY:'auto', padding: userMsgs.length >= 2 ? '20px 46px 20px 24px' : '20px 24px', display:'flex', flexDirection:'column', gap:14, minHeight:0 }}>
             {messages.length===0 && !isBusy && (
               <div style={{ margin:'auto', textAlign:'center', color:'var(--text-muted)' }}>
                 <Bot size={36} style={{ marginBottom:10, opacity:0.3 }}/>
