@@ -46,14 +46,26 @@ function XTermInstance({ cwd, active }: { cwd?: string; active: boolean }) {
   const roRef        = useRef<ResizeObserver | null>(null)
 
   const doFit = useCallback(() => {
-    if (!fitAddonRef.current || !termRef.current) return
+    const el = containerRef.current
+    if (!fitAddonRef.current || !termRef.current || !el) return
+    // Don't fit before the container is actually laid out — fitting a 0-size
+    // element produces a 1×1 terminal that never recovers (the "tiny terminal" bug).
+    if (el.clientWidth < 8 || el.clientHeight < 8) return
     try {
       fitAddonRef.current.fit()
       const dims = fitAddonRef.current.proposeDimensions()
-      if (dims && wsRef.current?.readyState === WebSocket.OPEN)
+      if (dims && dims.cols > 0 && dims.rows > 0 && wsRef.current?.readyState === WebSocket.OPEN)
         wsRef.current.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }))
     } catch { }
   }, [])
+
+  // Retry fitting until the container has a real size (handles panel open/animation).
+  const fitWhenReady = useCallback((tries = 0) => {
+    const el = containerRef.current
+    if (!el) return
+    if (el.clientWidth >= 8 && el.clientHeight >= 8) { doFit(); return }
+    if (tries < 30) requestAnimationFrame(() => fitWhenReady(tries + 1))
+  }, [doFit])
 
   useEffect(() => {
     let mounted = true
@@ -98,7 +110,19 @@ function XTermInstance({ cwd, active }: { cwd?: string; active: boolean }) {
       term.loadAddon(fitAddon)
       termRef.current = term; fitAddonRef.current = fitAddon
       term.open(containerRef.current)
-      setTimeout(() => { if (mounted) doFit() }, 30)
+
+      // GPU-accelerated rendering for crisp, non-blurry text. Loaded defensively:
+      // if @xterm/addon-webgl isn't installed (or the context is lost) we silently
+      // fall back to the default renderer.
+      try {
+        // @ts-ignore — optional dep declared in package.json; bundled on install
+        const { WebglAddon } = await import('@xterm/addon-webgl')
+        const webgl = new WebglAddon()
+        webgl.onContextLoss(() => { try { webgl.dispose() } catch { } })
+        term.loadAddon(webgl)
+      } catch { /* default renderer */ }
+
+      fitWhenReady()
 
       const ws = new WebSocket(`ws://localhost:3001/terminal${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`)
       wsRef.current = ws
@@ -131,13 +155,13 @@ function XTermInstance({ cwd, active }: { cwd?: string; active: boolean }) {
 
   useEffect(() => {
     if (!active) return
-    const t = setTimeout(() => { doFit(); termRef.current?.focus() }, 60)
+    const t = setTimeout(() => { fitWhenReady(); termRef.current?.focus() }, 60)
     return () => clearTimeout(t)
-  }, [active, doFit])
+  }, [active, fitWhenReady])
 
   return (
     <div ref={containerRef} style={{
-      position: 'absolute', inset: 0, padding: '4px 0 0 4px',
+      position: 'absolute', inset: 0, padding: '4px 4px 2px 8px',
       opacity:       active ? 1 : 0,
       pointerEvents: active ? 'auto' : 'none',
       zIndex:        active ? 1 : 0,

@@ -42,26 +42,70 @@ function upgradeTable(content: string): string {
 }
 
 // ── Detect described functions and auto-add a graph block ─────────────────────
-const FUNCTION_RX = /(?:^|\s)(?:f|g|h|y)\s*\(x\)\s*=\s*([^\n,;.\\\[\]()]+)/gim
+// Several phrasings small models use instead of emitting a ```graph``` block.
+const FUNCTION_PATTERNS = [
+  /(?:^|[\s(])(?:f|g|h|p|q|y)\s*\(\s*x\s*\)\s*=\s*([^\n,;.\\\[\]]+)/gim,   // f(x) = …
+  /\by\s*=\s*([^\n,;.\\\[\]]+)/gim,                                        // y = …
+  /\bplot(?:\s+the)?(?:\s+function|\s+graph(?:\s+of)?)?\s*:?\s*([^\n,;.\\\[\]]+)/gim, // plot …
+  /\bgraph(?:\s+of)?\s*:?\s+([^\n,;.\\\[\]]+)/gim,                         // graph of …
+]
+
+// Tools we never want the model to send users to — we render inline instead.
+const EXTERNAL_TOOL_RX = /\b(desmos|wolfram\s?alpha|geogebra|symbolab|graphing calculator)\b/i
+
+// Only plot expressions whose ONLY variable is x (plus known math fns/constants).
+// Prevents garbage plots from things like "y = m*x + b" (m, b would be read as 0).
+const FUNC_RX = /\b(sin|cos|tan|asin|acos|atan|atan2|sinh|cosh|tanh|sqrt|abs|exp|ln|log10|log2|log|floor|ceil|round|sign|min|max|pow|pi)\b/gi
+// Whatever remains after removing known fns/constants, the variable x, Euler's e,
+// digits and operators — if anything (a letter) is left, the token isn't pure math.
+function nonMathResidue(s: string): string {
+  return s.replace(FUNC_RX, '').replace(/[xe]/gi, '').replace(/[0-9.\s+\-*/^(),]/g, '')
+}
+
+// Trim a captured string to just its leading mathematical part, dropping trailing
+// prose the regex over-captured (e.g. "exp(-x^2) is a Gaussian" → "exp(-x^2)").
+function trimToMath(expr: string): string {
+  const kept: string[] = []
+  for (const tok of expr.split(/\s+/)) {
+    if (tok && nonMathResidue(tok) === '') kept.push(tok)
+    else break
+  }
+  return kept.join(' ').trim()
+}
+
+function isPlottableFx(expr: string): boolean {
+  if (!/x/i.test(expr)) return false                       // must involve x
+  if (expr.length < 2 || expr.length > 60) return false
+  if (!/[\^+\-*/]/.test(expr) && !FUNC_RX.test(expr)) return false   // must be an actual expression
+  if (/\b(write|return|const|let|var|function|import|true|false|null)\b/.test(expr)) return false
+  return nonMathResidue(expr) === ''                        // x/e/numbers/ops/known-fns only
+}
+
+function cleanExpr(raw: string): string {
+  const cleaned = raw
+    .replace(/\\\(/g, '').replace(/\\\)/g, '')   // strip inline math wrappers
+    .replace(/\\cdot/g, '*').replace(/\\times/g, '*')
+    .replace(/`/g, '')                            // strip code ticks
+    .replace(/^\*+|\*+$/g, '')                    // strip markdown emphasis (keep internal * for multiply)
+    .replace(/\s+/g, ' ')
+    .trim()
+  return trimToMath(cleaned)
+}
 
 function extractFunctions(content: string): string[] {
-  // Skip if content already has graph blocks or is heavily mathematical (\[ blocks)
+  // Skip if the model already rendered the visualisation correctly.
   if (content.includes('```graph') || content.includes('```chart')) return []
-  // Only extract if the function appears in plain prose (not inside math blocks)
-  // Count math blocks — if response has many \[...\] blocks it's already math-rich
+  // If the response is already math-rich (many \[...\] blocks) don't second-guess it.
   const mathBlockCount = (content.match(/\\\[/g) ?? []).length
-  if (mathBlockCount > 2) return []  // already math-rich, don't add graph
+  if (mathBlockCount > 3) return []
+
   const fns: string[] = []
-  let m: RegExpExecArray | null
-  while ((m = FUNCTION_RX.exec(content)) !== null) {
-    const expr = m[1].trim()
-      .replace(/\\\(/g, '').replace(/\\\)/g, '')  // strip inline math wrappers
-      .trim()
-    // Must look like a real math expression with x and operators
-    if (/\bx\b/.test(expr) && /[\^+\-*/]/.test(expr) && expr.length < 60
-        && !expr.includes('write') && !expr.includes('return')
-        && !expr.startsWith('=')) {
-      fns.push(expr)
+  for (const rx of FUNCTION_PATTERNS) {
+    let m: RegExpExecArray | null
+    rx.lastIndex = 0
+    while ((m = rx.exec(content)) !== null) {
+      const expr = cleanExpr(m[1])
+      if (isPlottableFx(expr)) fns.push(expr)
     }
   }
   return [...new Set(fns)].slice(0, 4)
@@ -82,7 +126,9 @@ export function autoVisualize(content: string): VisualizationResult {
     upgrades.push('table→chart')
   }
 
-  // 2. Auto-add graph for described functions (only if no graph already)
+  // 2. Auto-add graph for described functions (only if no graph already).
+  // This is the interceptor for small models that ignore the ```graph``` format
+  // and instead describe a function or tell the user to "plot it on Desmos".
   if (!alreadyRich && !result.includes('```graph')) {
     const fns = extractFunctions(result)
     if (fns.length > 0) {
@@ -95,6 +141,10 @@ export function autoVisualize(content: string): VisualizationResult {
         grid:      true,
       }
       result += `\n\n\`\`\`graph\n${JSON.stringify(spec)}\n\`\`\``
+      // If the model pointed the user at an external grapher, note it's now inline.
+      if (EXTERNAL_TOOL_RX.test(result)) {
+        result += `\n\n*Rendered inline above — no external graphing tool needed.*`
+      }
       upgrades.push(`auto-graph: ${fns.join(', ')}`)
     }
   }

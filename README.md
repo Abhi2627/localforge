@@ -214,22 +214,22 @@ Build artifacts (`resources/server.cjs`, the bundled MCP server, `resources/node
 
 > **Note for testing:** run only one agent server on port `3001` at a time — either the built app **or** `npm run dev`, never both. A stale server on `:3001` will silently serve old code.
 
-## Known Bugs (Parked)
+## Known Bugs
 
 | Bug | Status |
 |---|---|
-| Terminal panel UI polish (instance sizing, font rendering) | PARKED |
-| Graph blocks: small local models (qwen2.5-coder 1.5b/7b) may ignore the `graph` format — rendering is correct, but emitting the block depends on the model (use ≥14b or cloud) | PARTIAL — renderer fixed + prompt strengthened |
+| Terminal panel — instance sizing & blurry font | ✅ FIXED — robust fit (retries until the panel is laid out, no more 1×1 terminal) + optional WebGL renderer for crisp text |
+| Graph blocks: small models ignore the `graph` format and suggest Desmos/Wolfram | ✅ MITIGATED — output is now intercepted: described functions (`f(x)=`, `y=`, "plot …", "graph of …") and external-tool suggestions are auto-converted to a real rendered graph (pure-`x` validation prevents wrong plots) |
 
 ---
 
 ## Known Limitations
 
-| Limitation | Detail |
-|---|---|
-| Small model hallucination | Coding-focused models have weak general knowledge — use cloud for non-code queries |
-| Small model format compliance | `qwen2.5-coder:1.5b/7b` often ignores `write:path` and `graph` formats — use ≥14b or cloud |
-| Vision | Image attachments require a cloud provider with vision support |
+| Limitation | Detail | Mitigation in app |
+|---|---|---|
+| Small model hallucination | Coding-focused models have weak general knowledge | Built-in web RAG injects live facts; use cloud for non-code queries |
+| `write:` format compliance | `qwen2.5-coder:1.5b/7b` often ignores the `write:path` format | If a plain code block starts with a filename comment (e.g. `// src/Foo.tsx`), it's recovered as an **inferred** patch — flagged in the UI and never auto-applied. Still, ≥14b or cloud is most reliable |
+| Vision | A non-vision model cannot read image attachments | Attaching an image to a non-vision model now shows a clear warning suggesting Gemini/Claude/GPT-4o or an Ollama vision model (llava). True image understanding still requires a vision-capable model |
 
 ---
 

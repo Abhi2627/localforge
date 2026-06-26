@@ -6,6 +6,7 @@ export interface FilePatch {
   path:     string   // relative or absolute path
   content:  string   // full new file content
   rootPath?: string  // project root for resolving relative paths
+  inferred?: boolean // path guessed from a code-block comment (no explicit write: block)
 }
 
 interface Props {
@@ -96,6 +97,12 @@ export function FilePatchCard({ patch, alreadyApplied = false, isDownload = fals
         <span style={{ fontSize:12, fontWeight:600, color:'var(--text-primary)', flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
           {patch.path}
         </span>
+        {patch.inferred && (
+          <span title="Path inferred from a code-block comment — verify before applying"
+            style={{ fontSize:9, fontWeight:700, color:'var(--yellow, #cca700)', background:'rgba(204,167,0,0.12)', border:'1px solid rgba(204,167,0,0.35)', borderRadius:4, padding:'1px 5px', flexShrink:0, textTransform:'uppercase', letterSpacing:'0.03em' }}>
+            inferred
+          </span>
+        )}
         <span style={{ fontSize:10, color:'var(--text-muted)', flexShrink:0 }}>
           {isNew ? 'new file' : 'modified'} · {lineCount} lines
         </span>

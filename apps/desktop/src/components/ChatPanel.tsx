@@ -69,19 +69,58 @@ function makePatchId(filePath: string, content: string): string {
   return `patch_${Math.abs(hash).toString(36)}`
 }
 
+// Extensions we'll accept for an inferred file path (avoids treating prose as a path).
+const PATCH_EXTS = /\.(ts|tsx|js|jsx|mjs|cjs|vue|svelte|py|rb|go|rs|java|kt|swift|c|cpp|h|cs|php|html|css|scss|sass|less|json|ya?ml|toml|xml|env|md|sh|bash|sql|graphql|proto|dockerfile)$/i
+
+// First line of a code block sometimes carries the filename as a comment:
+//   // src/components/Foo.tsx     #!/path     /* file.css */     <!-- index.html -->
+function inferPathFromFirstLine(code: string): string | null {
+  const first = code.split('\n')[0]?.trim() ?? ''
+  const m = first.match(/^(?:\/\/|#|\/\*|<!--)\s*([\w./@-]+\.[A-Za-z0-9]+)\s*(?:\*\/|-->)?$/)
+  if (!m) return null
+  const p = m[1].replace(/^\.\//, '')
+  if (!PATCH_EXTS.test(p) || p.includes('://') || p.length > 120) return null
+  return p
+}
+
 function extractPatches(content: string, rootPath?: string, _userPrompt?: string): { patches: FilePatch[]; cleanContent: string } {
   const patches: FilePatch[] = []
   // Regex that handles nested backtick blocks inside write: content
   // Matches ```write:path\n...``` where the closing ``` must be at the start of a line
   const writeRx = /```write:([^\n]+)\n((?:(?!```).|\n)*?)\n?```(?=\n|$)/g
-  const primary = content.replace(writeRx, (_m, fp: string, fc: string) => {
+  let primary = content.replace(writeRx, (_m, fp: string, fc: string) => {
     const path    = fp.trim()
     const fcClean = fc.trimEnd()
     patches.push({ id: makePatchId(path, fcClean), path, content: fcClean, rootPath })
     return `[File proposal: ${path}]`
   })
-  // Never guess filenames — only explicit write: blocks become patches
+
+  // Fallback for small models that ignore the write: format: if a plain fenced code
+  // block starts with a filename comment, infer it as a patch. Marked `inferred` so
+  // it's visually flagged and never auto-applied. Conservative on purpose.
+  const fenceRx = /```([^\n]*)\n((?:(?!```)[\s\S])*?)\n?```/g
+  primary = primary.replace(fenceRx, (whole, lang: string, code: string) => {
+    const tag = (lang || '').trim().toLowerCase()
+    if (tag.startsWith('write:') || tag === 'chart' || tag === 'graph' || tag === 'math') return whole
+    const inferredPath = inferPathFromFirstLine(code)
+    if (!inferredPath) return whole
+    const fcClean = code.trimEnd()
+    patches.push({ id: makePatchId(inferredPath, fcClean), path: inferredPath, content: fcClean, rootPath, inferred: true })
+    return `[File proposal: ${inferredPath}]`
+  })
+
   return { patches, cleanContent: primary.trim() }
+}
+
+// Whether the active provider/model can actually understand an attached image.
+// Used to warn the user instead of silently ignoring images on a non-vision model.
+function supportsVision(provider: string, ollamaModel: string): boolean {
+  if (provider === 'gemini' || provider === 'claude' || provider === 'openai') return true  // current default models are vision-capable
+  if (provider === 'groq') return false
+  if (provider === 'ollama') {
+    return /llava|vision|bakllava|moondream|minicpm-?v|qwen2\.?5?-?vl|qwen2-vl|llama3\.2-vision/i.test(ollamaModel ?? '')
+  }
+  return false  // custom / unknown
 }
 
 const TEXT_EXTS  = new Set(['ts','tsx','js','jsx','mjs','cjs','vue','svelte','py','rb','go','rs','java','kt','swift','c','cpp','h','cs','php','html','css','scss','sass','less','json','yaml','yml','toml','xml','env','md','mdx','txt','csv','sh','bash','zsh','fish','sql','graphql','proto','dockerfile'])
@@ -421,6 +460,7 @@ function AgentBubble({ msg, onReload, rootPath, userPrompt, autoApply }: { msg: 
     if (!rootPath) return  // chat sessions have no project root — auto-apply would spam Save dialogs
     for (const patch of patches) {
       if (appliedIds.has(patch.id)) continue  // already applied
+      if (patch.inferred) continue            // never auto-apply a guessed path — needs explicit confirm
       handleApply(patch).catch(() => {})
     }
   }, [autoApply, msg.type, patches.length]) // eslint-disable-line
@@ -861,10 +901,19 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
       ] })
       if (!selected) return
       const paths = Array.isArray(selected) ? selected : [selected]
+      let warnedVision = false
       for (const filePath of paths) {
         const name = filePath.split('/').pop() ?? filePath
         const ext  = name.split('.').pop()?.toLowerCase() ?? ''
         if (attachments.find(a => a.path === filePath)) continue
+        // Warn once if attaching an image to a model that can't see images
+        if (IMAGE_EXTS.has(ext) && !warnedVision && !supportsVision(activeProvider, selectedModel)) {
+          warnedVision = true
+          const hint = activeProvider === 'ollama'
+            ? 'pull a vision model like llava, or switch to Gemini/Claude/GPT-4o'
+            : 'switch to Gemini, Claude, or GPT-4o in the model menu'
+          showToast(`This model can't see images — ${hint}.`, 'error', 6000)
+        }
         try {
           // PDF and DOCX — use extract endpoint for text
           if (ext === 'pdf' || ext === 'docx' || ext === 'doc') {
