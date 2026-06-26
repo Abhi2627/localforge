@@ -89,25 +89,56 @@ async function searchBrave(query: string, apiKey: string, maxResults: number, si
   return Promise.all(results.map(async r => ({ ...r, content: (await fetchPageText(r.url, signal)) || r.content })))
 }
 
-// ── DuckDuckGo HTML scrape (no API key) ───────────────────────────────────────
+// ── DuckDuckGo (no API key) ───────────────────────────────────────────────────
+// DDG often rate-limits/blocks scraping or changes its markup, so we try the
+// regular HTML endpoint and then the simpler, more stable "lite" endpoint.
 async function searchDuckDuckGo(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResult[]> {
-  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`
-  const res = await fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept':          'text/html,application/xhtml+xml',
-      'Accept-Language': 'en-US,en;q=0.9',
-    },
-    signal,
-  })
-  if (!res.ok) return []
-  const html   = await res.text()
-  const parsed = parseDDGHtml(html).slice(0, maxResults)
+  let parsed = await ddgHtmlEndpoint(query, signal)
+  if (parsed.length === 0) parsed = await ddgLiteEndpoint(query, signal)
+  parsed = parsed.slice(0, maxResults)
   if (parsed.length === 0) return []
   const withContent = await Promise.all(
-    parsed.map(async r => ({ ...r, content: await fetchPageText(r.url, signal) }))
+    parsed.map(async r => ({ ...r, content: r.content || await fetchPageText(r.url, signal) }))
   )
   return withContent.filter(r => r.title || r.snippet)
+}
+
+const DDG_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Accept':          'text/html,application/xhtml+xml',
+  'Accept-Language': 'en-US,en;q=0.9',
+}
+
+async function ddgHtmlEndpoint(query: string, signal?: AbortSignal): Promise<SearchResult[]> {
+  try {
+    const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, { headers: DDG_HEADERS, signal })
+    if (!res.ok) return []
+    return parseDDGHtml(await res.text()).map(r => ({ ...r, content: '' }))
+  } catch { return [] }
+}
+
+// lite.duckduckgo.com is a minimal HTML page — easier to parse and less likely to block.
+async function ddgLiteEndpoint(query: string, signal?: AbortSignal): Promise<SearchResult[]> {
+  try {
+    const res = await fetch(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`, { headers: DDG_HEADERS, signal })
+    if (!res.ok) return []
+    const html = await res.text()
+    const results: SearchResult[] = []
+    const linkRe = /<a[^>]+class="result-link"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g
+    const snipRe = /class="result-snippet"[^>]*>([\s\S]*?)<\/td>/g
+    const snippets: string[] = []
+    let s: RegExpExecArray | null
+    while ((s = snipRe.exec(html)) !== null) snippets.push(stripTags(s[1]).trim())
+    let m: RegExpExecArray | null, i = 0
+    while ((m = linkRe.exec(html)) !== null) {
+      let href = m[1]
+      try { const u = href.match(/uddg=([^&]+)/); if (u) href = decodeURIComponent(u[1]) } catch { }
+      const title = stripTags(m[2]).trim()
+      if (href.startsWith('http') && title) results.push({ url: href, title, snippet: snippets[i] ?? '', content: '' })
+      i++
+    }
+    return results
+  } catch { return [] }
 }
 
 function parseDDGHtml(html: string): Omit<SearchResult, 'content'>[] {

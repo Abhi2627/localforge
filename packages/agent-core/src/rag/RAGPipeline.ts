@@ -2,7 +2,7 @@
  * RAGPipeline.ts — Web-augmented context injection
  */
 
-import { search, type SearchResult } from './WebSearch.js'
+import { search, activeSearchProvider, type SearchResult } from './WebSearch.js'
 
 const MAX_RAG_MS = 5000
 
@@ -109,7 +109,13 @@ export async function runRAG(
     try {
       const results = await search(query, 3, controller.signal)
       clearTimeout(timer)
-      if (results.length === 0) { onStatus('No results found'); return { ...empty, didSearch: true, ragFailed: true, query } }
+      if (results.length === 0) {
+        const hint = activeSearchProvider() === 'duckduckgo'
+          ? 'No results — free DuckDuckGo search is often rate-limited. Add a free Tavily or Brave key in Settings → Cloud → Web Search for reliable results.'
+          : 'No results found.'
+        onStatus(hint)
+        return { ...empty, didSearch: true, ragFailed: true, query }
+      }
       onStatus(`Found ${results.length} source${results.length > 1 ? 's' : ''}`)
       const extractedFacts = extractFactsFromResults(results, query)
       return {
@@ -132,7 +138,10 @@ export function injectRAGContext(systemPrompt: string, rag: RAGResult): string {
   if (!rag.didSearch) return systemPrompt
 
   if (rag.ragFailed) {
-    return systemPrompt + '\n\n[SYSTEM: Web search failed — tell the user you cannot fetch live data right now. Do NOT guess or invent any facts.]'
+    const keyHint = activeSearchProvider() === 'duckduckgo'
+      ? ' Suggest the user add a free Tavily or Brave API key in Settings → Cloud → Web Search for reliable results.'
+      : ''
+    return systemPrompt + `\n\n[SYSTEM: Web search returned no results — tell the user you could not fetch live web data right now and do NOT guess or invent any facts.${keyHint}]`
   }
 
   if (!rag.contextBlock) return systemPrompt
