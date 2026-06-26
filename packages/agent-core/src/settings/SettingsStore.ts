@@ -16,6 +16,8 @@ export interface ApiKeys {
   groq?:      string
   customKey?: string
   customUrl?: string
+  tavily?:    string   // web search provider (optional)
+  brave?:     string   // web search provider (optional)
 }
 
 export interface LLMDefaults {
@@ -89,6 +91,8 @@ export function getPublicSettings() {
       groq:      mask(s.apiKeys.groq),
       customKey: mask(s.apiKeys.customKey),
       customUrl: s.apiKeys.customUrl ?? '',
+      tavily:    mask(s.apiKeys.tavily),
+      brave:     mask(s.apiKeys.brave),
     },
     apiKeyStatus: {
       openai: !!s.apiKeys.openai,
@@ -96,7 +100,10 @@ export function getPublicSettings() {
       claude: !!s.apiKeys.claude,
       groq:   !!s.apiKeys.groq,
       custom: !!(s.apiKeys.customKey && s.apiKeys.customUrl),
+      tavily: !!s.apiKeys.tavily,
+      brave:  !!s.apiKeys.brave,
     },
+    searchProvider: s.apiKeys.tavily ? 'tavily' : s.apiKeys.brave ? 'brave' : 'duckduckgo',
     autoApply: s.autoApply ?? false,
   }
 }

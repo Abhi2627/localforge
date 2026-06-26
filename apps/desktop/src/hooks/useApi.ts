@@ -76,11 +76,15 @@ export const api = {
     onChunk:      (chunk: string) => void,
     audienceMode: string = 'college',
     onReplace?:   (content: string) => void,
+    opts?:        { web?: boolean; onStatus?: (status: string) => void; onSources?: (sources: Array<{ title: string; url: string }>) => void },
   ): Promise<void> => {
-    const res = await fetch(`${BASE}/chat/stream`, {
+    // Route to the web-augmented endpoint when the Web toggle is on (or @web typed).
+    const useWeb = !!opts?.web || /^@web\b/i.test(message.trim())
+    const endpoint = useWeb ? '/chat/stream/web' : '/chat/stream'
+    const res = await fetch(`${BASE}${endpoint}`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ message, sessionId, history, audienceMode }),
+      body:    JSON.stringify({ message, sessionId, history, audienceMode, forceWeb: useWeb }),
     })
     if (!res.ok) throw new Error(`Stream failed (${res.status}): ${await res.text()}`)
 
@@ -105,6 +109,8 @@ export const api = {
         try {
           const p = JSON.parse(data)
           if (p.type === 'replace' && typeof p.content === 'string') { onReplace?.(p.content); continue }
+          if (p.type === 'rag_status'  && typeof p.status === 'string') { opts?.onStatus?.(p.status); continue }
+          if (p.type === 'rag_sources' && Array.isArray(p.sources))      { opts?.onSources?.(p.sources); continue }
           if (p.chunk !== undefined) onChunk(p.chunk)
         } catch { }
       }

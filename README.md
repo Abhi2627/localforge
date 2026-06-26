@@ -136,6 +136,7 @@ cd apps/desktop && npm run dev
   - Message copy preserves raw markdown + LaTeX intact
 - **Chart rendering** — ` ```chart ` blocks: Line, Bar, Pie, Area via Recharts
 - **Interactive graph renderer** — ` ```graph ` blocks: Canvas-based plotter with zoom/pan, crosshair tooltip, real-time parameter sliders (Desmos-like) — *note: local models may not use this automatically; cloud models do*
+- **Web search** — 🌐 toggle in the input bar (or type `@web`) augments the answer with live web results. Sources show as clickable chips below the reply; clicking one opens it in the browser (with the usual confirmation) — nothing auto-navigates. Provider is auto-selected by configured key: **Tavily** → **Brave** → free **DuckDuckGo** fallback (no key required)
 - **Clickable links** — every URL/link shows confirmation dialog before opening in default browser; copy icon beside each link
 - **Code blocks** — language label + Copy button (like Claude.ai)
 - **Chat navigation rail** — DeepSeek-style stacked ticks on the right edge (one per message); the current message highlights as you scroll, hover previews it, click to jump. Scrollbar hidden for an identical look on macOS/Windows/Linux
@@ -207,7 +208,10 @@ This cycle focused on stability, security, and correctness:
 | **MCP** | Decoupled from project open (file scan no longer blocked by MCP), spawned via `process.execPath` with a connect timeout, and bundled as a standalone ESM file for the packaged app. One independent, folder-sandboxed MCP server **per project** |
 | **Security** | Agent server now binds to `127.0.0.1` only (loopback). The mobile/tablet preview is unaffected — it targets your project's own dev-server port, not `:3001` |
 | **Streaming** | SSE readers buffer partial lines (no more dropped characters); Ollama decodes with `{ stream: true }` (no mangled multi-byte/emoji); auto-visualize replaces message content instead of a broken length-diff |
-| **Graphs** | The renderer auto-scales the Y axis to the function's real range (e.g. `x^2` no longer clipped to ±10); the model is prompted to emit a `graph` block alongside any Python/MATLAB code |
+| **Graphs** | The renderer auto-scales the Y axis to the function's real range (e.g. `x^2` no longer clipped to ±10); model output is intercepted to convert described functions and "plot it on Desmos" suggestions into real rendered graphs (pure-`x` validation prevents wrong plots) |
+| **Web search** | Wired up the previously-dormant RAG: 🌐 chat toggle + `@web`, live status, clickable source chips. Pluggable provider (Tavily / Brave / DuckDuckGo) selected by configured key — set keys in **Settings → Cloud → Web Search** |
+| **Terminal** | Robust fit (no more 1×1 "tiny terminal") + optional WebGL renderer for crisp text |
+| **Vision / `write:`** | Attaching an image to a non-vision model now warns instead of silently ignoring it; plain code blocks that start with a `// filename` comment are recovered as **inferred** patches (flagged, never auto-applied) |
 | **Misc** | Closing a background tab no longer resets the screen; auto-apply no longer spams save dialogs in plain chats; agent writes are confined to the project root; TaskQueue drain race fixed |
 
 Build artifacts (`resources/server.cjs`, the bundled MCP server, `resources/node_modules`) are now git-ignored.

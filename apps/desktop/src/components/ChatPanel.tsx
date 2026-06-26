@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, KeyboardEvent, useState, useCallback, useMemo } from 'react'
-import { Send, Bot, Paperclip, Mic, Loader, Copy, Pencil, RefreshCw, Check, X, Terminal, ChevronDown, ArrowDown, FileText, Image, File, Download } from 'lucide-react'
+import { Send, Bot, Paperclip, Mic, Loader, Copy, Pencil, RefreshCw, Check, X, Terminal, ChevronDown, ArrowDown, FileText, Image, File, Download, Globe } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { open, save } from '@tauri-apps/plugin-dialog'
@@ -510,6 +510,7 @@ function AgentBubble({ msg, onReload, rootPath, userPrompt, autoApply }: { msg: 
           isDownload={!rootPath}
           onApply={handleApply} onReject={id => setRejected(r => new Set([...r, id]))}/>
       ))}
+      {msg.sources && msg.sources.length > 0 && <SourceChips sources={msg.sources}/>}
       <div style={{display:'flex',alignItems:'center',gap:6}}>
         <span style={{fontSize:10,color:'var(--text-muted)',paddingLeft:2}}>{formatTime(msg.timestamp)}</span>
         <MsgActions content={msg.content} isUser={false} visible={hovered} onReload={onReload}/>
@@ -537,6 +538,7 @@ function MessageBubble({ msg, onEdit, onReload, rootPath, userPrompt, autoApply 
   if (msg.type === 'stream') return (
     <div>
       {msg.agentName && <div style={{fontSize:10,color:'var(--accent)',marginBottom:3}}>{msg.agentName}</div>}
+      {msg.sources && msg.sources.length > 0 && <SourceChips sources={msg.sources}/>}
       <div className="msg-agent">
         <MarkdownContent content={msg.content}/>
         <span style={{display:'inline-block',width:7,height:13,background:'var(--accent)',marginLeft:2,animation:'blink 1s step-end infinite',verticalAlign:'text-bottom',borderRadius:1}}/>
@@ -577,13 +579,38 @@ function MessageBubble({ msg, onEdit, onReload, rootPath, userPrompt, autoApply 
   )
 }
 
-function ThinkingBubble() {
+function ThinkingBubble({ label }: { label?: string }) {
+  const isWeb = !!label
   return (
     <div style={{display:'flex',alignItems:'center'}}>
       <div style={{background:'var(--bg-tertiary)',border:'1px solid var(--border)',borderRadius:'3px 12px 12px 12px',padding:'10px 14px',display:'flex',alignItems:'center',gap:8}}>
-        <Loader size={13} style={{color:'var(--accent)',animation:'spin 1s linear infinite',flexShrink:0}}/>
-        <span style={{fontSize:12,color:'var(--text-muted)'}}>Thinking...</span>
+        {isWeb
+          ? <Globe size={13} style={{color:'var(--accent)',flexShrink:0}}/>
+          : <Loader size={13} style={{color:'var(--accent)',animation:'spin 1s linear infinite',flexShrink:0}}/>}
+        <span style={{fontSize:12,color:'var(--text-muted)'}}>{label ?? 'Thinking...'}</span>
       </div>
+    </div>
+  )
+}
+
+// Clickable web-source chips shown below an AI message (open in browser on click).
+function SourceChips({ sources }: { sources: { title: string; url: string }[] }) {
+  if (!sources?.length) return null
+  const domainOf = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, '') } catch { return u } }
+  return (
+    <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginTop:6 }}>
+      <span style={{ fontSize:10, color:'var(--text-muted)', alignSelf:'center', marginRight:2 }}>Sources:</span>
+      {sources.map((s, i) => (
+        <LinkWithConfirm key={i} href={s.url}>
+          <span title={s.title || s.url}
+            style={{ display:'inline-flex', alignItems:'center', gap:4, fontSize:11, padding:'3px 8px', borderRadius:12,
+              background:'var(--bg-tertiary)', border:'1px solid var(--border)', color:'var(--text-secondary)', maxWidth:200,
+              overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+            <Globe size={10} style={{ flexShrink:0, color:'var(--accent)' }}/>
+            {i + 1}. {domainOf(s.url)}
+          </span>
+        </LinkWithConfirm>
+      ))}
     </div>
   )
 }
@@ -779,7 +806,7 @@ function ChatNavRail({ scrollRef, userMsgs, onJump }: {
 export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
   const {
     sessions, activeSessionId,
-    addMessage, appendStream, replaceStream, finalizeStream,
+    addMessage, appendStream, replaceStream, setStreamSources, finalizeStream,
     selectedModel, models, updateSessionTitle,
     openFiles, activeFile, setActiveFile, closeFile,
     sendingSessionId, streamingSessionId,
@@ -796,6 +823,9 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
   const [isAtBottom,     setIsAtBottom]     = useState(true)
   const [toast,          setToast]          = useState<{ msg: string; type: 'info'|'success'|'error' } | null>(null)
   const [mcpConnected,   setMcpConnected]   = useState(false)
+  const [webOn,          setWebOn]          = useState(false)   // Web search toggle (sticky)
+  const [ragStatus,      setRagStatus]      = useState<string | null>(null)
+  const [searchProvider, setSearchProvider] = useState('duckduckgo')
 
   const showToast = useCallback((msg: string, type: 'info'|'success'|'error' = 'info', ms = 3000) => {
     setToast({ msg, type }); setTimeout(() => setToast(null), ms)
@@ -864,6 +894,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
         setGlobalProvider(data.activeProvider ?? 'ollama')
         setApiKeyStatus(data.apiKeyStatus ?? {})
         setAutoApply(data.autoApply ?? false)
+        setSearchProvider(data.searchProvider ?? 'duckduckgo')
       } catch { }
     }
     loadProvider()
@@ -1024,7 +1055,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
     const msgId = nanoid()
     addMessage(sessionId, { id:msgId, type:'user', content:fullContent, displayContent:text, filePaths, timestamp:Date.now() })
     api.saveMessage(msgId, sessionId, 'user', fullContent).catch(() => {})
-    setSendingSession(sessionId); setStreamingSession(null)
+    setSendingSession(sessionId); setStreamingSession(null); setRagStatus(null)
     const streamTaskId = nanoid(); let firstChunk = true
     try {
       await api.streamChat(fullContent, sessionId,
@@ -1035,7 +1066,12 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
           appendStream(sessionId, streamTaskId, chunk)
         },
         audienceMode,
-        content => { replaceStream(sessionId, streamTaskId, content) }
+        content => { replaceStream(sessionId, streamTaskId, content) },
+        {
+          web: webOn,
+          onStatus:  (st)  => setRagStatus(st),
+          onSources: (src) => setStreamSources(sessionId, streamTaskId, src),
+        }
       )
       finalizeStream(sessionId, streamTaskId)
       const live = useAppStore.getState().sessions.find(s => s.id === sessionId)
@@ -1049,7 +1085,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
         ? '⚠ **Connection failed.**\n\n- Check agent server: `cd packages/agent-core && npm run dev`\n- Check Ollama: `ollama serve`'
         : `⚠ **Error:** ${err.message}`
       addMessage(sessionId, { id:nanoid(), type:'system', content:msg, timestamp:Date.now() })
-    } finally { setSendingSession(null); setStreamingSession(null) }
+    } finally { setSendingSession(null); setStreamingSession(null); setRagStatus(null) }
   }
 
   function handleEdit(content: string) { setInput(content); textareaRef.current?.focus() }
@@ -1205,7 +1241,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
                 </div>
               )
             })}
-            {isSending && !isStreaming && <ThinkingBubble/>}
+            {isSending && !isStreaming && <ThinkingBubble label={ragStatus ?? undefined}/>}
             <div ref={bottomRef} style={{ height:1 }}/>
           </div>
           <ChatNavRail scrollRef={scrollRef} userMsgs={userMsgs} onJump={jumpToMsg}/>
@@ -1263,6 +1299,12 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
               <button onClick={handleAttach} className="icon-btn" title="Attach file"
                 style={{ width:28, height:28, flexShrink:0, color:attachments.length?'var(--accent)':'var(--text-muted)', display:'flex', alignItems:'center', justifyContent:'center' }}>
                 <Paperclip size={14}/>
+              </button>
+              <button onClick={() => setWebOn(v => !v)} className="icon-btn"
+                title={webOn ? `Web search ON — using ${searchProvider}. Click to turn off.` : 'Web search OFF — click to search the web for this message'}
+                style={{ width:28, height:28, flexShrink:0, display:'flex', alignItems:'center', justifyContent:'center', borderRadius:8,
+                  color: webOn ? 'var(--accent)' : 'var(--text-muted)', background: webOn ? 'var(--accent-dim)' : 'transparent' }}>
+                <Globe size={14}/>
               </button>
               <textarea ref={textareaRef} value={input} onChange={e => setInput(e.target.value)}
                 onKeyDown={onKeyDown} placeholder={placeholder} disabled={!session||isBusy} rows={1}

@@ -1,7 +1,15 @@
 /**
- * WebSearch.ts — DuckDuckGo search + page fetch + text extraction
+ * WebSearch.ts — pluggable web search with page fetch + text extraction.
+ *
+ * Provider is chosen automatically by which API key is configured in settings:
+ *   1. Tavily  (apiKeys.tavily)  — purpose-built for LLM/RAG, returns clean content
+ *   2. Brave   (apiKeys.brave)   — good quality, privacy-aligned
+ *   3. DuckDuckGo HTML scrape    — no key required, used as the default & fallback
+ *
  * Accepts an AbortSignal so the caller can cancel the entire operation.
  */
+
+import { loadSettings } from '../settings/SettingsStore.js'
 
 export interface SearchResult {
   title:   string
@@ -10,34 +18,96 @@ export interface SearchResult {
   content: string
 }
 
+export type SearchProvider = 'tavily' | 'brave' | 'duckduckgo'
+
+export function activeSearchProvider(): SearchProvider {
+  const keys = loadSettings().apiKeys
+  if (keys.tavily) return 'tavily'
+  if (keys.brave)  return 'brave'
+  return 'duckduckgo'
+}
+
 export async function search(
   query:      string,
   maxResults = 3,
   signal?:    AbortSignal
 ): Promise<SearchResult[]> {
+  const keys     = loadSettings().apiKeys
+  const provider = activeSearchProvider()
   try {
-    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept':          'text/html,application/xhtml+xml',
-        'Accept-Language': 'en-US,en;q=0.9',
-      },
-      signal,
-    })
-    if (!res.ok) return []
-    const html   = await res.text()
-    const parsed = parseDDGHtml(html).slice(0, maxResults)
-    if (parsed.length === 0) return []
-    const withContent = await Promise.all(
-      parsed.map(async r => ({ ...r, content: await fetchPageText(r.url, signal) }))
-    )
-    return withContent.filter(r => r.title || r.snippet)
+    if (provider === 'tavily') return await searchTavily(query, keys.tavily!, maxResults, signal)
+    if (provider === 'brave')  return await searchBrave(query, keys.brave!, maxResults, signal)
+    return await searchDuckDuckGo(query, maxResults, signal)
   } catch (err: any) {
     if (err?.name === 'AbortError') return []
-    console.warn('[WebSearch] failed:', err?.message ?? err)
+    console.warn(`[WebSearch] ${provider} failed: ${err?.message ?? err}`)
+    // If an API provider errored (quota, bad key, outage), fall back to DuckDuckGo.
+    if (provider !== 'duckduckgo') {
+      try { return await searchDuckDuckGo(query, maxResults, signal) } catch { }
+    }
     return []
   }
+}
+
+// ── Tavily (https://tavily.com) ───────────────────────────────────────────────
+async function searchTavily(query: string, apiKey: string, maxResults: number, signal?: AbortSignal): Promise<SearchResult[]> {
+  const res = await fetch('https://api.tavily.com/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      api_key: apiKey, query, max_results: maxResults,
+      search_depth: 'basic', include_answer: false, include_raw_content: true,
+    }),
+    signal,
+  })
+  if (!res.ok) throw new Error(`Tavily ${res.status}: ${(await res.text()).slice(0, 200)}`)
+  const data = await res.json() as { results?: Array<{ title?: string; url?: string; content?: string; raw_content?: string }> }
+  return (data.results ?? []).slice(0, maxResults).map(r => ({
+    title:   r.title ?? '',
+    url:     r.url ?? '',
+    snippet: (r.content ?? '').slice(0, 300),
+    content: (r.raw_content ?? r.content ?? '').slice(0, 2000),
+  })).filter(r => r.title || r.url)
+}
+
+// ── Brave Search API (https://brave.com/search/api) ───────────────────────────
+async function searchBrave(query: string, apiKey: string, maxResults: number, signal?: AbortSignal): Promise<SearchResult[]> {
+  const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${maxResults}`
+  const res = await fetch(url, {
+    headers: { 'Accept': 'application/json', 'X-Subscription-Token': apiKey },
+    signal,
+  })
+  if (!res.ok) throw new Error(`Brave ${res.status}: ${(await res.text()).slice(0, 200)}`)
+  const data = await res.json() as { web?: { results?: Array<{ title?: string; url?: string; description?: string }> } }
+  const results = (data.web?.results ?? []).slice(0, maxResults).map(r => ({
+    title:   r.title ?? '',
+    url:     r.url ?? '',
+    snippet: stripTags(r.description ?? ''),
+    content: stripTags(r.description ?? ''),
+  })).filter(r => r.title || r.url)
+  // Brave returns short descriptions — enrich the top results with page text.
+  return Promise.all(results.map(async r => ({ ...r, content: (await fetchPageText(r.url, signal)) || r.content })))
+}
+
+// ── DuckDuckGo HTML scrape (no API key) ───────────────────────────────────────
+async function searchDuckDuckGo(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResult[]> {
+  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept':          'text/html,application/xhtml+xml',
+      'Accept-Language': 'en-US,en;q=0.9',
+    },
+    signal,
+  })
+  if (!res.ok) return []
+  const html   = await res.text()
+  const parsed = parseDDGHtml(html).slice(0, maxResults)
+  if (parsed.length === 0) return []
+  const withContent = await Promise.all(
+    parsed.map(async r => ({ ...r, content: await fetchPageText(r.url, signal) }))
+  )
+  return withContent.filter(r => r.title || r.snippet)
 }
 
 function parseDDGHtml(html: string): Omit<SearchResult, 'content'>[] {

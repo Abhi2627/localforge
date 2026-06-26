@@ -15,10 +15,12 @@ function cleanTitleStr(raw: string): string {
     || raw.trim()
 }
 
+export interface WebSource { title: string; url: string }
 export interface Message {
   id: string; type: MessageType; content: string
   displayContent?: string    // what to show in the bubble (strips injected file context)
   filePaths?: string[]       // attached file paths shown as badges
+  sources?: WebSource[]      // web search sources (shown as clickable chips)
   agentName?: string; agentRole?: AgentRole; taskId?: string; filePath?: string; timestamp: number
 }
 export interface Agent {
@@ -67,6 +69,7 @@ interface AppState {
   addMessage:         (sessionId: string, msg: Message) => void
   appendStream:       (sessionId: string, taskId: string, chunk: string) => void
   replaceStream:      (sessionId: string, taskId: string, content: string) => void
+  setStreamSources:   (sessionId: string, taskId: string, sources: WebSource[]) => void
   finalizeStream:     (sessionId: string, taskId: string) => void
   addAgent:           (sessionId: string, agent: Agent) => void
   updateAgent:        (sessionId: string, agentId: string, update: Partial<Agent>) => void
@@ -198,6 +201,23 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { ...sess, messages: sess.messages.map(m =>
         m.taskId === taskId && m.type === 'stream' ? { ...m, content } : m
       )}
+    })
+  })),
+
+  setStreamSources: (sessionId, taskId, sources) => set(s => ({
+    sessions: s.sessions.map(sess => {
+      if (sess.id !== sessionId) return sess
+      // Attach to the stream message if it exists yet, else create a placeholder
+      const exists = sess.messages.find(m => m.taskId === taskId && (m.type === 'stream' || m.type === 'agent'))
+      if (exists) {
+        return { ...sess, messages: sess.messages.map(m =>
+          m.taskId === taskId && (m.type === 'stream' || m.type === 'agent') ? { ...m, sources } : m
+        )}
+      }
+      return { ...sess, messages: [...sess.messages, {
+        id: `stream-${taskId}-${Date.now()}`, type: 'stream' as MessageType,
+        content: '', taskId, sources, timestamp: Date.now(),
+      }]}
     })
   })),
 

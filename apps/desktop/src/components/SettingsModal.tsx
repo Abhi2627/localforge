@@ -12,6 +12,7 @@ interface PublicSettings {
   llmDefaults:    { temperature: number; maxTokens: number; systemPrompt: string; contextLength: number }
   fontSize:       number
   autoApply:      boolean
+  searchProvider?: string
 }
 
 interface ProviderInfo {
@@ -468,6 +469,39 @@ function LocalModelsTab({ selectedModel: _sel, onRefresh }: { selectedModel: str
   )
 }
 
+// ── Web search API key row (Tavily / Brave) ───────────────────────────────────
+function SearchKeyRow({ label, masked, hasKey, helpUrl, helpLabel, onSave, onDelete }: {
+  label: string; masked?: string; hasKey: boolean; helpUrl: string; helpLabel: string
+  onSave: (key: string) => Promise<void>; onDelete: () => Promise<void>
+}) {
+  const [key, setKey]       = useState('')
+  const [saving, setSaving] = useState(false)
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:6, padding:'10px 12px', background:'var(--bg-tertiary)', border:'1px solid var(--border)', borderRadius:8 }}>
+      <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+        <span style={{ fontSize:12, fontWeight:600, color:'var(--text-primary)' }}>{label}</span>
+        {hasKey && <span style={{ fontSize:10, color:'var(--green)', fontWeight:600 }}>● connected {masked}</span>}
+        <a href={helpUrl} target="_blank" rel="noreferrer" style={{ marginLeft:'auto', fontSize:10, color:'var(--accent)' }}>{helpLabel}</a>
+      </div>
+      <div style={{ display:'flex', gap:6 }}>
+        <input type="password" value={key} placeholder={hasKey ? 'Replace key…' : 'Paste API key…'} onChange={e => setKey(e.target.value)}
+          style={{ flex:1, background:'var(--bg-primary)', border:'1px solid var(--border)', borderRadius:6, padding:'6px 10px', color:'var(--text-primary)', fontSize:12, outline:'none' }}/>
+        <button onClick={async () => { if (!key.trim()) return; setSaving(true); await onSave(key.trim()); setKey(''); setSaving(false) }}
+          disabled={!key.trim() || saving}
+          style={{ padding:'0 12px', background:'var(--accent)', border:'none', borderRadius:6, color:'white', fontSize:11, fontWeight:500, cursor:!key.trim()||saving?'not-allowed':'pointer' }}>
+          {saving ? '…' : 'Save'}
+        </button>
+        {hasKey && (
+          <button onClick={() => onDelete()} title="Remove key"
+            style={{ padding:'0 10px', background:'transparent', border:'1px solid var(--border)', borderRadius:6, color:'var(--red)', fontSize:11, cursor:'pointer' }}>
+            Remove
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Main modal ────────────────────────────────────────────────────────────────
 export default function SettingsModal({ onClose }: Props) {
   const [tab,      setTab]      = useState<Tab>('local')
@@ -552,6 +586,22 @@ export default function SettingsModal({ onClose }: Props) {
                   ))}
                   <div style={{ marginTop:12, padding:'10px 14px', background:'var(--bg-tertiary)', borderRadius:8, fontSize:11, color:'var(--text-muted)', lineHeight:1.7 }}>
                     💡 <strong style={{color:'var(--text-secondary)'}}>No API key?</strong> Gemini and Groq have free tiers. Get a Gemini key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" style={{color:'var(--accent)'}}>aistudio.google.com</a> — no credit card needed.
+                  </div>
+
+                  {/* ── Web Search ── */}
+                  <div style={{ marginTop:22, marginBottom:10, paddingTop:16, borderTop:'1px solid var(--border)' }}>
+                    <div style={{ fontSize:13, fontWeight:700, color:'var(--text-primary)', marginBottom:4 }}>Web Search</div>
+                    <p style={{ fontSize:12, color:'var(--text-muted)', lineHeight:1.7, marginBottom:12 }}>
+                      Powers the <strong style={{color:'var(--text-secondary)'}}>🌐 Web</strong> toggle in chat. Add a key for better results, or leave blank to use the free DuckDuckGo fallback. Active: <strong style={{color:'var(--accent)'}}>{settings?.searchProvider ?? 'duckduckgo'}</strong>.
+                    </p>
+                    <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+                      <SearchKeyRow label="Tavily" masked={settings?.apiKeys?.tavily} hasKey={!!settings?.apiKeyStatus?.tavily}
+                        helpUrl="https://tavily.com" helpLabel="Get key (free tier)"
+                        onSave={k => saveApiKey('tavily', k)} onDelete={() => deleteApiKey('tavily')}/>
+                      <SearchKeyRow label="Brave Search" masked={settings?.apiKeys?.brave} hasKey={!!settings?.apiKeyStatus?.brave}
+                        helpUrl="https://brave.com/search/api/" helpLabel="Get key (free tier)"
+                        onSave={k => saveApiKey('brave', k)} onDelete={() => deleteApiKey('brave')}/>
+                    </div>
                   </div>
                 </>
               ) : tab === 'defaults' ? (

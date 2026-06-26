@@ -564,6 +564,8 @@ async function bootstrap() {
     else if (provider === 'gemini') update.gemini = apiKey
     else if (provider === 'claude') update.claude = apiKey
     else if (provider === 'groq')   update.groq   = apiKey
+    else if (provider === 'tavily') update.tavily = apiKey
+    else if (provider === 'brave')  update.brave  = apiKey
     else if (provider === 'custom') { update.customKey = apiKey; if (baseUrl) update.customUrl = baseUrl }
     saveSettings({ apiKeys: update as any })
     return { success: true }
@@ -575,6 +577,8 @@ async function bootstrap() {
     else if (provider === 'gemini') delete keys.gemini
     else if (provider === 'claude') delete keys.claude
     else if (provider === 'groq')   delete keys.groq
+    else if (provider === 'tavily') delete keys.tavily
+    else if (provider === 'brave')  delete keys.brave
     else if (provider === 'custom') { delete keys.customKey; delete keys.customUrl }
     saveSettings({ apiKeys: keys }); return { success: true }
   })
@@ -931,11 +935,12 @@ async function bootstrap() {
   )
 
   // ── Chat streaming WITH RAG ────────────────────────────────────────────────
-  server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }> } }>(
+  server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }>; forceWeb?: boolean } }>(
     '/chat/stream/web', async (req, reply) => {
-      const { message, sessionId, history = [] } = req.body
+      const { message, sessionId, history = [], forceWeb: forceWebBody = false } = req.body
       if (!message) { reply.status(400).send('No message'); return }
-      const send = setupSSE(reply); const forceWeb = hasWebTrigger(message)
+      // forceWeb when the user toggled Web on OR typed an @web prefix.
+      const send = setupSSE(reply); const forceWeb = forceWebBody || hasWebTrigger(message)
       try {
         const s         = loadSettings()
         const isProject = getSession(sessionId)?.type === 'project'
