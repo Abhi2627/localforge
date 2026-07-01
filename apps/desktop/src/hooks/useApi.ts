@@ -76,7 +76,7 @@ export const api = {
     onChunk:      (chunk: string) => void,
     audienceMode: string = 'college',
     onReplace?:   (content: string) => void,
-    opts?:        { web?: boolean; onStatus?: (status: string) => void; onSources?: (sources: Array<{ title: string; url: string }>) => void },
+    opts?:        { web?: boolean; provider?: string; onStatus?: (status: string) => void; onSources?: (sources: Array<{ title: string; url: string }>) => void },
   ): Promise<void> => {
     // Route to the web-augmented endpoint when the Web toggle is on (or @web typed).
     const useWeb = !!opts?.web || /^@web\b/i.test(message.trim())
@@ -84,7 +84,8 @@ export const api = {
     const res = await fetch(`${BASE}${endpoint}`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ message, sessionId, history, audienceMode, forceWeb: useWeb }),
+      // provider = the model selected in THIS chat tab (authoritative over the global default)
+      body:    JSON.stringify({ message, sessionId, history, audienceMode, forceWeb: useWeb, provider: opts?.provider }),
     })
     if (!res.ok) throw new Error(`Stream failed (${res.status}): ${await res.text()}`)
 

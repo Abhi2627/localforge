@@ -53,10 +53,13 @@ export async function search(
 async function searchTavily(query: string, apiKey: string, maxResults: number, signal?: AbortSignal): Promise<SearchResult[]> {
   const res = await fetch('https://api.tavily.com/search', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    // Tavily accepts the key as a Bearer header OR an api_key body field — send both.
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
     body: JSON.stringify({
       api_key: apiKey, query, max_results: maxResults,
-      search_depth: 'basic', include_answer: false, include_raw_content: true,
+      // include_raw_content fetches full pages (slow, can blow the RAG timeout).
+      // Tavily's own `content` field is a curated, RAG-ready snippet and is fast.
+      search_depth: 'basic', include_answer: false, include_raw_content: false,
     }),
     signal,
   })
@@ -66,7 +69,7 @@ async function searchTavily(query: string, apiKey: string, maxResults: number, s
     title:   r.title ?? '',
     url:     r.url ?? '',
     snippet: (r.content ?? '').slice(0, 300),
-    content: (r.raw_content ?? r.content ?? '').slice(0, 2000),
+    content: (r.content ?? r.raw_content ?? '').slice(0, 2000),
   })).filter(r => r.title || r.url)
 }
 

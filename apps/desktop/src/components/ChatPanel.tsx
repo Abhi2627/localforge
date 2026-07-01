@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, KeyboardEvent, useState, useCallback, useMemo } from 'react'
-import { Send, Bot, Paperclip, Mic, Loader, Copy, Pencil, RefreshCw, Check, X, Terminal, ChevronDown, ArrowDown, FileText, Image, File, Download, Globe } from 'lucide-react'
+import { Send, Bot, Paperclip, Mic, Loader, Copy, Pencil, RefreshCw, Check, X, Terminal, ChevronDown, ArrowDown, FileText, Image, File, Download, Globe, School, GraduationCap, Presentation } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { open, save } from '@tauri-apps/plugin-dialog'
@@ -121,6 +121,31 @@ function supportsVision(provider: string, ollamaModel: string): boolean {
     return /llava|vision|bakllava|moondream|minicpm-?v|qwen2\.?5?-?vl|qwen2-vl|llama3\.2-vision/i.test(ollamaModel ?? '')
   }
   return false  // custom / unknown
+}
+
+// Chat-driven orchestration: in a PROJECT, decide whether a message is a
+// "build this whole thing" request (→ deploy the agent pipeline that writes files)
+// vs a question/explanation (→ normal chat answer).
+function isBuildRequest(text: string): boolean {
+  const t = text.toLowerCase().trim()
+  // Questions / explanations are never builds — even if they mention "build an app".
+  if (/^(explain|what|why|how (do|does|to|can|would|should)|who|when|where|which|is|are|should|could|can you (explain|tell)|tell me about|describe|compare|difference|help me understand)\b/.test(t)) return false
+  if (t.endsWith('?')) return false
+  const buildVerb   = /\b(build|create|make|implement|develop|scaffold|generate|set ?up|bootstrap|spin ?up|write)\b/.test(t)
+  const projectNoun = /\b(app|application|project|web ?site|website|api|backend|frontend|full[- ]?stack|system|tool|dashboard|clone|game|server|landing page|crud|micro-?service|platform|saas)\b/.test(t)
+  const wholeThing  = /\b(entire|whole|complete|full|from scratch|end[- ]to[- ]end|production[- ]ready)\b/.test(t)
+  return (buildVerb && projectNoun) || (buildVerb && wholeThing)
+}
+
+function formatPhasePlan(phases: any[]): string {
+  if (!phases?.length) return '🤖 Detected a build request, but the planner returned no phases. Try rephrasing the task.'
+  const lines = ['**Detected a build request** — deploying the agent pipeline.', '', '**Plan:**']
+  phases.forEach((p: any, i: number) => {
+    lines.push(`\n**${i + 1}. ${p.name}**`)
+    for (const a of (p.agents ?? [])) lines.push(`- \`${a.name}\` (${a.role}) — ${a.instruction}`)
+  })
+  lines.push('', '_Phases run in order; agents within a phase run in parallel. Watch the **Agents** panel (right sidebar) for live progress as files are written._')
+  return lines.join('\n')
 }
 
 const TEXT_EXTS  = new Set(['ts','tsx','js','jsx','mjs','cjs','vue','svelte','py','rb','go','rs','java','kt','swift','c','cpp','h','cs','php','html','css','scss','sass','less','json','yaml','yml','toml','xml','env','md','mdx','txt','csv','sh','bash','zsh','fish','sql','graphql','proto','dockerfile'])
@@ -538,10 +563,16 @@ function MessageBubble({ msg, onEdit, onReload, rootPath, userPrompt, autoApply 
   if (msg.type === 'stream') return (
     <div>
       {msg.agentName && <div style={{fontSize:10,color:'var(--accent)',marginBottom:3}}>{msg.agentName}</div>}
-      {msg.sources && msg.sources.length > 0 && <SourceChips sources={msg.sources}/>}
       <div className="msg-agent">
         <MarkdownContent content={msg.content}/>
         <span style={{display:'inline-block',width:7,height:13,background:'var(--accent)',marginLeft:2,animation:'blink 1s step-end infinite',verticalAlign:'text-bottom',borderRadius:1}}/>
+      </div>
+      {/* Sources always at the bottom (matches the finished message) */}
+      {msg.sources && msg.sources.length > 0 && <SourceChips sources={msg.sources}/>}
+      {/* Clear "still generating" indicator so the user knows the reply isn't finished */}
+      <div style={{display:'flex',alignItems:'center',gap:6,marginTop:6,fontSize:11,color:'var(--text-muted)'}}>
+        <Loader size={12} style={{color:'var(--accent)',animation:'spin 1s linear infinite',flexShrink:0}}/>
+        Generating…
       </div>
     </div>
   )
@@ -742,6 +773,27 @@ function ModelSelector({ selectedModel, models, activeProvider, isOnline, apiKey
   )
 }
 
+// Live "agents are building" indicator — shows current activity (file being written)
+// instead of dumping raw agent output into the chat.
+function BuildingBubble({ agents }: { agents: { id: string; name: string; role?: string; currentTask?: string }[] }) {
+  return (
+    <div style={{ display:'flex' }}>
+      <div style={{ background:'var(--bg-tertiary)', border:'1px solid var(--border)', borderRadius:'3px 12px 12px 12px', padding:'10px 14px', display:'flex', flexDirection:'column', gap:6, minWidth:240, maxWidth:'70%' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          <Loader size={13} style={{ color:'var(--accent)', animation:'spin 1s linear infinite', flexShrink:0 }}/>
+          <span style={{ fontSize:12, color:'var(--text-secondary)', fontWeight:600 }}>Building — {agents.length} agent{agents.length !== 1 ? 's' : ''} working</span>
+        </div>
+        {agents.map(a => (
+          <div key={a.id} style={{ display:'flex', alignItems:'center', gap:6, fontSize:11, color:'var(--text-muted)', paddingLeft:4 }}>
+            <span style={{ color:'var(--accent)', fontWeight:600, flexShrink:0, maxWidth:100, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{a.name}</span>
+            <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{a.currentTask ?? 'working…'}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ── Chat navigation rail (DeepSeek-style) ─────────────────────────────────────
 // A stack of small horizontal ticks on the right edge — one per user message.
 // The tick for the message currently in view is highlighted as you scroll, and
@@ -869,6 +921,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
     })),
     [messages]
   )
+  const runningAgents = (session?.agents ?? []).filter(a => a.status === 'running')
   const jumpToMsg = useCallback((id: string) => {
     const node = document.getElementById(`cmsg-${id}`)
     const cont = scrollRef.current
@@ -1056,6 +1109,30 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
     addMessage(sessionId, { id:msgId, type:'user', content:fullContent, displayContent:text, filePaths, timestamp:Date.now() })
     api.saveMessage(msgId, sessionId, 'user', fullContent).catch(() => {})
     setSendingSession(sessionId); setStreamingSession(null); setRagStatus(null)
+
+    // ── Chat-driven orchestration ──────────────────────────────────────────────
+    // In a project, a clear "build X app/project" request deploys the agent
+    // pipeline (which writes files) instead of a normal chat reply. Explanations
+    // and questions fall through to normal chat.
+    if (sessionType === 'project' && isBuildRequest(text)) {
+      try {
+        const res  = await fetch(`http://localhost:3001/projects/${sessionId}/orchestrate`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ task: text }),
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
+        const plan = formatPhasePlan(data.phases ?? [])
+        const aid  = nanoid()
+        addMessage(sessionId, { id: aid, type: 'agent', content: plan, timestamp: Date.now() })
+        api.saveMessage(aid, sessionId, 'assistant', plan).catch(() => {})
+      } catch (err: any) {
+        addMessage(sessionId, { id: nanoid(), type: 'system', content: `⚠ Orchestration failed: ${err?.message ?? err}`, timestamp: Date.now() })
+      } finally {
+        setSendingSession(null); setStreamingSession(null); setRagStatus(null)
+      }
+      return
+    }
+
     const streamTaskId = nanoid(); let firstChunk = true
     try {
       await api.streamChat(fullContent, sessionId,
@@ -1069,6 +1146,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
         content => { replaceStream(sessionId, streamTaskId, content) },
         {
           web: webOn,
+          provider: activeProvider,   // the model chosen in THIS chat tab
           onStatus:  (st)  => setRagStatus(st),
           onSources: (src) => setStreamSources(sessionId, streamTaskId, src),
         }
@@ -1242,6 +1320,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
               )
             })}
             {isSending && !isStreaming && <ThinkingBubble label={ragStatus ?? undefined}/>}
+            {runningAgents.length > 0 && <BuildingBubble agents={runningAgents}/>}
             <div ref={bottomRef} style={{ height:1 }}/>
           </div>
           <ChatNavRail scrollRef={scrollRef} userMsgs={userMsgs} onJump={jumpToMsg}/>
@@ -1266,16 +1345,17 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
             <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:6 }}>
               <span style={{ fontSize:10, color:'var(--text-muted)', flexShrink:0 }}>Explain as:</span>
               {([
-                { mode:'school'    as AudienceMode, label:'🎒 School',    title:'Simple language, real-world analogies, short' },
-                { mode:'college'   as AudienceMode, label:'🎓 College',   title:'Technical terms, theory + application, code examples' },
-                { mode:'professor' as AudienceMode, label:'🧑‍🏫 Professor', title:'Full academic depth — derivations, edge cases, entire lecture' },
-              ]).map(({ mode, label, title }) => {
+                { mode:'school'    as AudienceMode, Icon: School,        label:'School',    title:'Simple language, real-world analogies, short' },
+                { mode:'college'   as AudienceMode, Icon: GraduationCap, label:'College',   title:'Technical terms, theory + application, code examples' },
+                { mode:'professor' as AudienceMode, Icon: Presentation,  label:'Professor', title:'Full academic depth — derivations, edge cases, entire lecture' },
+              ]).map(({ mode, Icon, label, title }) => {
                 const isActive = audienceMode === mode
                 const colors: Record<AudienceMode, string> = { school:'#3dd68c', college:'var(--accent)', professor:'#f59e0b' }
                 return (
                   <button key={mode} onClick={() => session && setAudienceMode(session.id, mode)}
                     title={title}
                     style={{
+                      display:'inline-flex', alignItems:'center', gap:5,
                       padding:'3px 10px', borderRadius:12, border:`1px solid ${isActive ? colors[mode] : 'var(--border)'}`,
                       background: isActive ? `${colors[mode]}18` : 'transparent',
                       color: isActive ? colors[mode] : 'var(--text-muted)',
@@ -1285,7 +1365,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
                     onMouseEnter={e => { if (!isActive) { (e.currentTarget as HTMLElement).style.borderColor = colors[mode]; (e.currentTarget as HTMLElement).style.color = colors[mode] } }}
                     onMouseLeave={e => { if (!isActive) { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)' } }}
                   >
-                    {label}
+                    <Icon size={12}/>{label}
                   </button>
                 )
               })}

@@ -4,7 +4,7 @@
 
 import { search, activeSearchProvider, type SearchResult } from './WebSearch.js'
 
-const MAX_RAG_MS = 5000
+const MAX_RAG_MS = 12000   // headroom for the search API + any page fetches (5s was too tight)
 
 export interface RAGResult {
   didSearch:    boolean
@@ -149,11 +149,12 @@ export function injectRAGContext(systemPrompt: string, rag: RAGResult): string {
   return (
     systemPrompt +
     '\n\n' + rag.contextBlock +
-    `\n\n===STRICT INSTRUCTIONS===
-1. The web search results above are your ONLY source for this answer. Do not use training memory.
-2. Copy names, party names, numbers, and dates EXACTLY as they appear in the search snippets.
-3. Do NOT substitute retrieved information with anything from training data.
-4. Cite the source URL.
-===END INSTRUCTIONS===`
+    `\n\n===ANSWER USING THE WEB RESULTS ABOVE===
+Use ONLY the web results above — not your own training memory.
+- Start with the direct answer in ONE sentence (e.g. "The current Chief Minister of X is Y, in office since <date>.").
+- Copy names, parties, dates and numbers EXACTLY as they appear in the results.
+- If sources disagree, prefer the most authoritative/most recent; if they don't clearly answer, say so plainly.
+- Then add 1–2 concise sentences of supporting detail. Do not pad, speculate, or add unrelated info.
+===END===`
   )
 }

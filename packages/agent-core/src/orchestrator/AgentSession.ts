@@ -108,6 +108,21 @@ FILE_WRITTEN: <relative-filepath>
 Do not use markdown code fences. Output raw file content only.`
 }
 
+// Models often prefix file content with a path header like "# backend/package.json".
+// That's fine in code (a comment) but BREAKS data files (JSON has no comments), which
+// is exactly what produced the "Unexpected token #" npm error. Strip leading
+// comment/header lines for formats that can't contain them.
+function cleanFileContent(content: string, filePath: string): string {
+  const ext = (filePath.split('.').pop() ?? '').toLowerCase()
+  if (ext === 'json') {
+    const lines = content.split('\n')
+    while (lines.length && /^\s*(#|\/\/|<!--|```)/.test(lines[0])) lines.shift()
+    while (lines.length && /^\s*(```)/.test(lines[lines.length - 1])) lines.pop()
+    return lines.join('\n').replace(/^\s+/, '').trim()
+  }
+  return content
+}
+
 export class AgentSession {
   readonly id: string
   readonly config: AgentConfig
@@ -185,7 +200,7 @@ export class AgentSession {
         continue
       }
 
-      const content = blocks[i]?.trim() ?? ''
+      const content = cleanFileContent(blocks[i]?.trim() ?? '', filePath)
       if (!content) continue
 
       const dir = path.dirname(filePath)

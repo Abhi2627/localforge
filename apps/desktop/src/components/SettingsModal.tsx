@@ -474,30 +474,56 @@ function SearchKeyRow({ label, masked, hasKey, helpUrl, helpLabel, onSave, onDel
   label: string; masked?: string; hasKey: boolean; helpUrl: string; helpLabel: string
   onSave: (key: string) => Promise<void>; onDelete: () => Promise<void>
 }) {
-  const [key, setKey]       = useState('')
-  const [saving, setSaving] = useState(false)
+  const [key, setKey]         = useState('')
+  const [saving, setSaving]   = useState(false)
+  const [editing, setEditing] = useState(false)
+  // Consider it connected if the status flag OR a masked key came back from the server.
+  const connected = hasKey || (!!masked && masked.length > 2)
+
+  async function doSave() {
+    if (!key.trim()) return
+    setSaving(true); await onSave(key.trim()); setKey(''); setEditing(false); setSaving(false)
+  }
+
   return (
-    <div style={{ display:'flex', flexDirection:'column', gap:6, padding:'10px 12px', background:'var(--bg-tertiary)', border:'1px solid var(--border)', borderRadius:8 }}>
+    <div style={{ display:'flex', flexDirection:'column', gap:8, padding:'10px 12px', background:'var(--bg-tertiary)', border:`1px solid ${connected ? 'rgba(61,214,140,0.4)' : 'var(--border)'}`, borderRadius:8 }}>
       <div style={{ display:'flex', alignItems:'center', gap:8 }}>
         <span style={{ fontSize:12, fontWeight:600, color:'var(--text-primary)' }}>{label}</span>
-        {hasKey && <span style={{ fontSize:10, color:'var(--green)', fontWeight:600 }}>● connected {masked}</span>}
+        {connected
+          ? <span style={{ fontSize:11, color:'var(--green)', fontWeight:600 }}>✓ Connected {masked}</span>
+          : <span style={{ fontSize:11, color:'var(--text-muted)' }}>Not connected</span>}
         <a href={helpUrl} target="_blank" rel="noreferrer" style={{ marginLeft:'auto', fontSize:10, color:'var(--accent)' }}>{helpLabel}</a>
       </div>
-      <div style={{ display:'flex', gap:6 }}>
-        <input type="password" value={key} placeholder={hasKey ? 'Replace key…' : 'Paste API key…'} onChange={e => setKey(e.target.value)}
-          style={{ flex:1, background:'var(--bg-primary)', border:'1px solid var(--border)', borderRadius:6, padding:'6px 10px', color:'var(--text-primary)', fontSize:12, outline:'none' }}/>
-        <button onClick={async () => { if (!key.trim()) return; setSaving(true); await onSave(key.trim()); setKey(''); setSaving(false) }}
-          disabled={!key.trim() || saving}
-          style={{ padding:'0 12px', background:'var(--accent)', border:'none', borderRadius:6, color:'white', fontSize:11, fontWeight:500, cursor:!key.trim()||saving?'not-allowed':'pointer' }}>
-          {saving ? '…' : 'Save'}
-        </button>
-        {hasKey && (
-          <button onClick={() => onDelete()} title="Remove key"
-            style={{ padding:'0 10px', background:'transparent', border:'1px solid var(--border)', borderRadius:6, color:'var(--red)', fontSize:11, cursor:'pointer' }}>
+
+      {connected && !editing ? (
+        // Connected: hide the input, offer Update / Remove
+        <div style={{ display:'flex', gap:6 }}>
+          <button onClick={() => setEditing(true)}
+            style={{ padding:'5px 12px', background:'transparent', border:'1px solid var(--border)', borderRadius:6, color:'var(--text-secondary)', fontSize:11, cursor:'pointer' }}>
+            Update key
+          </button>
+          <button onClick={() => onDelete()}
+            style={{ padding:'5px 10px', background:'transparent', border:'1px solid var(--border)', borderRadius:6, color:'var(--red)', fontSize:11, cursor:'pointer' }}>
             Remove
           </button>
-        )}
-      </div>
+        </div>
+      ) : (
+        <div style={{ display:'flex', gap:6 }}>
+          <input type="password" autoFocus={editing} value={key} placeholder="Paste API key…" onChange={e => setKey(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') doSave() }}
+            style={{ flex:1, background:'var(--bg-primary)', border:'1px solid var(--border)', borderRadius:6, padding:'6px 10px', color:'var(--text-primary)', fontSize:12, outline:'none' }}/>
+          <button onClick={doSave} disabled={!key.trim() || saving}
+            style={{ padding:'0 12px', background:'var(--accent)', border:'none', borderRadius:6, color:'white', fontSize:11, fontWeight:500, cursor:!key.trim()||saving?'not-allowed':'pointer' }}>
+            {saving ? '…' : 'Save'}
+          </button>
+          {editing && (
+            <button onClick={() => { setEditing(false); setKey('') }}
+              style={{ padding:'0 10px', background:'transparent', border:'1px solid var(--border)', borderRadius:6, color:'var(--text-muted)', fontSize:11, cursor:'pointer' }}>
+              Cancel
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }

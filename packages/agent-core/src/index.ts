@@ -150,6 +150,14 @@ function buildSystemPrompt(modelName: string, summary?: string | null, knowledge
     `4. Write EVERY file the project needs — do not stop after 2-3 files\n` +
     `5. A production project needs ALL of: package.json, source files, config, tests, README\n\n` +
 
+    // ── FIXING ERRORS ─────────────────────────────────────────────────────────
+    `FIXING ERRORS / BUGS:\n` +
+    `When the user reports an error, stack trace, failed command, or invalid file, DO NOT just explain the fix.\n` +
+    `- The relevant file contents are provided below under "Project files". Read them, find the exact problem, and\n` +
+    `  output the COMPLETE corrected file as a \`\`\`write:<path>\`\`\` block so it can be applied directly.\n` +
+    `- Keep the path identical to the broken file. Fix only what's needed; preserve the rest of the file.\n` +
+    `- Add a ONE-line note of what was wrong, then the write: block. Do not paste the file in a regular code block.\n\n` +
+
     // ── PRODUCTION PROJECT RULE ───────────────────────────────────────────────
     `WHEN BUILDING A FULL PROJECT:\n` +
     `- Write ALL files in one response — package.json, every source file, tests, config, README\n` +
@@ -300,6 +308,22 @@ function mapHistory(h: Array<{ role: string; content: string }>) {
   return h.slice(-20).map(x => ({ role: x.role as ChatRole, content: x.content }))
 }
 
+// Lenient JSON parse for model-generated plans. Small models emit trailing commas,
+// stray backslashes (bad escapes) and control chars that break strict JSON.parse.
+function parseModelJson(text: string): any {
+  const firstObj = text.indexOf('{'), firstArr = text.indexOf('[')
+  let start = -1
+  if (firstObj >= 0 && (firstArr < 0 || firstObj < firstArr)) start = firstObj
+  else if (firstArr >= 0) start = firstArr
+  const end = Math.max(text.lastIndexOf('}'), text.lastIndexOf(']'))
+  const slice = (start >= 0 && end > start) ? text.slice(start, end + 1) : text
+  try { return JSON.parse(slice) } catch { }
+  const repaired = slice
+    .replace(/,\s*([}\]])/g, '$1')                     // trailing commas
+    .replace(/\\(?!["\\/bfnrtu])/g, '\\\\')            // escape invalid backslashes (e.g. Windows paths)
+  return JSON.parse(repaired)
+}
+
 // Read key project files (README, package.json etc) to inject as real content into context
 // Capped so we don't blow the context window. README gets up to 8000 chars, others 1500 each.
 const KEY_FILES_FOR_CONTEXT = [
@@ -318,6 +342,34 @@ function readProjectFilesForContext(rootPath: string): Record<string, string> {
       const raw   = fs.readFileSync(full, 'utf8')
       const limit = name.toLowerCase().startsWith('readme') ? 8000 : 1500
       result[name] = raw.length > limit ? raw.slice(0, limit) + '\n[... truncated ...]' : raw
+    } catch { }
+  }
+  return result
+}
+
+// Pull in the actual contents of any file the user mentions (a filename, a relative
+// path, or an absolute path pasted inside an error/traceback) so the model can FIX
+// it precisely instead of guessing. Resolves within the project root only.
+function readReferencedFiles(message: string, rootPath: string): Record<string, string> {
+  const result: Record<string, string> = {}
+  if (!rootPath || !fs.existsSync(rootPath)) return result
+  const candidates = new Set<string>()
+  // absolute paths first (e.g. "/Users/.../backend/package.json" in an npm error)
+  for (const m of message.matchAll(/(\/[\w./ @-]+\.[A-Za-z0-9]+)/g)) candidates.add(m[1].trim())
+  // relative paths / bare filenames with an extension
+  for (const m of message.matchAll(/(?:^|[\s"'`(])([\w][\w./@-]*\.[A-Za-z0-9]+)/g)) candidates.add(m[1])
+
+  for (const cand of candidates) {
+    if (Object.keys(result).length >= 8) break
+    let full = path.isAbsolute(cand) ? cand : path.join(rootPath, cand)
+    const resolved = path.resolve(full), root = path.resolve(rootPath)
+    if (resolved !== root && !resolved.startsWith(root + path.sep)) continue  // stay inside the project
+    try {
+      const st = fs.statSync(resolved)
+      if (!st.isFile() || st.size > 120_000) continue
+      const rel = path.relative(root, resolved)
+      if (result[rel]) continue
+      result[rel] = fs.readFileSync(resolved, 'utf8')
     } catch { }
   }
   return result
@@ -351,25 +403,47 @@ async function routedChat(
     return { content, modelUsed: selectedModel, provider: 'ollama' }
   }
 
-  const model  = s.cloudModels[provider as CloudProvider] ?? ''
-  const keys   = s.apiKeys
-  let apiKey   = ''
-  let baseUrl: string | undefined
+  const keys = s.apiKeys
+  const keyFor = (p: CloudProvider): { apiKey: string; baseUrl?: string } => {
+    if (p === 'openai') return { apiKey: keys.openai ?? '' }
+    if (p === 'gemini') return { apiKey: keys.gemini ?? '' }
+    if (p === 'claude') return { apiKey: keys.claude ?? '' }
+    if (p === 'groq')   return { apiKey: keys.groq ?? '' }
+    if (p === 'custom') return { apiKey: keys.customKey ?? '', baseUrl: keys.customUrl }
+    return { apiKey: '' }
+  }
 
-  if (provider === 'openai') apiKey = keys.openai  ?? ''
-  if (provider === 'gemini') apiKey = keys.gemini  ?? ''
-  if (provider === 'claude') apiKey = keys.claude  ?? ''
-  if (provider === 'groq')   apiKey = keys.groq    ?? ''
-  if (provider === 'custom') { apiKey = keys.customKey ?? ''; baseUrl = keys.customUrl }
+  // Try the selected provider first, then any OTHER configured cloud provider as a
+  // fallback when the primary is rate-limited / quota-exhausted. A 429 is returned
+  // before streaming begins, so falling over never produces duplicated output.
+  const primary = provider as CloudProvider
+  const order: CloudProvider[] = [primary, ...(['groq', 'gemini', 'openai', 'claude', 'custom'] as CloudProvider[]).filter(p => p !== primary)]
 
-  if (!apiKey) throw new Error(`No API key for ${provider}. Go to Settings → Cloud Providers.`)
-
-  const config: CloudProviderConfig = { provider: provider as CloudProvider, apiKey, model, baseUrl }
-  const content = await cloudChat(config, messages, onChunk ? (c) => onChunk(c.content) : undefined, {
-    temperature: s.llmDefaults.temperature,
-    maxTokens:   s.llmDefaults.maxTokens,
-  })
-  return { content, modelUsed: model, provider }
+  let lastErr: any = null
+  let anyKey = false
+  for (const p of order) {
+    const { apiKey, baseUrl } = keyFor(p)
+    if (!apiKey) continue
+    anyKey = true
+    const model = s.cloudModels[p] ?? ''
+    try {
+      const config: CloudProviderConfig = { provider: p, apiKey, model, baseUrl }
+      const content = await cloudChat(config, messages, onChunk ? (c) => onChunk(c.content) : undefined, {
+        temperature: s.llmDefaults.temperature,
+        maxTokens:   s.llmDefaults.maxTokens,
+      })
+      return { content, modelUsed: model, provider: p }
+    } catch (err: any) {
+      lastErr = err
+      const m = String(err?.message ?? '').toLowerCase()
+      const rateLimited = m.includes('429') || m.includes('rate limit') || m.includes('rate_limit') || m.includes('quota') || m.includes('exhaust') || m.includes('too many requests')
+      // Only fall over on rate-limit/quota; surface real errors (bad key, etc.) immediately.
+      if (!rateLimited) throw err
+      console.warn(`[routedChat] ${p} rate-limited — trying next configured provider`)
+    }
+  }
+  if (!anyKey) throw new Error(`No API key for ${primary}. Go to Settings → Cloud Providers.`)
+  throw lastErr
 }
 
 async function bootstrap() {
@@ -437,6 +511,26 @@ async function bootstrap() {
 
   // ── Health ─────────────────────────────────────────────────────────────────
   server.get('/health', async () => ({ status: 'ok', mode: taskQueue.currentMode, shell: DEFAULT_SHELL }))
+
+  // ── Web search DEBUG — open in browser to confirm the provider + results ─────
+  // http://localhost:3001/search/debug?q=who is the cm of tamil nadu
+  server.get<{ Querystring: { q?: string } }>('/search/debug', async (req) => {
+    const q = (req.query.q ?? 'who is the prime minister of india').slice(0, 200)
+    const { search, activeSearchProvider } = await import('./rag/WebSearch.js')
+    const s = loadSettings()
+    const provider = activeSearchProvider()
+    const out: any = {
+      provider,
+      keysConfigured: { tavily: !!s.apiKeys.tavily, brave: !!s.apiKeys.brave },
+      query: q,
+    }
+    try {
+      const results = await search(q, 3)
+      out.count = results.length
+      out.results = results.map(r => ({ title: r.title, url: r.url, snippetLen: (r.snippet || '').length, contentLen: (r.content || '').length }))
+    } catch (e: any) { out.error = e?.message ?? String(e) }
+    return out
+  })
 
   // ── Git direct (rootPath-based, bypasses DB lookup) ─────────────────────────
   // Used when session may not yet be persisted in SQLite (race condition on first open)
@@ -902,18 +996,23 @@ async function bootstrap() {
   })
 
   // ── Chat streaming (no RAG) ────────────────────────────────────────────────
-  server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }>; audienceMode?: string } }>(
+  server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }>; audienceMode?: string; provider?: string } }>(
     '/chat/stream', async (req, reply) => {
-      const { message, sessionId, history = [], audienceMode = 'college' } = req.body
+      const { message, sessionId, history = [], audienceMode = 'college', provider } = req.body
       if (!message) { reply.status(400).send('No message'); return }
       const send = setupSSE(reply)
       try {
-        const s         = loadSettings()
+        // Per-request provider override (from the chat tab's model dropdown) —
+        // makes the selected model authoritative instead of the single global one.
+        const s0        = loadSettings()
+        const s         = provider ? { ...s0, activeProvider: provider as any } : s0
         const isProject = getSession(sessionId)?.type === 'project'
         if (!getSession(sessionId)) upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: loadConfig().selectedModel })
         const session = getSession(sessionId)
         const modelName = s.activeProvider === 'ollama' ? loadConfig().selectedModel : (s.cloudModels[s.activeProvider as CloudProvider] ?? '')
-        const fileContents = isProject && session?.rootPath ? readProjectFilesForContext(session.rootPath) : undefined
+        const fileContents = isProject && session?.rootPath
+          ? { ...readProjectFilesForContext(session.rootPath), ...readReferencedFiles(message, session.rootPath) }
+          : undefined
         const sysPrompt = buildSystemPrompt(modelName, session?.summary, isProject ? buildAgentContext(sessionId) : undefined, isProject ? buildContractContext(sessionId) : undefined, s.llmDefaults.systemPrompt || undefined, fileContents, audienceMode)
         const msgs = [{ role: 'system' as ChatRole, content: sysPrompt }, ...mapHistory(history), { role: 'user' as ChatRole, content: message }]
         send({ type: 'provider', provider: s.activeProvider, model: modelName })
@@ -935,31 +1034,37 @@ async function bootstrap() {
   )
 
   // ── Chat streaming WITH RAG ────────────────────────────────────────────────
-  server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }>; forceWeb?: boolean } }>(
+  server.post<{ Body: { message: string; sessionId: string; history?: Array<{ role: string; content: string }>; forceWeb?: boolean; provider?: string } }>(
     '/chat/stream/web', async (req, reply) => {
-      const { message, sessionId, history = [], forceWeb: forceWebBody = false } = req.body
+      const { message, sessionId, history = [], forceWeb: forceWebBody = false, provider } = req.body
       if (!message) { reply.status(400).send('No message'); return }
       // forceWeb when the user toggled Web on OR typed an @web prefix.
       const send = setupSSE(reply); const forceWeb = forceWebBody || hasWebTrigger(message)
       try {
-        const s         = loadSettings()
+        // Per-request provider override from the chat tab's model dropdown.
+        const s0        = loadSettings()
+        const s         = provider ? { ...s0, activeProvider: provider as any } : s0
         const isProject = getSession(sessionId)?.type === 'project'
         if (!getSession(sessionId)) upsertSession({ id: sessionId, type: 'chat', title: 'Chat', modelName: loadConfig().selectedModel })
         const session   = getSession(sessionId)
         const modelName = s.activeProvider === 'ollama' ? loadConfig().selectedModel : (s.cloudModels[s.activeProvider as CloudProvider] ?? '')
         // Inject real file contents for project sessions — prevents hallucination
-        const fileContents = isProject && session?.rootPath ? readProjectFilesForContext(session.rootPath) : undefined
+        const fileContents = isProject && session?.rootPath
+          ? { ...readProjectFilesForContext(session.rootPath), ...readReferencedFiles(message, session.rootPath) }
+          : undefined
         let sysPrompt   = buildSystemPrompt(modelName, session?.summary, isProject ? buildAgentContext(sessionId) : undefined, isProject ? buildContractContext(sessionId) : undefined, s.llmDefaults.systemPrompt || undefined, fileContents)
         const rag = await runRAG(message, forceWeb, (status) => send({ type: 'rag_status', status }))
         if (rag.didSearch) {
+          // The web results are injected into the system prompt only. The model
+          // reads them and formulates ONE unified answer — we do NOT stream the
+          // raw snippet separately (that produced a "search dump + answer" split).
           sysPrompt = injectRAGContext(sysPrompt, rag)
           if (rag.sources.length > 0) send({ type: 'rag_sources', sources: rag.sources.map(r => ({ title: r.title, url: r.url })) })
-          if (rag.extractedFacts && !rag.ragFailed) send({ chunk: rag.extractedFacts + '\n' })
         }
         send({ type: 'provider', provider: s.activeProvider, model: modelName })
         const cleanMsg = message.replace(/^@web\s*/i, '').trim()
         const msgs = [{ role: 'system' as ChatRole, content: sysPrompt }, ...mapHistory(history), { role: 'user' as ChatRole, content: cleanMsg }]
-        let full = rag.extractedFacts ?? ''
+        let full = ''
         // Search ran but found nothing — surface a clear warning so the model's
         // (possibly hallucinated) answer isn't mistaken for web-verified fact.
         if (rag.didSearch && rag.ragFailed) {
@@ -1000,59 +1105,73 @@ async function bootstrap() {
     try { project = orchestrator.getProject(projectId) }
     catch { reply.status(404).send({ error: `Project ${projectId} not found` }); return }
 
-    // Step 1: Ask LLM to plan the agent structure
+    // Step 1: ask the model for an ORDERED, PHASED plan (dependencies go in earlier phases).
     const planPrompt = [
       { role: 'system' as ChatRole, content:
-        'You are a software project planner. Given a task, output a JSON array of agents needed to complete it.\n' +
-        'Each agent has: name (string), role ("frontend"|"backend"|"database"|"devops"|"test"|"docs"), instruction (string).\n' +
+        'You are a software project planner. Break the task into ORDERED phases that build on each other.\n' +
+        'Output ONLY valid JSON (no markdown, no prose) in EXACTLY this shape:\n' +
+        '{"phases":[{"name":"Scaffold","agents":[{"name":"Setup","role":"devops","instruction":"..."}]}]}\n' +
         'Rules:\n' +
-        '- Use 1-5 agents depending on complexity\n' +
-        '- Each agent should own a specific part of the codebase\n' +
-        '- Instructions should be specific and actionable\n' +
-        'Output ONLY valid JSON array, no markdown, no explanation.\n' +
-        'Example: [{"name":"Backend","role":"backend","instruction":"Build Express REST API with auth"}]'
+        '- Phases run in ORDER; agents within a phase run in PARALLEL. Put anything others depend on in an earlier phase.\n' +
+        '- Typical order: scaffold/config → backend → frontend → tests → docs. Skip phases that are not needed.\n' +
+        '- role must be one of: frontend, backend, database, devops, test, docs, review, fullstack.\n' +
+        '- 1-4 phases, 1-3 agents per phase. Instructions must be specific and actionable.'
       },
       { role: 'user' as ChatRole, content: `Task: ${task}\nProject path: ${project.rootPath}` },
     ]
 
-    let planJson: string
+    let planText: string
     try {
       const { content } = await routedChat(planPrompt)
-      planJson = content.trim().replace(/^```json\n?/, '').replace(/\n?```$/, '').trim()
+      planText = content.trim().replace(/^```json\n?/i, '').replace(/^```\n?/, '').replace(/\n?```$/, '').trim()
     } catch (err: any) {
       reply.status(500).send({ error: `Planning failed: ${err.message}` }); return
     }
 
-    let agentPlans: Array<{ name: string; role: string; instruction: string }>
+    // Step 2: parse — accept {phases:[...]} or a flat [{...}] (wrapped as a single phase).
+    type PlanAgent = { name: string; role: string; instruction: string }
+    type Phase     = { name: string; agents: PlanAgent[] }
+    let phases: Phase[]
     try {
-      agentPlans = JSON.parse(planJson)
-      if (!Array.isArray(agentPlans)) throw new Error('Not an array')
+      const parsed = parseModelJson(planText)
+      if (Array.isArray(parsed))                     phases = [{ name: 'Build', agents: parsed }]
+      else if (parsed && Array.isArray(parsed.phases)) phases = parsed.phases
+      else throw new Error('Expected {phases:[...]} or [...]')
+      phases = phases
+        .filter(p => p && Array.isArray(p.agents) && p.agents.length > 0)
+        .slice(0, 6)
+        .map(p => ({ name: String(p.name ?? 'Phase'), agents: p.agents.slice(0, 4) }))
+      if (phases.length === 0) throw new Error('No valid phases')
     } catch (err: any) {
-      reply.status(500).send({ error: `Invalid plan JSON: ${err.message}`, raw: planJson }); return
+      reply.status(500).send({ error: `Invalid plan JSON: ${err.message}`, raw: planText.slice(0, 500) }); return
     }
 
-    // Step 2: Create and deploy each agent
-    const deployed: any[] = []
-    for (const plan of agentPlans.slice(0, 5)) {  // cap at 5 agents
-      try {
-        const agent = orchestrator.addAgent(projectId, {
-          name:        plan.name,
-          role:        plan.role as any,
-          allowedPaths: [],
-          projectPath: project.rootPath,
-        })
-        deployed.push({ id: agent.id, name: plan.name, role: plan.role, instruction: plan.instruction })
-        // Run the instruction asynchronously
-        orchestrator.runInstruction(projectId, agent.id, plan.instruction).catch((e: any) =>
-          console.error(`[Orchestrate] Agent ${plan.name} failed:`, e.message)
-        )
-      } catch (err: any) {
-        console.error(`[Orchestrate] Failed to create agent ${plan.name}:`, err.message)
+    const planForClient = phases.map(p => ({ name: p.name, agents: p.agents.map(a => ({ name: a.name, role: a.role, instruction: a.instruction })) }))
+    broadcast({ type: 'orchestration_started', projectId, phases: planForClient, task })
+
+    // Step 3: run phases SEQUENTIALLY (each completes before the next starts);
+    // agents within a phase run in PARALLEL. Files/knowledge-graph from one phase
+    // are available to the next. Runs in the background; the response returns the plan.
+    ;(async () => {
+      for (const phase of phases) {
+        broadcast({ type: 'phase_started', projectId, phase: phase.name })
+        await Promise.all(phase.agents.map(async (a) => {
+          try {
+            const agent = orchestrator.addAgent(projectId, {
+              name: a.name, role: (a.role as any) || 'fullstack', allowedPaths: [], projectPath: project.rootPath,
+            })
+            broadcast({ type: 'agent_deployed', projectId, agent: { id: agent.id, name: a.name, role: a.role, phase: phase.name } })
+            await orchestrator.runInstructionDirect(projectId, agent.id, a.instruction)  // awaits completion
+          } catch (e: any) {
+            console.error(`[Orchestrate] Agent ${a.name} failed:`, e?.message ?? e)
+          }
+        }))
+        broadcast({ type: 'phase_done', projectId, phase: phase.name })
       }
-    }
+      broadcast({ type: 'orchestration_done', projectId })
+    })().catch(e => console.error('[Orchestrate] pipeline error:', e?.message ?? e))
 
-    broadcast({ type: 'orchestration_started', projectId, agents: deployed, task })
-    return { success: true, agents: deployed, plan: agentPlans }
+    return { success: true, phases: planForClient }
   })
 
   // ── Projects / Agents ──────────────────────────────────────────────────────

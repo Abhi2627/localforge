@@ -53,11 +53,9 @@ export default function AgentModal({ sessionId, projectId, onClose }: Props) {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
-      // Register agents in store
-      for (const agent of data.agents ?? []) {
-        addAgent(sessionId, { id: agent.id, name: agent.name, role: agent.role, status: 'running' })
-      }
-      setAutoResult(data.agents ?? [])
+      // Agents are registered in the store as each phase deploys them (via the
+      // 'agent_deployed' WebSocket event) — here we just show the planned phases.
+      setAutoResult(data.phases ?? [])
     } catch (err: any) { setError(err.message) }
     finally { setAutoLoading(false) }
   }
@@ -109,17 +107,22 @@ export default function AgentModal({ sessionId, projectId, onClose }: Props) {
             {autoResult && (
               <div style={{ background:'rgba(61,214,140,0.08)', border:'1px solid rgba(61,214,140,0.25)', borderRadius:8, padding:'10px 12px' }}>
                 <div style={{ fontSize:12, fontWeight:600, color:'#3dd68c', marginBottom:8 }}>
-                  ✓ {autoResult.length} agent{autoResult.length !== 1 ? 's' : ''} deployed
+                  ✓ Pipeline planned — {autoResult.length} phase{autoResult.length !== 1 ? 's' : ''}
                 </div>
-                {autoResult.map((a, i) => (
-                  <div key={i} style={{ fontSize:11, color:'var(--text-secondary)', marginBottom:4, display:'flex', gap:8 }}>
-                    <span style={{ color:'var(--accent)', fontWeight:600, minWidth:80 }}>{a.name}</span>
-                    <span style={{ color:'var(--text-muted)' }}>{a.role}</span>
-                    <span style={{ color:'var(--text-muted)', flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{a.instruction}</span>
+                {autoResult.map((phase: any, i: number) => (
+                  <div key={i} style={{ marginBottom:8 }}>
+                    <div style={{ fontSize:11, fontWeight:700, color:'var(--accent)', marginBottom:3 }}>{i + 1}. {phase.name}</div>
+                    {(phase.agents ?? []).map((a: any, j: number) => (
+                      <div key={j} style={{ fontSize:11, color:'var(--text-secondary)', marginBottom:3, display:'flex', gap:8, paddingLeft:10 }}>
+                        <span style={{ color:'var(--text-primary)', fontWeight:600, minWidth:72 }}>{a.name}</span>
+                        <span style={{ color:'var(--text-muted)', minWidth:60 }}>{a.role}</span>
+                        <span style={{ color:'var(--text-muted)', flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{a.instruction}</span>
+                      </div>
+                    ))}
                   </div>
                 ))}
                 <div style={{ marginTop:8, fontSize:11, color:'var(--text-muted)' }}>
-                  Agents are running in the background. Watch the Agents panel for progress.
+                  Phases run in order; agents in each phase run in parallel. Watch the Agents panel for live progress.
                 </div>
               </div>
             )}
