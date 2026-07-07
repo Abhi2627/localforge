@@ -27,6 +27,21 @@ export interface Agent {
   id: string; name: string; role: AgentRole
   status: 'idle' | 'running' | 'done' | 'failed'; currentTask?: string
 }
+
+// ── Phase 3: live pipeline model (one active orchestration run per session) ────
+export type PipeStatus = 'pending' | 'running' | 'done' | 'failed'
+export interface PipeAgent { id?: string; name: string; role?: string; status: PipeStatus; task?: string }
+export interface PipePhase { name: string; status: PipeStatus; agents: PipeAgent[] }
+export interface PipelineRun {
+  task: string
+  phases: PipePhase[]
+  log: string[]                                            // verify + deploy status lines
+  verify?: { ok: boolean; skipped?: boolean; failed?: string }
+  deploy?: { status: 'running' | 'up' | 'down' | 'skipped'; port?: number }
+  status: 'running' | 'done'
+  note?: string
+  startedAt: number
+}
 export interface Session {
   id: string; type: SessionType; title: string; rootPath?: string
   agents: Agent[]; messages: Message[]; allFiles: string[]; writtenFiles: string[]
@@ -49,6 +64,19 @@ interface AppState {
   rightExpanded: boolean; isConnected: boolean; isOnline: boolean; userName: string
   openFiles:  Record<string, string[]>
   activeFile: Record<string, string | null>
+  pipelineStatus: Record<string, string | null>   // per-session orchestration verify/fix status
+  setPipelineStatus: (sessionId: string, status: string | null) => void
+
+  // Phase 3: live pipeline run per session (null when idle)
+  pipelines: Record<string, PipelineRun | null>
+  pipelineStart:    (sessionId: string, task: string, phases: { name: string; agents: { name: string; role?: string }[] }[]) => void
+  pipelinePhase:    (sessionId: string, phaseName: string, status: PipeStatus) => void
+  pipelineDeployAgent: (sessionId: string, phaseName: string, agentId: string, name: string, role?: string) => void
+  pipelineAgent:    (sessionId: string, agentId: string, patch: Partial<PipeAgent>) => void
+  pipelineLog:      (sessionId: string, line: string) => void
+  pipelineDeploy:   (sessionId: string, deploy: PipelineRun['deploy']) => void
+  pipelineFinish:   (sessionId: string, data: { verify?: PipelineRun['verify']; deploy?: PipelineRun['deploy']; note?: string }) => void
+  pipelineClear:    (sessionId: string) => void
 
   // Per-session sending/streaming state — fixes "thinking bubble on all chats" bug
   sendingSessionId:   string | null
@@ -73,6 +101,8 @@ interface AppState {
   finalizeStream:     (sessionId: string, taskId: string) => void
   addAgent:           (sessionId: string, agent: Agent) => void
   updateAgent:        (sessionId: string, agentId: string, update: Partial<Agent>) => void
+  resetAgents:        (sessionId: string) => void
+  settleAgents:       (sessionId: string) => void
   addWrittenFile:     (sessionId: string, filePath: string) => void
   setAllFiles:        (sessionId: string, files: string[]) => void
   setSessionSummary:  (sessionId: string, summary: string) => void
@@ -95,7 +125,54 @@ export const useAppStore = create<AppState>((set, get) => ({
   screen: 'welcome', sessions: [], activeSessionId: null,
   models: [], selectedModel: '', leftExpanded: isWide,
   rightExpanded: isRightWide, isConnected: false, isOnline: navigator.onLine, userName: '',
-  openFiles: {}, activeFile: {},
+  openFiles: {}, activeFile: {}, pipelineStatus: {},
+  setPipelineStatus: (sessionId, status) => set(s => ({ pipelineStatus: { ...s.pipelineStatus, [sessionId]: status } })),
+
+  pipelines: {},
+  pipelineStart: (sessionId, task, phases) => set(s => ({
+    pipelines: { ...s.pipelines, [sessionId]: {
+      task,
+      phases: phases.map(p => ({ name: p.name, status: 'pending' as PipeStatus, agents: p.agents.map(a => ({ name: a.name, role: a.role, status: 'pending' as PipeStatus })) })),
+      log: [], status: 'running' as const, startedAt: Date.now(),
+    } }
+  })),
+  pipelinePhase: (sessionId, phaseName, status) => set(s => {
+    const p = s.pipelines[sessionId]; if (!p) return {}
+    return { pipelines: { ...s.pipelines, [sessionId]: { ...p, phases: p.phases.map(ph => ph.name === phaseName ? { ...ph, status } : ph) } } }
+  }),
+  // agent_deployed → attach the real agent id to the matching planned agent (by phase+name) and mark it running
+  pipelineDeployAgent: (sessionId, phaseName, agentId, name, role) => set(s => {
+    const p = s.pipelines[sessionId]; if (!p) return {}
+    let matched = false
+    const phases = p.phases.map(ph => {
+      if (ph.name !== phaseName) return ph
+      const agents = ph.agents.map(a => (!matched && a.name === name && !a.id) ? (matched = true, { ...a, id: agentId, status: 'running' as PipeStatus }) : a)
+      if (!matched) { matched = true; agents.push({ id: agentId, name, role, status: 'running' as PipeStatus }) }  // fixer/extra agents
+      return { ...ph, status: 'running' as PipeStatus, agents }
+    })
+    return { pipelines: { ...s.pipelines, [sessionId]: { ...p, phases } } }
+  }),
+  pipelineAgent: (sessionId, agentId, patch) => set(s => {
+    const p = s.pipelines[sessionId]; if (!p) return {}
+    return { pipelines: { ...s.pipelines, [sessionId]: { ...p, phases: p.phases.map(ph => ({ ...ph, agents: ph.agents.map(a => a.id === agentId ? { ...a, ...patch } : a) })) } } }
+  }),
+  pipelineLog: (sessionId, line) => set(s => {
+    const p = s.pipelines[sessionId]; if (!p) return {}
+    return { pipelines: { ...s.pipelines, [sessionId]: { ...p, log: [...p.log, line].slice(-40) } } }
+  }),
+  pipelineDeploy: (sessionId, deploy) => set(s => {
+    const p = s.pipelines[sessionId]; if (!p) return {}
+    return { pipelines: { ...s.pipelines, [sessionId]: { ...p, deploy } } }
+  }),
+  pipelineFinish: (sessionId, data) => set(s => {
+    const p = s.pipelines[sessionId]; if (!p) return {}
+    return { pipelines: { ...s.pipelines, [sessionId]: {
+      ...p, status: 'done' as const,
+      verify: data.verify ?? p.verify, deploy: data.deploy ?? p.deploy, note: data.note ?? p.note,
+      phases: p.phases.map(ph => ({ ...ph, status: ph.status === 'running' ? 'done' : ph.status, agents: ph.agents.map(a => a.status === 'running' ? { ...a, status: 'done' as PipeStatus, task: undefined } : a) })),
+    } } }
+  }),
+  pipelineClear: (sessionId) => set(s => ({ pipelines: { ...s.pipelines, [sessionId]: null } })),
   sendingSessionId: null,
   streamingSessionId: null,
 
@@ -242,6 +319,22 @@ export const useAppStore = create<AppState>((set, get) => ({
     sessions: s.sessions.map(sess =>
       sess.id === sessionId
         ? { ...sess, agents: sess.agents.map(a => a.id === agentId ? { ...a, ...upd } : a) }
+        : sess
+    )
+  })),
+  // Clear all agents for a session — used when a new orchestration starts so
+  // zombie 'running' agents from a previous (crashed/hung) run don't linger.
+  resetAgents: (sessionId) => set(s => ({
+    sessions: s.sessions.map(sess =>
+      sess.id === sessionId ? { ...sess, agents: [] } : sess
+    )
+  })),
+  // Force any still-'running' agents to idle — used when the pipeline reports
+  // done, guaranteeing the "building" indicator always clears.
+  settleAgents: (sessionId) => set(s => ({
+    sessions: s.sessions.map(sess =>
+      sess.id === sessionId
+        ? { ...sess, agents: sess.agents.map(a => a.status === 'running' ? { ...a, status: 'idle', currentTask: undefined } : a) }
         : sess
     )
   })),

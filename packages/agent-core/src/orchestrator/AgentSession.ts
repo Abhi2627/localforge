@@ -165,10 +165,33 @@ export class AgentSession {
 
     try {
       let fullResponse = ''
-      await agentChat(messages, (chunk) => {
-        fullResponse += chunk
-        this.emit({ type: 'stream_chunk', message: chunk, taskId: task.id })
+      // Watchdog: a hung Ollama/cloud call must never leave the agent 'running'
+      // forever. Race the model call against a timeout; the timer is reset on every
+      // streamed chunk so long-but-progressing generations aren't killed. If it
+      // fires, we throw → task_failed → the phase/pipeline continues.
+      const AGENT_TIMEOUT_MS = Number(process.env.AGENT_TIMEOUT_MS ?? 300_000) // 5 min of no output
+      let timer: ReturnType<typeof setTimeout>
+      let bail: (e: Error) => void = () => {}
+      const watchdog = new Promise<never>((_, reject) => {
+        bail = reject
+        const arm = () => { timer = setTimeout(() => reject(new Error(`Agent "${this.config.name}" timed out — no model output for ${Math.round(AGENT_TIMEOUT_MS / 1000)}s`)), AGENT_TIMEOUT_MS) }
+        ;(this as any).__rearm = () => { clearTimeout(timer); arm() }
+        arm()
       })
+      try {
+        await Promise.race([
+          agentChat(messages, (chunk) => {
+            fullResponse += chunk
+            ;(this as any).__rearm?.()
+            this.emit({ type: 'stream_chunk', message: chunk, taskId: task.id })
+          }),
+          watchdog,
+        ])
+      } finally {
+        clearTimeout(timer!)
+        ;(this as any).__rearm = undefined
+        void bail
+      }
       await this.processResponse(fullResponse, task.id)
       this.conversationHistory.push({ role: 'user', content: instruction })
       this.conversationHistory.push({ role: 'assistant', content: fullResponse })

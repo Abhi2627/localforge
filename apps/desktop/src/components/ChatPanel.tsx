@@ -1,9 +1,9 @@
 import React, { useRef, useEffect, KeyboardEvent, useState, useCallback, useMemo } from 'react'
-import { Send, Bot, Paperclip, Mic, Loader, Copy, Pencil, RefreshCw, Check, X, Terminal, ChevronDown, ArrowDown, FileText, Image, File, Download, Globe, School, GraduationCap, Presentation } from 'lucide-react'
+import { Send, Bot, Paperclip, Mic, Loader, Copy, Pencil, RefreshCw, Check, X, Terminal, ChevronDown, ArrowDown, FileText, Image, File, Download, Globe, School, GraduationCap, Presentation, CheckCircle2, Circle, XCircle, Rocket } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { open, save } from '@tauri-apps/plugin-dialog'
-import { useAppStore, type AudienceMode, type Message, type AgentRole } from '../store/appStore'
+import { useAppStore, type AudienceMode, type Message, type AgentRole, type PipelineRun, type PipeStatus } from '../store/appStore'
 import { api } from '../hooks/useApi'
 import { nanoid } from '../hooks/nanoid'
 import FileEditorPanel from './FileEditorPanel'
@@ -794,6 +794,82 @@ function BuildingBubble({ agents }: { agents: { id: string; name: string; role?:
   )
 }
 
+// ── Phase 3: live pipeline panel ──────────────────────────────────────────────
+// Renders the whole orchestration run — phases → agents, plus the verify/deploy
+// log — updating live as WebSocket events arrive.
+function StatusIcon({ status }: { status: PipeStatus }) {
+  if (status === 'running') return <Loader size={13} style={{ color:'var(--accent)', animation:'spin 1s linear infinite', flexShrink:0 }}/>
+  if (status === 'done')    return <CheckCircle2 size={13} style={{ color:'var(--green)', flexShrink:0 }}/>
+  if (status === 'failed')  return <XCircle size={13} style={{ color:'var(--red)', flexShrink:0 }}/>
+  return <Circle size={13} style={{ color:'var(--text-muted)', flexShrink:0 }}/>
+}
+
+function PipelinePanel({ pipeline }: { pipeline: PipelineRun }) {
+  const running = pipeline.status === 'running'
+  const deploy  = pipeline.deploy
+  const lastLog = pipeline.log[pipeline.log.length - 1]
+  return (
+    <div style={{ display:'flex' }}>
+      <div style={{ background:'var(--bg-tertiary)', border:'1px solid var(--border)', borderRadius:'3px 12px 12px 12px', padding:'12px 14px', display:'flex', flexDirection:'column', gap:10, minWidth:300, maxWidth:'78%' }}>
+        {/* Header */}
+        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          {running ? <Loader size={14} style={{ color:'var(--accent)', animation:'spin 1s linear infinite' }}/> : <CheckCircle2 size={14} style={{ color:'var(--green)' }}/>}
+          <span style={{ fontSize:12.5, color:'var(--text-primary)', fontWeight:700 }}>{running ? 'Building pipeline' : 'Pipeline complete'}</span>
+          <span style={{ fontSize:11, color:'var(--text-muted)' }}>· {pipeline.phases.length} phase{pipeline.phases.length !== 1 ? 's' : ''}</span>
+        </div>
+
+        {/* Phases + agents */}
+        <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+          {pipeline.phases.map((ph, i) => (
+            <div key={i} style={{ display:'flex', flexDirection:'column', gap:4 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:7 }}>
+                <StatusIcon status={ph.status}/>
+                <span style={{ fontSize:11.5, fontWeight:600, color: ph.status==='pending' ? 'var(--text-muted)' : 'var(--text-primary)' }}>{ph.name}</span>
+              </div>
+              {ph.agents.map((a, j) => (
+                <div key={j} style={{ display:'flex', alignItems:'center', gap:7, paddingLeft:20, fontSize:11, color:'var(--text-muted)' }}>
+                  <StatusIcon status={a.status}/>
+                  <span style={{ color: a.status==='pending' ? 'var(--text-muted)' : 'var(--accent)', fontWeight:600, flexShrink:0, maxWidth:110, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{a.name}</span>
+                  <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{a.task ?? (a.status==='done' ? 'done' : a.status==='failed' ? 'failed' : a.status==='running' ? 'working…' : (a.role ?? ''))}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+
+        {/* Verify / deploy live log line */}
+        {running && lastLog && (
+          <div style={{ display:'flex', alignItems:'center', gap:7, fontSize:11, color:'var(--text-secondary)', borderTop:'1px solid var(--border)', paddingTop:8 }}>
+            <Loader size={12} style={{ color:'var(--accent)', animation:'spin 1s linear infinite', flexShrink:0 }}/>
+            <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{lastLog}</span>
+          </div>
+        )}
+
+        {/* Final verify + deploy badges */}
+        {!running && (pipeline.verify || deploy) && (
+          <div style={{ display:'flex', flexWrap:'wrap', gap:6, borderTop:'1px solid var(--border)', paddingTop:8 }}>
+            {pipeline.verify && (
+              <span style={{ fontSize:10.5, fontWeight:600, padding:'3px 8px', borderRadius:6, display:'inline-flex', alignItems:'center', gap:5,
+                background: pipeline.verify.skipped ? 'var(--bg-primary)' : pipeline.verify.ok ? 'rgba(61,214,140,0.12)' : 'var(--red-dim)',
+                color: pipeline.verify.skipped ? 'var(--text-muted)' : pipeline.verify.ok ? 'var(--green)' : 'var(--red)' }}>
+                {pipeline.verify.skipped ? <Circle size={11}/> : pipeline.verify.ok ? <Check size={11}/> : <X size={11}/>}
+                {pipeline.verify.skipped ? 'Verify skipped' : pipeline.verify.ok ? 'Verified' : `Verify failed: ${pipeline.verify.failed ?? 'step'}`}
+              </span>
+            )}
+            {deploy && deploy.status !== 'skipped' && (
+              <span style={{ fontSize:10.5, fontWeight:600, padding:'3px 8px', borderRadius:6, display:'inline-flex', alignItems:'center', gap:5,
+                background: deploy.status==='up' ? 'rgba(61,214,140,0.12)' : 'var(--red-dim)',
+                color: deploy.status==='up' ? 'var(--green)' : 'var(--red)' }}>
+                <Rocket size={11}/>{deploy.status==='up' ? `Up on :${deploy.port ?? '?'}` : 'Deploy failed'}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Chat navigation rail (DeepSeek-style) ─────────────────────────────────────
 // A stack of small horizontal ticks on the right edge — one per user message.
 // The tick for the message currently in view is highlighted as you scroll, and
@@ -864,6 +940,7 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
     sendingSessionId, streamingSessionId,
     setSendingSession, setStreamingSession,
     isOnline, setSessionProvider, setSessionEffort, setAudienceMode,
+    pipelineStatus, pipelines,
   } = useAppStore()
 
   const [input,          setInput]          = useState('')
@@ -1121,10 +1198,15 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
         })
         const data = await res.json()
         if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
-        const plan = formatPhasePlan(data.phases ?? [])
-        const aid  = nanoid()
-        addMessage(sessionId, { id: aid, type: 'agent', content: plan, timestamp: Date.now() })
-        api.saveMessage(aid, sessionId, 'assistant', plan).catch(() => {})
+        // Empty plan = state-aware planner found the feature already exists; the
+        // 'orchestration_skipped' WS event posts the explanatory note, so don't
+        // double-post here. Only announce the plan when there's work to do.
+        if (Array.isArray(data.phases) && data.phases.length > 0) {
+          const plan = formatPhasePlan(data.phases)
+          const aid  = nanoid()
+          addMessage(sessionId, { id: aid, type: 'agent', content: plan, timestamp: Date.now() })
+          api.saveMessage(aid, sessionId, 'assistant', plan).catch(() => {})
+        }
       } catch (err: any) {
         addMessage(sessionId, { id: nanoid(), type: 'system', content: `⚠ Orchestration failed: ${err?.message ?? err}`, timestamp: Date.now() })
       } finally {
@@ -1320,7 +1402,25 @@ export default function ChatPanel({ onOpenTerminal }: ChatPanelProps) {
               )
             })}
             {isSending && !isStreaming && <ThinkingBubble label={ragStatus ?? undefined}/>}
-            {runningAgents.length > 0 && <BuildingBubble agents={runningAgents}/>}
+            {(() => {
+              const pipe = session ? pipelines[session.id] : null
+              // When an orchestration pipeline is live, it owns the progress UI —
+              // the plain building/pipeline-status bubbles are suppressed to avoid dupes.
+              if (pipe) return <PipelinePanel pipeline={pipe}/>
+              return (
+                <>
+                  {runningAgents.length > 0 && <BuildingBubble agents={runningAgents}/>}
+                  {session && pipelineStatus[session.id] && (
+                    <div style={{ display:'flex' }}>
+                      <div style={{ background:'var(--bg-tertiary)', border:'1px solid var(--border)', borderRadius:'3px 12px 12px 12px', padding:'10px 14px', display:'flex', alignItems:'center', gap:8, maxWidth:'70%' }}>
+                        <Loader size={13} style={{ color:'var(--accent)', animation:'spin 1s linear infinite', flexShrink:0 }}/>
+                        <span style={{ fontSize:12, color:'var(--text-secondary)' }}>{pipelineStatus[session.id]}</span>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )
+            })()}
             <div ref={bottomRef} style={{ height:1 }}/>
           </div>
           <ChatNavRail scrollRef={scrollRef} userMsgs={userMsgs} onJump={jumpToMsg}/>

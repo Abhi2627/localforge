@@ -5,7 +5,8 @@ import pty from 'node-pty'
 import os from 'os'
 import path from 'path'
 import fs from 'fs'
-import { execSync } from 'child_process'
+import { execSync, exec, spawn } from 'child_process'
+import net from 'net'
 import { randomUUID } from 'crypto'
 import { getDb, closeDb } from './persistence/Database.js'
 import { initSessionTables, upsertSession, saveMessage, getAllSessions, getSession, getSessionMessages, deleteSession } from './persistence/SessionStore.js'
@@ -373,6 +374,223 @@ function readReferencedFiles(message: string, rootPath: string): Record<string, 
     } catch { }
   }
   return result
+}
+
+// ── Phase 2: verify-and-fix ───────────────────────────────────────────────────
+// Run a shell command in the project and capture combined stdout+stderr + exit code.
+function runCommand(command: string, cwd: string, timeoutMs = 120000): Promise<{ code: number; output: string }> {
+  return new Promise((resolve) => {
+    exec(command, {
+      cwd, timeout: timeoutMs, maxBuffer: 1024 * 1024 * 12,
+      env: { ...process.env, CI: 'true', FORCE_COLOR: '0', npm_config_yes: 'true', ADBLOCK: '1' },
+    }, (err: any, stdout, stderr) => {
+      const output = `${stdout ?? ''}\n${stderr ?? ''}`.trim()
+      resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, output })
+    })
+  })
+}
+
+interface VerifyCmd { label: string; command: string; timeoutMs: number }
+
+// Build verify commands for a single package.json directory. `prefix` is a
+// human/label + `cd` prefix so nested packages (backend/, frontend/) are run
+// in their own folder.
+function verifyCmdsForPackage(dir: string, label: string): VerifyCmd[] {
+  const cmds: VerifyCmd[] = []
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'))
+    const scripts = pkg.scripts ?? {}
+    const inDir = (c: string) => dir === '.' ? c : `cd ${JSON.stringify(dir)} && ${c}`
+    const tag   = label ? `${label} ` : ''
+    cmds.push({ label: `${tag}install dependencies`, command: inDir('npm install --no-audit --no-fund'), timeoutMs: 300000 })
+    if (scripts.build)          cmds.push({ label: `${tag}build`,     command: inDir('npm run build'),     timeoutMs: 300000 })
+    else if (scripts.typecheck) cmds.push({ label: `${tag}typecheck`, command: inDir('npm run typecheck'), timeoutMs: 180000 })
+    if (scripts.test)           cmds.push({ label: `${tag}tests`,     command: inDir('npm test'),          timeoutMs: 240000 })  // CI=true → jest/CRA run once, no watch
+  } catch { }
+  return cmds
+}
+
+function detectVerifyCommands(rootPath: string): VerifyCmd[] {
+  try {
+    // 1) Root package.json (monorepo root or single app).
+    if (fs.existsSync(path.join(rootPath, 'package.json')))
+      return verifyCmdsForPackage(rootPath, '')
+
+    // 2) No root manifest — scan immediate subdirectories for package.json so
+    //    scaffolds like backend/ + frontend/ (or server/, client/, app/) still
+    //    get verified instead of being skipped.
+    const nested: VerifyCmd[] = []
+    for (const entry of fs.readdirSync(rootPath, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name === 'node_modules' || entry.name.startsWith('.')) continue
+      const sub = path.join(rootPath, entry.name)
+      if (fs.existsSync(path.join(sub, 'package.json')))
+        nested.push(...verifyCmdsForPackage(entry.name, entry.name))  // relative dir → cd from rootPath
+      if (nested.length >= 12) break
+    }
+    if (nested.length) return nested
+
+    // 3) Python project.
+    if (fs.existsSync(path.join(rootPath, 'requirements.txt'))) {
+      const cmds: VerifyCmd[] = [{ label: 'install dependencies', command: 'pip install -r requirements.txt', timeoutMs: 300000 }]
+      if (fs.existsSync(path.join(rootPath, 'tests')) || fs.existsSync(path.join(rootPath, 'pytest.ini')))
+        cmds.push({ label: 'tests', command: 'python -m pytest -q', timeoutMs: 240000 })
+      return cmds
+    }
+  } catch { }
+  return []
+}
+
+// Run each verify command; on failure, deploy a fixer agent (with the error + the
+// files it references) and retry, up to MAX_FIX times per command.
+async function verifyAndFix(
+  projectId: string, rootPath: string,
+  onStatus: (m: string) => void,
+): Promise<{ ok: boolean; skipped?: boolean; failed?: string; output?: string }> {
+  const cmds = detectVerifyCommands(rootPath)
+  if (cmds.length === 0) { onStatus('No verifiable build detected — skipping verify.'); return { ok: true, skipped: true } }
+  const MAX_FIX = 2
+  for (const cmd of cmds) {
+    let attempt = 0
+    while (true) {
+      onStatus(`Running ${cmd.label}…`)
+      const res = await runCommand(cmd.command, rootPath, cmd.timeoutMs)
+      if (res.code === 0) { onStatus(`✓ ${cmd.label} passed`); break }
+      if (attempt >= MAX_FIX) { onStatus(`✗ ${cmd.label} still failing after ${attempt} fix attempt(s)`); return { ok: false, failed: cmd.label, output: res.output.slice(-2000) } }
+      attempt++
+      onStatus(`✗ ${cmd.label} failed — deploying fixer (${attempt}/${MAX_FIX})`)
+      try {
+        const fixer = orchestrator.addAgent(projectId, { name: `Fixer-${attempt}`, role: 'fullstack' as any, allowedPaths: [], projectPath: rootPath })
+        broadcast({ type: 'agent_deployed', projectId, agent: { id: fixer.id, name: `Fixer-${attempt}`, role: 'fullstack', phase: 'Verify & Fix' } })
+        const referenced = readReferencedFiles(res.output, rootPath)
+        const fileBlock = Object.entries(referenced).map(([n, c]) => `--- ${n} ---\n${c.slice(0, 4000)}`).join('\n\n')
+        const instruction =
+          `The command "${cmd.command}" failed in this project. Diagnose the cause and write the corrected file(s).\n\n` +
+          `ERROR OUTPUT (tail):\n${res.output.slice(-3000)}\n\n` +
+          (fileBlock ? `RELEVANT FILE CONTENTS:\n${fileBlock}\n\n` : '') +
+          `Output each corrected file as its complete content followed on a new line by exactly "FILE_WRITTEN: <relative path>". Fix only what is needed; do not add prose or markdown fences.`
+        await orchestrator.runInstructionDirect(projectId, fixer.id, instruction)
+      } catch (e: any) { onStatus(`Fixer error: ${e?.message ?? e}`) }
+    }
+  }
+  return { ok: true }
+}
+
+// ── Phase 3: project snapshot (for state-aware planning) ──────────────────────
+// A compact view of what already exists, so the planner can recognise a feature
+// that's already built instead of re-scaffolding it. Kept small (tree + a few
+// key manifests) to stay within the small-model context budget.
+function projectSnapshot(rootPath: string): string {
+  const IGNORE = new Set(['.git', 'node_modules', 'dist', 'build', '.next', 'target', '.localforge', '.venv', '__pycache__', 'coverage'])
+  const lines: string[] = []
+  let fileCount = 0
+  const walk = (dir: string, prefix: string, depth: number) => {
+    if (depth > 2 || fileCount > 120) return
+    let entries: fs.Dirent[]
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+    entries = entries.filter(e => !IGNORE.has(e.name) && !e.name.startsWith('.'))
+      .sort((a, b) => (a.isDirectory() === b.isDirectory() ? a.name.localeCompare(b.name) : a.isDirectory() ? -1 : 1))
+    for (const e of entries) {
+      if (fileCount > 120) { lines.push(`${prefix}…`); break }
+      fileCount++
+      lines.push(`${prefix}${e.name}${e.isDirectory() ? '/' : ''}`)
+      if (e.isDirectory()) walk(path.join(dir, e.name), prefix + '  ', depth + 1)
+    }
+  }
+  walk(rootPath, '', 0)
+  const tree = lines.length ? lines.join('\n') : '(empty project)'
+
+  // Include excerpts of a few high-signal manifests if present.
+  const manifests: string[] = []
+  for (const rel of ['package.json', 'backend/package.json', 'frontend/package.json', 'requirements.txt', 'README.md']) {
+    try {
+      const p = path.join(rootPath, rel)
+      if (fs.existsSync(p) && fs.statSync(p).isFile()) {
+        let body = fs.readFileSync(p, 'utf8')
+        if (rel.endsWith('package.json')) {
+          try { const j = JSON.parse(body); body = JSON.stringify({ name: j.name, scripts: j.scripts, dependencies: j.dependencies }, null, 0) } catch {}
+        }
+        manifests.push(`--- ${rel} ---\n${body.slice(0, 800)}`)
+      }
+    } catch {}
+    if (manifests.length >= 4) break
+  }
+  return `FILE TREE:\n${tree}${manifests.length ? '\n\nKEY FILES:\n' + manifests.join('\n') : ''}`
+}
+
+// ── Phase 3: deploy / health-check ────────────────────────────────────────────
+// Wait until a TCP port accepts a connection (server is up) or the deadline passes.
+function waitForPort(port: number, host: string, deadlineMs: number): Promise<boolean> {
+  const end = Date.now() + deadlineMs
+  return new Promise((resolve) => {
+    const tryOnce = () => {
+      const sock = net.connect({ port, host })
+      let settled = false
+      const done = (ok: boolean) => { if (settled) return; settled = true; sock.destroy(); ok ? resolve(true) : (Date.now() >= end ? resolve(false) : setTimeout(tryOnce, 600)) }
+      sock.once('connect', () => done(true))
+      sock.once('error',   () => done(false))
+      sock.setTimeout(1500, () => done(false))
+    }
+    tryOnce()
+  })
+}
+
+// Find a start command + best-guess port for the project (or a nested app dir).
+function detectStartCommand(rootPath: string): { command: string; cwd: string; port: number; label: string } | null {
+  const scan = (dir: string, label: string) => {
+    const pkgPath = path.join(dir, 'package.json')
+    if (!fs.existsSync(pkgPath)) return null
+    let pkg: any = {}
+    try { pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) } catch { return null }
+    const scripts = pkg.scripts ?? {}
+    const script = scripts.start ? 'start' : scripts.dev ? 'dev' : scripts.serve ? 'serve' : null
+    if (!script) return null
+    // Guess the port: PORT in the script, common source files, else 3000.
+    let port = 3000
+    const hay = [scripts[script], (() => { try { return fs.readFileSync(path.join(dir, 'server.js'), 'utf8') } catch { return '' } })(),
+                 (() => { try { return fs.readFileSync(path.join(dir, 'index.js'), 'utf8') } catch { return '' } })()].join('\n')
+    const m = hay.match(/(?:PORT\s*[=:]\s*|listen\(\s*)(\d{2,5})/)
+    if (m) port = Number(m[1])
+    return { command: `npm run ${script}`, cwd: dir, port, label }
+  }
+  const direct = scan(rootPath, '')
+  if (direct) return direct
+  for (const sub of ['backend', 'server', 'api', 'app']) {
+    const hit = scan(path.join(rootPath, sub), sub)
+    if (hit) return hit
+  }
+  return null
+}
+
+// Boot the app, check its port, then tear it down. Best-effort and non-fatal.
+async function deployCheck(rootPath: string, onStatus: (m: string) => void):
+  Promise<{ status: 'up' | 'down' | 'skipped'; port?: number; command?: string; detail?: string }> {
+  const start = detectStartCommand(rootPath)
+  if (!start) { onStatus('No start script found — skipping deploy check.'); return { status: 'skipped' } }
+  onStatus(`Starting app: ${start.command}${start.label ? ` (${start.label})` : ''}…`)
+  const child = spawn(start.command, {
+    cwd: start.cwd, shell: true, detached: true,
+    env: { ...process.env, PORT: String(start.port), FORCE_COLOR: '0', BROWSER: 'none' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let logTail = ''
+  const grab = (b: Buffer) => { logTail = (logTail + b.toString()).slice(-1500) }
+  child.stdout?.on('data', grab); child.stderr?.on('data', grab)
+
+  const kill = () => { try { if (child.pid) process.kill(-child.pid, 'SIGKILL') } catch { try { child.kill('SIGKILL') } catch {} } }
+  try {
+    onStatus(`Waiting for port ${start.port}…`)
+    const up = await waitForPort(start.port, '127.0.0.1', 25000)
+    if (up) { onStatus(`✓ App is up on port ${start.port}`); return { status: 'up', port: start.port, command: start.command } }
+    // The port guess can be wrong (Vite→5173, CRA→3000, etc. ignore PORT). Before
+    // declaring failure, quickly probe a few common dev-server ports.
+    for (const p of [5173, 3000, 8080, 8000, 5000, 4000].filter(p => p !== start.port)) {
+      if (await waitForPort(p, '127.0.0.1', 2500)) {
+        onStatus(`✓ App is up on port ${p}`); return { status: 'up', port: p, command: start.command }
+      }
+    }
+    onStatus(`✗ App did not open a port in time`)
+    return { status: 'down', port: start.port, command: start.command, detail: logTail.slice(-600) }
+  } finally { kill() }
 }
 
 function setupSSE(reply: any) {
@@ -1106,18 +1324,26 @@ async function bootstrap() {
     catch { reply.status(404).send({ error: `Project ${projectId} not found` }); return }
 
     // Step 1: ask the model for an ORDERED, PHASED plan (dependencies go in earlier phases).
+    // The planner is given a snapshot of what ALREADY exists so it can recognise a
+    // feature that's already built and decline to rebuild it (state-aware planning).
+    const snapshot = projectSnapshot(project.rootPath)
     const planPrompt = [
       { role: 'system' as ChatRole, content:
-        'You are a software project planner. Break the task into ORDERED phases that build on each other.\n' +
-        'Output ONLY valid JSON (no markdown, no prose) in EXACTLY this shape:\n' +
-        '{"phases":[{"name":"Scaffold","agents":[{"name":"Setup","role":"devops","instruction":"..."}]}]}\n' +
+        'You are a software project planner. You are given the CURRENT state of a project and a task.\n' +
+        'First decide whether the task is ALREADY DONE in the current project.\n' +
+        '- If the requested thing already exists (the files/routes/features are already present), output EXACTLY:\n' +
+        '  {"phases":[],"note":"<one sentence naming the existing files/features that already satisfy this>"}\n' +
+        '- Otherwise, break the task into ORDERED phases that build on each other and output EXACTLY:\n' +
+        '  {"phases":[{"name":"Scaffold","agents":[{"name":"Setup","role":"devops","instruction":"..."}]}]}\n' +
+        'Output ONLY valid JSON — no markdown, no prose outside the JSON.\n' +
         'Rules:\n' +
         '- Phases run in ORDER; agents within a phase run in PARALLEL. Put anything others depend on in an earlier phase.\n' +
         '- Typical order: scaffold/config → backend → frontend → tests → docs. Skip phases that are not needed.\n' +
+        '- If only PART of the task exists, plan ONLY the missing part (do not re-scaffold what is already there).\n' +
         '- role must be one of: frontend, backend, database, devops, test, docs, review, fullstack.\n' +
         '- 1-4 phases, 1-3 agents per phase. Instructions must be specific and actionable.'
       },
-      { role: 'user' as ChatRole, content: `Task: ${task}\nProject path: ${project.rootPath}` },
+      { role: 'user' as ChatRole, content: `CURRENT PROJECT STATE:\n${snapshot}\n\nTask: ${task}\nProject path: ${project.rootPath}` },
     ]
 
     let planText: string
@@ -1132,18 +1358,26 @@ async function bootstrap() {
     type PlanAgent = { name: string; role: string; instruction: string }
     type Phase     = { name: string; agents: PlanAgent[] }
     let phases: Phase[]
+    let planNote: string | undefined
     try {
       const parsed = parseModelJson(planText)
       if (Array.isArray(parsed))                     phases = [{ name: 'Build', agents: parsed }]
-      else if (parsed && Array.isArray(parsed.phases)) phases = parsed.phases
+      else if (parsed && Array.isArray(parsed.phases)) { phases = parsed.phases; planNote = typeof parsed.note === 'string' ? parsed.note : undefined }
       else throw new Error('Expected {phases:[...]} or [...]')
       phases = phases
         .filter(p => p && Array.isArray(p.agents) && p.agents.length > 0)
         .slice(0, 6)
         .map(p => ({ name: String(p.name ?? 'Phase'), agents: p.agents.slice(0, 4) }))
-      if (phases.length === 0) throw new Error('No valid phases')
     } catch (err: any) {
       reply.status(500).send({ error: `Invalid plan JSON: ${err.message}`, raw: planText.slice(0, 500) }); return
+    }
+
+    // State-aware planner decided nothing needs building — the feature already
+    // exists. Tell the user instead of re-scaffolding.
+    if (phases.length === 0) {
+      const note = planNote || 'This appears to already exist in the project — nothing to build.'
+      broadcast({ type: 'orchestration_skipped', projectId, note, task })
+      return { success: true, phases: [], note }
     }
 
     const planForClient = phases.map(p => ({ name: p.name, agents: p.agents.map(a => ({ name: a.name, role: a.role, instruction: a.instruction })) }))
@@ -1168,7 +1402,24 @@ async function bootstrap() {
         }))
         broadcast({ type: 'phase_done', projectId, phase: phase.name })
       }
-      broadcast({ type: 'orchestration_done', projectId })
+      // Phase 2: verify the build (install → build/typecheck → tests) and auto-fix failures.
+      broadcast({ type: 'phase_started', projectId, phase: 'Verify & Fix' })
+      let verify: any
+      try { verify = await verifyAndFix(projectId, project.rootPath, (m) => broadcast({ type: 'verify_status', projectId, message: m })) }
+      catch (e: any) { verify = { ok: false, output: String(e?.message ?? e) } }
+      broadcast({ type: 'phase_done', projectId, phase: 'Verify & Fix' })
+
+      // Phase 3: deploy check — boot the app and confirm it comes up on its port.
+      // Only attempted when the build verified cleanly (or was skipped); a broken
+      // build won't run anyway.
+      let deploy: any = { status: 'skipped' }
+      if (!verify || verify.ok !== false) {
+        broadcast({ type: 'phase_started', projectId, phase: 'Deploy Check' })
+        try { deploy = await deployCheck(project.rootPath, (m) => broadcast({ type: 'deploy_status', projectId, message: m })) }
+        catch (e: any) { deploy = { status: 'down', detail: String(e?.message ?? e) } }
+        broadcast({ type: 'phase_done', projectId, phase: 'Deploy Check' })
+      }
+      broadcast({ type: 'orchestration_done', projectId, verify, deploy })
     })().catch(e => console.error('[Orchestrate] pipeline error:', e?.message ?? e))
 
     return { success: true, phases: planForClient }
